@@ -1,0 +1,24 @@
+{
+  "name": "prototype-flow-map",
+  "version": "1.0.0",
+  "description": "Generate interactive flow maps from NHS/GOV.UK prototype kit projects",
+  "main": "src/index.js",
+  "bin": {
+    "prototype-flow-map": "./bin/cli.js"
+  },
+  "scripts": {
+    "generate": "node bin/cli.js",
+    "build-viewer": "node src/build-viewer.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": ["prototype", "flow-map", "nunjucks", "express", "nhs"],
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "commander": "^12.1.0",
+    "express": "^5.1.0",
+    "glob": "^11.0.0",
+    "ora": "^5.4.1",
+    "playwright": "^1.50.0"
+  }
+}

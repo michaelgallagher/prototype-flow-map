@@ -1,0 +1,5 @@
+node_modules/
+flow-map-output/
+.cache/
+*.log
+.DS_Store

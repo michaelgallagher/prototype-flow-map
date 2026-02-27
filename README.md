@@ -1,0 +1,93 @@
+# Prototype Flow Map
+
+Generate interactive flow maps from Express/Nunjucks prototype kit projects (NHS Prototype Kit, GOV.UK Prototype Kit, etc.).
+
+Analyses your prototype's templates, routes, and conditional logic to produce a visual map of every screen and the connections between them — with screenshots.
+
+## Features
+
+- **Auto-discovers all pages** from Nunjucks templates (mirrors the prototype kit's auto-routing)
+- **Extracts navigation** from `href` links, `<form action>` attributes, and JS redirects
+- **Detects conditional branches** (`{% if data['...'] %}` blocks wrapping different links)
+- **Parses Express route handlers** for explicit redirects and renders
+- **Screenshots every page** using Playwright (headless Chromium)
+- **Interactive web viewer** — pan, zoom, click nodes for detail, filter by hub, search
+- **Shareable output** — a static HTML site you can open locally or deploy anywhere
+
+## Prerequisites
+
+- Node.js 20+ 
+- The prototype you want to map must be installable and runnable via `node app.js`
+
+## Install
+
+```bash
+cd prototype-flow-map
+npm install
+npx playwright install chromium
+```
+
+## Usage
+
+```bash
+# Point it at any prototype project
+node bin/cli.js /path/to/your/prototype
+
+# With options
+node bin/cli.js /path/to/your/prototype \
+  --output ./my-flow-map \
+  --port 4321 \
+  --width 375 \
+  --height 812 \
+  --base-path /pages
+
+# Skip screenshots (faster, static analysis only)
+node bin/cli.js /path/to/your/prototype --no-screenshots
+```
+
+## Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--output, -o` | `./flow-map-output` | Output directory for the generated flow map |
+| `--port, -p` | `4321` | Port to start the prototype server on |
+| `--width` | `375` | Screenshot viewport width (pixels) |
+| `--height` | `812` | Screenshot viewport height (pixels) |
+| `--no-screenshots` | `false` | Skip screenshotting (much faster) |
+| `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
+| `--start-url` | `/` | URL to begin crawling from |
+
+## Output
+
+The tool generates a folder (default `./flow-map-output/`) containing:
+
+```
+flow-map-output/
+  index.html          # Interactive viewer — open this
+  styles.css           # Viewer styles
+  viewer.js            # Viewer logic
+  graph-data.json      # Raw graph data (nodes + edges)
+  screenshots/         # PNG screenshot of every page
+```
+
+Open `index.html` in a browser to explore the flow map. You can deploy the entire folder to GitHub Pages, Netlify, or any static host to share with your team.
+
+## How it works
+
+1. **Scans** `app/views/` for all `.html` template files
+2. **Parses** each template for `href=`, `action=`, `location.href`, `{% set backLinkURL %}`, and `{% if %}` conditional blocks
+3. **Parses** `routes.js` and `app.js` for explicit `res.redirect()` and `res.render()` calls
+4. **Builds a directed graph** of pages (nodes) and navigation paths (edges)
+5. **Starts the prototype**, crawls every page with Playwright, and takes screenshots
+6. **Generates a static HTML viewer** with the graph and screenshots embedded
+
+## Viewer controls
+
+- **Pan**: Click and drag the background
+- **Zoom**: Scroll wheel, or use the + / − buttons
+- **Click a node**: Opens a detail panel with screenshot, metadata, and all incoming/outgoing links
+- **Filter by hub**: Use the dropdown to show only pages in a specific section
+- **Search**: Type to filter pages by name or URL path
+- **Toggle back links**: Show/hide the dashed "Back" link edges
+- **Toggle labels**: Show/hide edge labels and conditions
+`
