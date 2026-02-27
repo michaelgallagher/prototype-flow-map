@@ -20,28 +20,19 @@ function parseTemplate(filePath, prototypePath) {
     path.join(prototypePath, "app", "views"),
     filePath,
   );
+
+  // Skip layouts (layout.html, layouts/*, layout-*.html)
+  if (relativePath.startsWith("layout")) return null;
+
+  // Skip includes
+  if (relativePath.startsWith("includes/")) return null;
+
+  // Skip component partials, but allow components/index.html
   if (
-    relativePath.startsWith("layout") ||
-    relativePath.startsWith("includes/") ||
-    (relativePath.startsWith("components/") &&
-      !relativePath.endsWith("/index.html"))
+    relativePath.startsWith("components/") &&
+    relativePath !== "components/index.html"
   ) {
-    // Still parse component index pages
-    if (
-      relativePath.startsWith("components/") &&
-      relativePath === "components/index.html"
-    ) {
-      // allow this one through
-    } else if (relativePath.startsWith("layout")) {
-      return null;
-    } else if (relativePath.startsWith("includes/")) {
-      return null;
-    } else if (
-      relativePath.startsWith("components/") &&
-      relativePath !== "components/index.html"
-    ) {
-      return null;
-    }
+    return null;
   }
 
   const result = {

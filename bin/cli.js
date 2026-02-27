@@ -14,8 +14,8 @@ program
   .argument("<prototype-path>", "Path to the prototype project root")
   .option("-o, --output <dir>", "Output directory", "./flow-map-output")
   .option("-p, --port <number>", "Port to start the prototype on", "4321")
-  .option("-w, --width <number>", "Screenshot viewport width", "375")
-  .option("-h, --height <number>", "Screenshot viewport height", "812")
+  .option("--width <number>", "Screenshot viewport width", "375")
+  .option("--height <number>", "Screenshot viewport height", "812")
   .option(
     "--no-screenshots",
     "Skip screenshot capture (faster, template analysis only)",
