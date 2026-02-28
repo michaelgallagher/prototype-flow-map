@@ -40,6 +40,7 @@ node bin/cli.js /path/to/your/prototype \
   --width 375 \
   --height 812 \
   --base-path /pages
+  --from /pages/xxxxx (determines the start point)
   --no-screenshots (don't add screenshots to the output)
   --no-open (don't automatically open the viewer)
 
