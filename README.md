@@ -40,6 +40,8 @@ node bin/cli.js /path/to/your/prototype \
   --width 375 \
   --height 812 \
   --base-path /pages
+  --no-screenshots (don't add screenshots to the output)
+  --no-open (don't automatically open the viewer)
 
 # Skip screenshots (faster, static analysis only)
 node bin/cli.js /path/to/your/prototype --no-screenshots

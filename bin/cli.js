@@ -2,7 +2,18 @@
 
 const { Command } = require("commander");
 const path = require("path");
+const { execSync } = require("child_process");
 const { generate } = require("../src/index");
+
+function openInBrowser(filePath) {
+  const commands = { darwin: "open", win32: "start", linux: "xdg-open" };
+  const cmd = commands[process.platform] || "xdg-open";
+  try {
+    execSync(`${cmd} "${filePath}"`);
+  } catch {
+    // Silently ignore — the path is already printed to the console
+  }
+}
 
 const program = new Command();
 
@@ -36,6 +47,7 @@ program
     "",
   )
   .option("--start-url <url>", "URL to begin crawling from", "/")
+  .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
     console.log(`\n📐 Prototype Flow Map\n`);
@@ -57,10 +69,14 @@ program
         from: options.from,
         startUrl: options.startUrl,
       });
+      const indexPath = path.resolve(options.output, "index.html");
       console.log(`\n✅ Flow map generated at ${path.resolve(options.output)}`);
-      console.log(
-        `   Open ${path.resolve(options.output)}/index.html in a browser\n`,
-      );
+      if (options.open) {
+        console.log(`   Opening ${indexPath} in your browser...\n`);
+        openInBrowser(indexPath);
+      } else {
+        console.log(`   Open ${indexPath} in a browser\n`);
+      }
     } catch (err) {
       console.error(`\n❌ Error: ${err.message}\n`);
       if (process.env.DEBUG) console.error(err.stack);
