@@ -144,8 +144,11 @@ function extractLinksAndForms(content, result) {
       conditionStack.pop();
     }
 
-    // Extract href attributes (skip #, javascript:, external URLs)
-    const hrefRegex = /href=["']([^"']+)["']/g;
+    // Extract href attributes — three patterns:
+    // 1. HTML attribute:          href="/path"
+    // 2. Quoted object key:       "href": "/path"  (some macros)
+    // 3. Unquoted object key:     href: "/path"    (nhsappCardGroup, govuk macros)
+    const hrefRegex = /(?:href=["']|["']href["']\s*:\s*["']|href\s*:\s*["'])([^"']+)["']/g;
     let hrefMatch;
     while ((hrefMatch = hrefRegex.exec(line)) !== null) {
       const href = hrefMatch[1];
@@ -243,10 +246,26 @@ function extractLinkText(lines, lineIndex) {
   const textMatch = line.match(/>([^<]+)<\/a>/);
   if (textMatch) return textMatch[1].trim();
 
+  // Look backward up to 3 lines for a title: "..." property (Nunjucks macro params)
+  for (let back = 1; back <= 3; back++) {
+    if (lineIndex - back < 0) break;
+    const prevLine = lines[lineIndex - back].trim();
+    const titleMatch = prevLine.match(/title\s*:\s*["']([^"']+)["']/);
+    if (titleMatch) return titleMatch[1];
+    // Stop scanning back if we hit an unrelated block
+    if (prevLine.startsWith("{%") || prevLine === "{") break;
+  }
+
   // Check next line for text content
   if (lineIndex + 1 < lines.length) {
     const nextLine = lines[lineIndex + 1].trim();
-    if (nextLine && !nextLine.startsWith("<") && !nextLine.startsWith("{")) {
+    if (
+      nextLine &&
+      !nextLine.startsWith("<") &&
+      !nextLine.startsWith("{") &&
+      nextLine !== "}," &&
+      nextLine !== "}"
+    ) {
       return nextLine.replace(/<[^>]+>/g, "").trim();
     }
   }
