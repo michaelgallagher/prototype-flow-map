@@ -49,7 +49,8 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
       <button onclick="zoomOut()">Zoom −</button>
       <button onclick="resetView()">Reset view</button>
       <button onclick="fitToScreen()">Fit to screen</button>
-      <label><input type="checkbox" id="toggle-back-links" checked> Show back links</label>
+      <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
+      <label><input type="checkbox" id="toggle-back-links"> Show back links</label>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       <select id="hub-filter">
         <option value="">All hubs</option>
@@ -59,6 +60,14 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
   </div>
   <div id="canvas-container">
     <svg id="flow-svg"></svg>
+  </div>
+  <div id="legend">
+    <h3>Edge types</h3>
+    <div class="legend-item"><span class="legend-swatch" style="background:#4ade80;height:3px"></span> Main flow</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#5aaf6a;height:2px"></span> Form submission</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#4a6fa5;height:1.5px"></span> Link</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#e8a838;height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#444;height:1px"></span> Back link</div>
   </div>
   <div id="detail-panel" class="hidden">
     <button id="close-panel" onclick="closePanel()">✕</button>
@@ -172,7 +181,7 @@ body {
 #flow-svg:active { cursor: grabbing; }
 
 /* Node styles */
-.node-group { cursor: pointer; }
+.node-group { cursor: pointer; transition: opacity 0.15s; }
 .node-group:hover .node-rect { stroke: #53d8fb; stroke-width: 2; }
 
 .node-rect {
@@ -189,6 +198,14 @@ body {
 .node-rect--splash    { fill: #2e1e4f; stroke: #5a2a8f; }
 .node-rect--index     { fill: #0f3460; stroke: #53d8fb; }
 .node-rect--highlight { stroke: #ffcc00 !important; stroke-width: 3 !important; }
+
+/* Main flow node emphasis */
+.main-flow-node .node-rect {
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px rgba(74, 222, 128, 0.3));
+}
+.has-main-flow .node-group:not(.main-flow-node) { opacity: 0.7; }
+.has-main-flow .node-group:not(.main-flow-node):hover { opacity: 1; }
 
 .node-label {
   fill: #ffffff;
@@ -222,15 +239,16 @@ body {
 /* Edge styles */
 .edge-path {
   fill: none;
-  stroke-width: 1.5;
+  transition: opacity 0.15s;
 }
 
-.edge-path--link       { stroke: #4a6fa5; }
-.edge-path--form       { stroke: #5aaf6a; }
-.edge-path--conditional { stroke: #e8a838; stroke-dasharray: 6,3; }
-.edge-path--redirect   { stroke: #aa55cc; stroke-dasharray: 3,3; }
-.edge-path--back       { stroke: #555; stroke-dasharray: 4,4; }
-.edge-path--render     { stroke: #aa55cc; }
+.edge-path--main-flow  { stroke: #4ade80; stroke-width: 3; opacity: 1; }
+.edge-path--form       { stroke: #5aaf6a; stroke-width: 2; opacity: 0.85; }
+.edge-path--link       { stroke: #4a6fa5; stroke-width: 1.2; opacity: 0.6; }
+.edge-path--conditional { stroke: #e8a838; stroke-width: 1; stroke-dasharray: 6,3; opacity: 0.7; }
+.edge-path--redirect   { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
+.edge-path--back       { stroke: #444; stroke-width: 0.8; stroke-dasharray: 3,3; opacity: 0.3; }
+.edge-path--render     { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
 
 .edge-label {
   font-size: 9px;
@@ -246,10 +264,12 @@ body {
 }
 
 .edge-arrowhead { fill: #4a6fa5; }
+.edge-arrowhead--main-flow { fill: #4ade80; }
 .edge-arrowhead--form { fill: #5aaf6a; }
 .edge-arrowhead--conditional { fill: #e8a838; }
 .edge-arrowhead--redirect { fill: #aa55cc; }
-.edge-arrowhead--back { fill: #555; }
+.edge-arrowhead--back { fill: #444; }
+.edge-arrowhead--render { fill: #aa55cc; }
 
 /* Detail panel */
 #detail-panel {
@@ -379,8 +399,9 @@ function generateViewerJs() {
   let panStart = { x: 0, y: 0 };
   let layoutNodes = {};
   let layoutEdges = [];
-  let showBackLinks = true;
+  let showBackLinks = false;
   let showLabels = true;
+  let mainFlowOnly = false;
   let hubFilter = '';
   let searchTerm = '';
 
@@ -388,26 +409,29 @@ function generateViewerJs() {
   const VIEWPORT_WIDTH = window.__VIEWPORT_WIDTH__ || 375;
   const VIEWPORT_HEIGHT = window.__VIEWPORT_HEIGHT__ || 812;
 
+  // Node sizing constants
+  const NODE_WIDTH = 140;
+  const SCREENSHOT_HEIGHT = 90;
+  const LABEL_AREA = 32;
+  const NODE_HEIGHT = hasScreenshots ? SCREENSHOT_HEIGHT + LABEL_AREA : 56;
+  const MAIN_FLOW_WIDTH = Math.round(NODE_WIDTH * 1.15);
+  const MAIN_FLOW_HEIGHT = hasScreenshots ? 105 + LABEL_AREA : Math.round(56 * 1.1);
+
   // Layout the graph using dagre
   function layoutGraph() {
     const g = new dagre.graphlib.Graph();
     g.setGraph({
-      rankdir: 'TB',
-      nodesep: 20,
-      ranksep: 40,
-      edgesep: 10,
-      marginx: 20,
-      marginy: 20,
+      rankdir: 'LR',
+      nodesep: 15,
+      ranksep: 50,
+      edgesep: 8,
+      marginx: 30,
+      marginy: 30,
     });
     g.setDefaultEdgeLabel(() => ({}));
 
-    const NODE_WIDTH = 160;
-    const LABEL_AREA = 28;
-    const NODE_HEIGHT = hasScreenshots
-      ? Math.round(NODE_WIDTH * (VIEWPORT_HEIGHT / VIEWPORT_WIDTH)) + LABEL_AREA
-      : 70;
-
     const filteredNodes = graph.nodes.filter(n => {
+      if (mainFlowOnly && !n.isMainFlow) return false;
       if (hubFilter && n.hub !== hubFilter) return false;
       if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !n.urlPath.toLowerCase().includes(searchTerm)) return false;
       return true;
@@ -416,7 +440,9 @@ function generateViewerJs() {
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
 
     filteredNodes.forEach(node => {
-      g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT, ...node });
+      const w = node.isMainFlow ? MAIN_FLOW_WIDTH : NODE_WIDTH;
+      const h = node.isMainFlow ? MAIN_FLOW_HEIGHT : NODE_HEIGHT;
+      g.setNode(node.id, { width: w, height: h, ...node });
     });
 
     const filteredEdges = graph.edges.filter(e => {
@@ -460,7 +486,7 @@ function generateViewerJs() {
 
     // Add defs for arrowheads
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    ['link', 'form', 'conditional', 'redirect', 'back'].forEach(type => {
+    ['link', 'form', 'conditional', 'redirect', 'back', 'render', 'main-flow'].forEach(type => {
       const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
       marker.setAttribute('id', 'arrow-' + type);
       marker.setAttribute('viewBox', '0 0 10 10');
@@ -482,21 +508,48 @@ function generateViewerJs() {
     mainGroup.setAttribute('id', 'main-group');
     svg.appendChild(mainGroup);
 
-    // Render edges
-    layoutEdges.forEach(edge => {
-      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    // Sort edges so main flow renders on top
+    const edgePriority = { back: 0, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
+    const sortedEdges = [...layoutEdges].sort((a, b) => {
+      const pa = a.isMainFlow ? 6 : (edgePriority[a.type] || 1);
+      const pb = b.isMainFlow ? 6 : (edgePriority[b.type] || 1);
+      return pa - pb;
+    });
 
-      // Build path from points
+    // Render edges
+    sortedEdges.forEach(edge => {
+      const edgeGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      edgeGroup.setAttribute('class', 'edge-group');
+      edgeGroup.dataset.source = edge.source;
+      edgeGroup.dataset.target = edge.target;
+
+      // Build smooth path from points
       const points = edge.points;
-      let d = 'M ' + points[0].x + ' ' + points[0].y;
-      for (let i = 1; i < points.length; i++) {
-        d += ' L ' + points[i].x + ' ' + points[i].y;
+      let d;
+      if (points.length <= 2) {
+        d = 'M ' + points[0].x + ' ' + points[0].y;
+        for (let i = 1; i < points.length; i++) {
+          d += ' L ' + points[i].x + ' ' + points[i].y;
+        }
+      } else {
+        d = 'M ' + points[0].x + ' ' + points[0].y;
+        for (let i = 1; i < points.length - 1; i++) {
+          const cx = points[i].x, cy = points[i].y;
+          const nx = points[i+1].x, ny = points[i+1].y;
+          d += ' Q ' + cx + ' ' + cy + ' ' + ((cx+nx)/2) + ' ' + ((cy+ny)/2);
+        }
+        const last = points[points.length - 1];
+        d += ' L ' + last.x + ' ' + last.y;
       }
+
+      const edgeType = edge.type || 'link';
+      const cssClass = edge.isMainFlow ? 'edge-path edge-path--main-flow' : 'edge-path edge-path--' + edgeType;
+      const arrowType = edge.isMainFlow ? 'main-flow' : edgeType;
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', d);
-      path.setAttribute('class', 'edge-path edge-path--' + (edge.type || 'link'));
-      path.setAttribute('marker-end', 'url(#arrow-' + (edge.type || 'link') + ')');
+      path.setAttribute('class', cssClass);
+      path.setAttribute('marker-end', 'url(#arrow-' + arrowType + ')');
       edgeGroup.appendChild(path);
 
       // Edge label
@@ -526,12 +579,17 @@ function generateViewerJs() {
       mainGroup.appendChild(edgeGroup);
     });
 
+    // Check if any main flow nodes exist
+    const hasMainFlow = Object.values(layoutNodes).some(n => n.isMainFlow);
+
     // Render nodes
     Object.values(layoutNodes).forEach(node => {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('class', 'node-group');
+      group.setAttribute('class', 'node-group' + (node.isMainFlow ? ' main-flow-node' : ''));
       group.setAttribute('transform', 'translate(' + (node.x - node.width/2) + ',' + (node.y - node.height/2) + ')');
-      group.addEventListener('click', () => showDetail(node));
+      group.addEventListener('click', (e) => { e.stopPropagation(); showDetail(node); });
+      group.addEventListener('mouseenter', () => highlightConnections(node.id));
+      group.addEventListener('mouseleave', () => clearHighlight());
 
       // Background rect
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -541,18 +599,30 @@ function generateViewerJs() {
       rect.dataset.nodeId = node.id;
       group.appendChild(rect);
 
-      // Screenshot — full screen, not a thumbnail
+      // Hub color strip on left edge
+      if (node.hub) {
+        const hubStrip = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        hubStrip.setAttribute('x', 0);
+        hubStrip.setAttribute('y', 0);
+        hubStrip.setAttribute('width', 3);
+        hubStrip.setAttribute('height', node.height);
+        hubStrip.setAttribute('fill', hubColor(node.hub));
+        hubStrip.setAttribute('rx', '1');
+        group.appendChild(hubStrip);
+      }
+
+      // Screenshot — cropped to top portion as a thumbnail
       if (hasScreenshots && node.screenshot) {
         const imgPad = 3;
         const imgWidth = node.width - imgPad * 2;
-        const imgHeight = node.height - 28 - imgPad;
+        const imgHeight = node.height - LABEL_AREA - imgPad;
         const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
         img.setAttribute('href', node.screenshot);
         img.setAttribute('x', imgPad);
         img.setAttribute('y', imgPad);
         img.setAttribute('width', imgWidth);
         img.setAttribute('height', imgHeight);
-        img.setAttribute('preserveAspectRatio', 'xMidYMin meet');
+        img.setAttribute('preserveAspectRatio', 'xMidYMin slice');
         img.setAttribute('class', 'node-screenshot');
         // Clip to rounded rect
         const clipId = 'clip-' + node.id.replace(/[^a-zA-Z0-9]/g, '-');
@@ -570,26 +640,27 @@ function generateViewerJs() {
         group.appendChild(img);
       }
 
-      // Title label (below the screenshot)
+      // Title label
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.setAttribute('x', node.width / 2);
-      label.setAttribute('y', hasScreenshots ? node.height - 8 : 34);
+      label.setAttribute('y', hasScreenshots ? node.height - 14 : 28);
       label.setAttribute('class', 'node-label');
-      label.textContent = truncate(node.label, 24);
+      label.textContent = truncate(node.actualTitle || node.label, 20);
       group.appendChild(label);
+
+      // Type badge (always visible)
+      const typeBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      typeBadge.setAttribute('x', node.width / 2);
+      typeBadge.setAttribute('y', hasScreenshots ? node.height - 3 : 42);
+      typeBadge.setAttribute('class', 'node-type-badge');
+      typeBadge.textContent = (node.type || 'content').toUpperCase();
+      group.appendChild(typeBadge);
 
       // URL path (small text) — only when no screenshots
       if (!hasScreenshots) {
-        const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        badge.setAttribute('x', node.width / 2);
-        badge.setAttribute('y', 16);
-        badge.setAttribute('class', 'node-type-badge');
-        badge.textContent = node.type || '';
-        group.appendChild(badge);
-
         const pathLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         pathLabel.setAttribute('x', node.width / 2);
-        pathLabel.setAttribute('y', 50);
+        pathLabel.setAttribute('y', 54);
         pathLabel.setAttribute('class', 'node-path-label');
         pathLabel.textContent = truncate(node.urlPath, 30);
         group.appendChild(pathLabel);
@@ -597,6 +668,11 @@ function generateViewerJs() {
 
       mainGroup.appendChild(group);
     });
+
+    // Apply main flow dimming class to parent group
+    if (hasMainFlow) {
+      mainGroup.classList.add('has-main-flow');
+    }
 
     // Update node count
     document.getElementById('node-count').textContent =
@@ -794,6 +870,37 @@ function generateViewerJs() {
     }, 250);
   });
 
+  // Hover highlighting
+  function highlightConnections(nodeId) {
+    const connectedNodes = new Set([nodeId]);
+    document.querySelectorAll('.edge-group').forEach(eg => {
+      if (eg.dataset.source === nodeId || eg.dataset.target === nodeId) {
+        eg.style.opacity = '1';
+        connectedNodes.add(eg.dataset.source);
+        connectedNodes.add(eg.dataset.target);
+      } else {
+        eg.style.opacity = '0.08';
+      }
+    });
+    document.querySelectorAll('.node-group').forEach(ng => {
+      const nId = ng.querySelector('.node-rect') && ng.querySelector('.node-rect').dataset.nodeId;
+      ng.style.opacity = connectedNodes.has(nId) ? '1' : '0.2';
+    });
+  }
+
+  function clearHighlight() {
+    document.querySelectorAll('.edge-group').forEach(eg => { eg.style.opacity = ''; });
+    document.querySelectorAll('.node-group').forEach(ng => { ng.style.opacity = ''; });
+  }
+
+  // Main flow toggle
+  window.toggleMainFlow = function() {
+    mainFlowOnly = !mainFlowOnly;
+    const btn = document.getElementById('toggle-main-flow');
+    btn.textContent = mainFlowOnly ? 'Show all pages' : 'Show main flow only';
+    render();
+  };
+
   // Helpers
   function truncate(str, max) {
     if (!str) return '';
@@ -803,6 +910,13 @@ function generateViewerJs() {
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function hubColor(hub) {
+    const colors = ['#53d8fb', '#f97316', '#a855f7', '#ec4899', '#14b8a6', '#eab308', '#6366f1', '#ef4444', '#22c55e'];
+    let hash = 0;
+    for (let i = 0; i < hub.length; i++) hash = hub.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
   }
 
   // Initial render
