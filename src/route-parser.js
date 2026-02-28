@@ -63,7 +63,7 @@ function parseRouteFile(filePath) {
 
     // Find dynamic redirects using urlFormat or template literals
     const dynamicRedirectRegex =
-      /res\.redirect\s*\(\s*(?:urlFormat\s*\(\s*\{[\s\S]*?pathname:\s*[`'"]([^`'"]*)[`'"]/g;
+      /res\.redirect\s*\(\s*(?:urlFormat\s*\(\s*\{[\s\S]*?pathname:\s*[`'"]([^`'"]*)[`'"])/g;
     let dynMatch;
     while ((dynMatch = dynamicRedirectRegex.exec(body)) !== null) {
       if (dynMatch[1]) route.redirects.push(dynMatch[1]);
