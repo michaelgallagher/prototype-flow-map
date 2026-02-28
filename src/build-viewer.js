@@ -50,6 +50,7 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
       <button onclick="resetView()">Reset view</button>
       <button onclick="fitToScreen()">Fit to screen</button>
       <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
+      <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
       <label><input type="checkbox" id="toggle-back-links"> Show back links</label>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       <select id="hub-filter">
@@ -406,8 +407,13 @@ function generateViewerJs() {
   let showBackLinks = false;
   let showLabels = true;
   let mainFlowOnly = false;
+  let thumbnailMode = false; // false = full page, true = compact thumbnail
   let hubFilter = '';
   let searchTerm = '';
+
+  // Persist view mode preference
+  const viewModeKey = 'flowmap-viewmode-' + location.pathname;
+  try { thumbnailMode = localStorage.getItem(viewModeKey) === 'thumbnail'; } catch(e) {}
 
   // Hidden nodes (viewer-time exclusion, persisted in localStorage)
   let hiddenNodes = new Set();
@@ -441,17 +447,31 @@ function generateViewerJs() {
 
   // Node sizing constants
   const NODE_WIDTH = 140;
-  const SCREENSHOT_HEIGHT = 90;
   const LABEL_AREA = 32;
-  const NODE_HEIGHT = hasScreenshots ? SCREENSHOT_HEIGHT + LABEL_AREA : 56;
-  const MAIN_FLOW_WIDTH = Math.round(NODE_WIDTH * 1.15);
-  const MAIN_FLOW_HEIGHT = hasScreenshots ? 105 + LABEL_AREA : Math.round(56 * 1.1);
+  const IMG_PAD = 3;
+  const MAIN_FLOW_SCALE = 1.15;
+  const MAIN_FLOW_WIDTH = Math.round(NODE_WIDTH * MAIN_FLOW_SCALE);
+
+  // Returns { w, h } for a node, varying by thumbnailMode
+  function getNodeDims(isMainFlow) {
+    const w = isMainFlow ? MAIN_FLOW_WIDTH : NODE_WIDTH;
+    if (!hasScreenshots) {
+      return { w, h: isMainFlow ? Math.round(56 * MAIN_FLOW_SCALE) : 56 };
+    }
+    // Full-page mode: height matches the screenshot's true aspect ratio
+    // Thumbnail mode: fixed 90px crop
+    const imgW = w - IMG_PAD * 2;
+    const imgH = thumbnailMode
+      ? Math.round(90 * (isMainFlow ? MAIN_FLOW_SCALE : 1))
+      : Math.round(imgW * VIEWPORT_HEIGHT / VIEWPORT_WIDTH);
+    return { w, h: imgH + LABEL_AREA + IMG_PAD };
+  }
 
   // Layout the graph using dagre
   function layoutGraph() {
     const g = new dagre.graphlib.Graph();
     g.setGraph({
-      rankdir: 'LR',
+      rankdir: 'TB',
       nodesep: 15,
       ranksep: 50,
       edgesep: 8,
@@ -471,8 +491,7 @@ function generateViewerJs() {
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
 
     filteredNodes.forEach(node => {
-      const w = node.isMainFlow ? MAIN_FLOW_WIDTH : NODE_WIDTH;
-      const h = node.isMainFlow ? MAIN_FLOW_HEIGHT : NODE_HEIGHT;
+      const { w, h } = getNodeDims(node.isMainFlow);
       g.setNode(node.id, { width: w, height: h, ...node });
     });
 
@@ -673,26 +692,27 @@ function generateViewerJs() {
         group.appendChild(hubStrip);
       }
 
-      // Screenshot — cropped to top portion as a thumbnail
+      // Screenshot — full page by default, cropped thumbnail when thumbnailMode is on
       if (hasScreenshots && node.screenshot) {
-        const imgPad = 3;
-        const imgWidth = node.width - imgPad * 2;
-        const imgHeight = node.height - LABEL_AREA - imgPad;
+        const imgWidth = node.width - IMG_PAD * 2;
+        const imgHeight = node.height - LABEL_AREA - IMG_PAD;
         const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
         img.setAttribute('href', node.screenshot);
-        img.setAttribute('x', imgPad);
-        img.setAttribute('y', imgPad);
+        img.setAttribute('x', IMG_PAD);
+        img.setAttribute('y', IMG_PAD);
         img.setAttribute('width', imgWidth);
         img.setAttribute('height', imgHeight);
-        img.setAttribute('preserveAspectRatio', 'xMidYMin slice');
+        // Full-page: fit entire screenshot without cropping
+        // Thumbnail: crop to top portion only
+        img.setAttribute('preserveAspectRatio', thumbnailMode ? 'xMidYMin slice' : 'xMidYMid meet');
         img.setAttribute('class', 'node-screenshot');
         // Clip to rounded rect
         const clipId = 'clip-' + node.id.replace(/[^a-zA-Z0-9]/g, '-');
         const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
         clipPath.setAttribute('id', clipId);
         const clipRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        clipRect.setAttribute('x', imgPad);
-        clipRect.setAttribute('y', imgPad);
+        clipRect.setAttribute('x', IMG_PAD);
+        clipRect.setAttribute('y', IMG_PAD);
         clipRect.setAttribute('width', imgWidth);
         clipRect.setAttribute('height', imgHeight);
         clipRect.setAttribute('rx', '3');
@@ -976,6 +996,14 @@ function generateViewerJs() {
     render();
   };
 
+  // Thumbnail / full-page toggle
+  window.toggleThumbnail = function() {
+    thumbnailMode = !thumbnailMode;
+    try { localStorage.setItem(viewModeKey, thumbnailMode ? 'thumbnail' : 'full'); } catch(e) {}
+    document.getElementById('toggle-thumbnail').textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
+    render();
+  };
+
   // Hide/show nodes
   window.hideNode = function(nodeId) {
     hiddenNodes.add(nodeId);
@@ -1097,6 +1125,13 @@ function generateViewerJs() {
     let hash = 0;
     for (let i = 0; i < hub.length; i++) hash = hub.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
+  }
+
+  // Show thumbnail toggle only when screenshots are present
+  if (hasScreenshots) {
+    const btn = document.getElementById('toggle-thumbnail');
+    btn.style.display = '';
+    btn.textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
   }
 
   // Initial render
