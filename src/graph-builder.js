@@ -1,10 +1,53 @@
+const { minimatch } = require("minimatch");
+
+/**
+ * Check if a URL path matches any of the comma-separated base path patterns.
+ * Supports prefixes and glob patterns (e.g. "/pages/gp,/pages/booking" or "/pages/gp-*").
+ */
+function matchesBasePaths(urlPath, basePath) {
+  if (!basePath) return true;
+
+  const patterns = basePath
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return patterns.some((pattern) => {
+    if (/[*?[\{]/.test(pattern)) {
+      return minimatch(urlPath, pattern);
+    }
+    return urlPath.startsWith(pattern);
+  });
+}
+
+/**
+ * Check if a URL path matches any of the comma-separated exclude patterns.
+ * For non-glob patterns, uses exact match or prefix+/ match
+ * (so --exclude /pages/test excludes /pages/test/step-1 but not /pages/testing).
+ */
+function matchesExclude(urlPath, exclude) {
+  if (!exclude) return false;
+
+  const patterns = exclude
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return patterns.some((pattern) => {
+    if (/[*?[\{]/.test(pattern)) {
+      return minimatch(urlPath, pattern);
+    }
+    return urlPath === pattern || urlPath.startsWith(pattern + "/");
+  });
+}
+
 /**
  * Build a directed graph from parsed template data and route handlers.
  *
  * Nodes = pages (screens)
  * Edges = navigation links between pages
  */
-function buildGraph(templateData, explicitRoutes, basePath) {
+function buildGraph(templateData, explicitRoutes, basePath, exclude) {
   const nodes = [];
   const edges = [];
   const nodeMap = new Map(); // urlPath -> node
@@ -22,7 +65,10 @@ function buildGraph(templateData, explicitRoutes, basePath) {
 
   // Step 1: Create nodes for each template
   for (const tpl of templateData) {
-    if (basePath && !tpl.urlPath.startsWith(basePath) && tpl.urlPath !== "/") {
+    if (
+      !matchesBasePaths(tpl.urlPath, basePath) ||
+      matchesExclude(tpl.urlPath, exclude)
+    ) {
       continue;
     }
 
@@ -42,7 +88,10 @@ function buildGraph(templateData, explicitRoutes, basePath) {
 
   // Step 2: Create edges from links, forms, conditionals, and JS redirects
   for (const tpl of templateData) {
-    if (basePath && !tpl.urlPath.startsWith(basePath) && tpl.urlPath !== "/") {
+    if (
+      !matchesBasePaths(tpl.urlPath, basePath) ||
+      matchesExclude(tpl.urlPath, exclude)
+    ) {
       continue;
     }
 
@@ -271,4 +320,52 @@ function categoriseNode(tpl) {
   return "content";
 }
 
-module.exports = { buildGraph };
+/**
+ * Filter a graph to only nodes reachable from a given starting page,
+ * following forward navigation edges (not back-links).
+ * This lets you scope a flow that doesn't share a URL prefix.
+ */
+function filterByReachability(graph, fromPage) {
+  if (!fromPage) return graph;
+
+  const startNode = graph.nodes.find(
+    (n) => n.id === fromPage || n.urlPath === fromPage,
+  );
+
+  if (!startNode) {
+    console.warn(
+      `⚠️  Warning: --from page "${fromPage}" not found in graph — showing full graph`,
+    );
+    return graph;
+  }
+
+  // Build adjacency list following forward edges only (not back-links)
+  const forwardEdgeTypes = new Set(["form", "link", "redirect", "conditional", "render"]);
+  const adj = {};
+  graph.edges.forEach((e) => {
+    if (!forwardEdgeTypes.has(e.type)) return;
+    if (!adj[e.source]) adj[e.source] = [];
+    adj[e.source].push(e.target);
+  });
+
+  // BFS from start node
+  const reachable = new Set();
+  const queue = [fromPage];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (reachable.has(current)) continue;
+    reachable.add(current);
+    (adj[current] || []).forEach((target) => {
+      if (!reachable.has(target)) queue.push(target);
+    });
+  }
+
+  return {
+    nodes: graph.nodes.filter((n) => reachable.has(n.id)),
+    edges: graph.edges.filter(
+      (e) => reachable.has(e.source) && reachable.has(e.target),
+    ),
+  };
+}
+
+module.exports = { buildGraph, filterByReachability };

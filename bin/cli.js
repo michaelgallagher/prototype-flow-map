@@ -25,6 +25,16 @@ program
     "Only map pages under this path (e.g. /pages)",
     "",
   )
+  .option(
+    "--exclude <paths>",
+    "Exclude pages matching these paths (comma-separated, supports globs)",
+    "",
+  )
+  .option(
+    "--from <url>",
+    "Only show pages reachable from this page (e.g. /pages/home-p9)",
+    "",
+  )
   .option("--start-url <url>", "URL to begin crawling from", "/")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
@@ -43,6 +53,8 @@ program
         },
         screenshots: options.screenshots,
         basePath: options.basePath,
+        exclude: options.exclude,
+        from: options.from,
         startUrl: options.startUrl,
       });
       console.log(`\n✅ Flow map generated at ${path.resolve(options.output)}`);

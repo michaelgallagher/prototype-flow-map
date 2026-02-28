@@ -2,7 +2,7 @@ const { scanTemplates } = require("./scanner");
 const { parseTemplate } = require("./template-parser");
 const { parseRoutes } = require("./route-parser");
 const { crawlAndScreenshot } = require("./crawler");
-const { buildGraph } = require("./graph-builder");
+const { buildGraph, filterByReachability } = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
 
 async function generate(options) {
@@ -13,6 +13,8 @@ async function generate(options) {
     viewport,
     screenshots,
     basePath,
+    exclude,
+    from,
     startUrl,
   } = options;
 
@@ -37,7 +39,11 @@ async function generate(options) {
 
   // Step 4: Build the graph from static analysis
   console.log("4️⃣  Building flow graph...");
-  let graph = buildGraph(templateData, explicitRoutes, basePath);
+  let graph = buildGraph(templateData, explicitRoutes, basePath, exclude);
+  if (from) {
+    graph = filterByReachability(graph, from);
+    console.log(`   Filtered to pages reachable from ${from}`);
+  }
   console.log(
     `   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
   );

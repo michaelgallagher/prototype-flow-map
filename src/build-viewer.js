@@ -56,6 +56,8 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
         <option value="">All hubs</option>
       </select>
       <input type="text" id="search" placeholder="Search pages..." />
+      <button id="show-all-btn" onclick="showAllNodes()" style="display:none">Show hidden (0)</button>
+      <button id="reset-positions-btn" onclick="resetPositions()" style="display:none">Reset positions</button>
     </div>
   </div>
   <div id="canvas-container">
@@ -181,8 +183,10 @@ body {
 #flow-svg:active { cursor: grabbing; }
 
 /* Node styles */
-.node-group { cursor: pointer; transition: opacity 0.15s; }
+.node-group { cursor: grab; transition: opacity 0.15s; }
+.node-group:active { cursor: grabbing; }
 .node-group:hover .node-rect { stroke: #53d8fb; stroke-width: 2; }
+.hide-node-btn:hover { background: #5f2e2e !important; }
 
 .node-rect {
   rx: 6;
@@ -405,6 +409,32 @@ function generateViewerJs() {
   let hubFilter = '';
   let searchTerm = '';
 
+  // Hidden nodes (viewer-time exclusion, persisted in localStorage)
+  let hiddenNodes = new Set();
+  const hiddenStorageKey = 'flowmap-hidden-' + location.pathname;
+  try {
+    const savedHidden = localStorage.getItem(hiddenStorageKey);
+    if (savedHidden) hiddenNodes = new Set(JSON.parse(savedHidden));
+  } catch(e) {}
+
+  function saveHiddenNodes() {
+    try { localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenNodes])); } catch(e) {}
+  }
+
+  // Manual node positions (drag-to-reposition, persisted in localStorage)
+  let manualPositions = {};
+  let isDragging = false;
+  let dragTarget = null;
+  const posStorageKey = 'flowmap-positions-' + location.pathname;
+  try {
+    const savedPos = localStorage.getItem(posStorageKey);
+    if (savedPos) manualPositions = JSON.parse(savedPos);
+  } catch(e) {}
+
+  function savePositions() {
+    try { localStorage.setItem(posStorageKey, JSON.stringify(manualPositions)); } catch(e) {}
+  }
+
   // Screenshot viewport ratio (default 375x812 mobile)
   const VIEWPORT_WIDTH = window.__VIEWPORT_WIDTH__ || 375;
   const VIEWPORT_HEIGHT = window.__VIEWPORT_HEIGHT__ || 812;
@@ -431,6 +461,7 @@ function generateViewerJs() {
     g.setDefaultEdgeLabel(() => ({}));
 
     const filteredNodes = graph.nodes.filter(n => {
+      if (hiddenNodes.has(n.id)) return false;
       if (mainFlowOnly && !n.isMainFlow) return false;
       if (hubFilter && n.hub !== hubFilter) return false;
       if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !n.urlPath.toLowerCase().includes(searchTerm)) return false;
@@ -462,6 +493,14 @@ function generateViewerJs() {
       layoutNodes[id] = g.node(id);
     });
 
+    // Apply any manual position overrides
+    Object.keys(manualPositions).forEach(nodeId => {
+      if (layoutNodes[nodeId]) {
+        layoutNodes[nodeId].x = manualPositions[nodeId].x;
+        layoutNodes[nodeId].y = manualPositions[nodeId].y;
+      }
+    });
+
     layoutEdges = [];
     g.edges().forEach(e => {
       const edgeData = g.edge(e);
@@ -471,6 +510,12 @@ function generateViewerJs() {
         target: e.w,
         points: edgeData.points,
       });
+    });
+
+    // Recompute edge points for edges touching manually-positioned nodes
+    layoutEdges = layoutEdges.map(edge => {
+      if (!manualPositions[edge.source] && !manualPositions[edge.target]) return edge;
+      return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
     });
 
     return g;
@@ -587,9 +632,26 @@ function generateViewerJs() {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.setAttribute('class', 'node-group' + (node.isMainFlow ? ' main-flow-node' : ''));
       group.setAttribute('transform', 'translate(' + (node.x - node.width/2) + ',' + (node.y - node.height/2) + ')');
-      group.addEventListener('click', (e) => { e.stopPropagation(); showDetail(node); });
-      group.addEventListener('mouseenter', () => highlightConnections(node.id));
-      group.addEventListener('mouseleave', () => clearHighlight());
+      group.addEventListener('click', (e) => { e.stopPropagation(); if (!isDragging) showDetail(node); });
+      group.addEventListener('mouseenter', () => { if (!dragTarget) highlightConnections(node.id); });
+      group.addEventListener('mouseleave', () => { if (!dragTarget) clearHighlight(); });
+      group.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        const svgRect = svg.getBoundingClientRect();
+        const mouseX = (e.clientX - svgRect.left - transform.x) / transform.scale;
+        const mouseY = (e.clientY - svgRect.top - transform.y) / transform.scale;
+        dragTarget = {
+          nodeId: node.id,
+          startMouseX: e.clientX,
+          startMouseY: e.clientY,
+          offsetX: mouseX - node.x,
+          offsetY: mouseY - node.y,
+          hasMoved: false,
+          group: group,
+          node: node,
+        };
+      });
 
       // Background rect
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -690,6 +752,17 @@ function generateViewerJs() {
       });
     }
 
+    // Toggle toolbar buttons
+    const showAllBtn = document.getElementById('show-all-btn');
+    if (hiddenNodes.size > 0) {
+      showAllBtn.style.display = '';
+      showAllBtn.textContent = 'Show hidden (' + hiddenNodes.size + ')';
+    } else {
+      showAllBtn.style.display = 'none';
+    }
+    const resetBtn = document.getElementById('reset-positions-btn');
+    resetBtn.style.display = Object.keys(manualPositions).length > 0 ? '' : 'none';
+
     // Apply transform
     applyTransform();
 
@@ -747,6 +820,8 @@ function generateViewerJs() {
       });
       html += '</ul>';
     }
+
+    html += '<button class="hide-node-btn" data-node-id="' + escapeHtml(node.id) + '" style="margin-top:12px;background:#3f1e1e;color:#ef4444;border:1px solid #8f2a2a;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px;width:100%">Hide this page</button>';
 
     content.innerHTML = html;
     panel.classList.remove('hidden');
@@ -900,6 +975,111 @@ function generateViewerJs() {
     btn.textContent = mainFlowOnly ? 'Show all pages' : 'Show main flow only';
     render();
   };
+
+  // Hide/show nodes
+  window.hideNode = function(nodeId) {
+    hiddenNodes.add(nodeId);
+    saveHiddenNodes();
+    closePanel();
+    render();
+  };
+
+  window.showAllNodes = function() {
+    hiddenNodes.clear();
+    saveHiddenNodes();
+    render();
+  };
+
+  // Reset manual positions
+  window.resetPositions = function() {
+    manualPositions = {};
+    savePositions();
+    render();
+  };
+
+  // Edge geometry helpers
+  function getEdgePoint(cx, cy, w, h, targetX, targetY) {
+    const dx = targetX - cx;
+    const dy = targetY - cy;
+    const hw = w / 2;
+    const hh = h / 2;
+    if (dx === 0 && dy === 0) return { x: cx, y: cy };
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    if (absDx * hh > absDy * hw) {
+      const sign = dx > 0 ? 1 : -1;
+      return { x: cx + sign * hw, y: cy + (dy * hw) / absDx };
+    } else {
+      const sign = dy > 0 ? 1 : -1;
+      return { x: cx + (dx * hh) / absDy, y: cy + sign * hh };
+    }
+  }
+
+  function computeStraightEdge(sourceId, targetId) {
+    const s = layoutNodes[sourceId];
+    const t = layoutNodes[targetId];
+    if (!s || !t) return [{ x: 0, y: 0 }, { x: 0, y: 0 }];
+    return [
+      getEdgePoint(s.x, s.y, s.width, s.height, t.x, t.y),
+      getEdgePoint(t.x, t.y, t.width, t.height, s.x, s.y),
+    ];
+  }
+
+  function updateConnectedEdges(nodeId) {
+    document.querySelectorAll('.edge-group').forEach(eg => {
+      if (eg.dataset.source !== nodeId && eg.dataset.target !== nodeId) return;
+      const pts = computeStraightEdge(eg.dataset.source, eg.dataset.target);
+      const d = 'M ' + pts[0].x + ' ' + pts[0].y + ' L ' + pts[1].x + ' ' + pts[1].y;
+      const path = eg.querySelector('.edge-path');
+      if (path) path.setAttribute('d', d);
+      const midX = (pts[0].x + pts[1].x) / 2;
+      const midY = (pts[0].y + pts[1].y) / 2;
+      const lbl = eg.querySelector('.edge-label');
+      if (lbl) { lbl.setAttribute('x', midX); lbl.setAttribute('y', midY - 6); }
+      const cLbl = eg.querySelector('.edge-condition-label');
+      if (cLbl) { cLbl.setAttribute('x', midX); cLbl.setAttribute('y', midY + 10); }
+    });
+  }
+
+  // Drag-to-reposition: global mouse handlers
+  window.addEventListener('mousemove', (e) => {
+    if (!dragTarget) return;
+    const dx = e.clientX - dragTarget.startMouseX;
+    const dy = e.clientY - dragTarget.startMouseY;
+    if (!dragTarget.hasMoved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+    dragTarget.hasMoved = true;
+    isDragging = true;
+
+    const svgRect = svg.getBoundingClientRect();
+    const mouseX = (e.clientX - svgRect.left - transform.x) / transform.scale;
+    const mouseY = (e.clientY - svgRect.top - transform.y) / transform.scale;
+    const newX = mouseX - dragTarget.offsetX;
+    const newY = mouseY - dragTarget.offsetY;
+
+    dragTarget.node.x = newX;
+    dragTarget.node.y = newY;
+    dragTarget.group.setAttribute('transform',
+      'translate(' + (newX - dragTarget.node.width/2) + ',' + (newY - dragTarget.node.height/2) + ')'
+    );
+    updateConnectedEdges(dragTarget.nodeId);
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (!dragTarget) return;
+    if (dragTarget.hasMoved) {
+      manualPositions[dragTarget.nodeId] = { x: dragTarget.node.x, y: dragTarget.node.y };
+      savePositions();
+      setTimeout(() => { isDragging = false; }, 0);
+    }
+    dragTarget = null;
+  });
+
+  // Delegated click handler for hide button in detail panel
+  document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('hide-node-btn')) {
+      hideNode(e.target.dataset.nodeId);
+    }
+  });
 
   // Helpers
   function truncate(str, max) {
