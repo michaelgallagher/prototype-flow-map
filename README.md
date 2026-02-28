@@ -94,3 +94,9 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 - **Toggle back links**: Show/hide the dashed "Back" link edges
 - **Toggle labels**: Show/hide edge labels and conditions
 `
+## To do:
+
+- If a link goes in from a higher level page, it should not be shown as a back arrow too. 
+- Make it possible to add your own images into the flow. 
+- Make it possible to save the maps, and give them a custom URL to share with people. 
+- Make the command line prompt easier to use (multiple steps).
