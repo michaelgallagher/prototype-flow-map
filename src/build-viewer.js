@@ -6,7 +6,7 @@ const path = require("path");
  * Outputs a single index.html with embedded JS that renders
  * an interactive, zoomable, pannable flow diagram.
  */
-async function buildViewer(graph, outputDir, hasScreenshots) {
+async function buildViewer(graph, outputDir, hasScreenshots, viewport) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   // Write graph data as JSON
@@ -15,7 +15,10 @@ async function buildViewer(graph, outputDir, hasScreenshots) {
 
   // Write the HTML viewer
   const htmlPath = path.join(outputDir, "index.html");
-  fs.writeFileSync(htmlPath, generateViewerHtml(graph, hasScreenshots));
+  fs.writeFileSync(
+    htmlPath,
+    generateViewerHtml(graph, hasScreenshots, viewport),
+  );
 
   // Write the CSS
   const cssPath = path.join(outputDir, "styles.css");
@@ -26,7 +29,9 @@ async function buildViewer(graph, outputDir, hasScreenshots) {
   fs.writeFileSync(jsPath, generateViewerJs());
 }
 
-function generateViewerHtml(graph, hasScreenshots) {
+function generateViewerHtml(graph, hasScreenshots, viewport) {
+  const vpWidth = (viewport && viewport.width) || 375;
+  const vpHeight = (viewport && viewport.height) || 812;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -62,6 +67,8 @@ function generateViewerHtml(graph, hasScreenshots) {
   <script>
     window.__GRAPH_DATA__ = ${JSON.stringify(graph)};
     window.__HAS_SCREENSHOTS__ = ${hasScreenshots ? "true" : "false"};
+    window.__VIEWPORT_WIDTH__ = ${vpWidth};
+    window.__VIEWPORT_HEIGHT__ = ${vpHeight};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
   <script src="viewer.js"></script>
@@ -377,21 +384,28 @@ function generateViewerJs() {
   let hubFilter = '';
   let searchTerm = '';
 
+  // Screenshot viewport ratio (default 375x812 mobile)
+  const VIEWPORT_WIDTH = window.__VIEWPORT_WIDTH__ || 375;
+  const VIEWPORT_HEIGHT = window.__VIEWPORT_HEIGHT__ || 812;
+
   // Layout the graph using dagre
   function layoutGraph() {
     const g = new dagre.graphlib.Graph();
     g.setGraph({
       rankdir: 'TB',
-      nodesep: 60,
-      ranksep: 100,
-      edgesep: 30,
-      marginx: 40,
-      marginy: 40,
+      nodesep: 20,
+      ranksep: 40,
+      edgesep: 10,
+      marginx: 20,
+      marginy: 20,
     });
     g.setDefaultEdgeLabel(() => ({}));
 
-    const NODE_WIDTH = 200;
-    const NODE_HEIGHT = hasScreenshots ? 200 : 70;
+    const NODE_WIDTH = 160;
+    const LABEL_AREA = 28;
+    const NODE_HEIGHT = hasScreenshots
+      ? Math.round(NODE_WIDTH * (VIEWPORT_HEIGHT / VIEWPORT_WIDTH)) + LABEL_AREA
+      : 70;
 
     const filteredNodes = graph.nodes.filter(n => {
       if (hubFilter && n.hub !== hubFilter) return false;
@@ -454,7 +468,7 @@ function generateViewerJs() {
       marker.setAttribute('refY', '5');
       marker.setAttribute('markerWidth', '8');
       marker.setAttribute('markerHeight', '8');
-      marker.setAttribute('orient', 'auto-start-reverse');
+      marker.setAttribute('orient', 'auto');
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z');
       path.setAttribute('class', 'edge-arrowhead edge-arrowhead--' + type);
@@ -527,50 +541,52 @@ function generateViewerJs() {
       rect.dataset.nodeId = node.id;
       group.appendChild(rect);
 
-      // Screenshot thumbnail
+      // Screenshot — full screen, not a thumbnail
       if (hasScreenshots && node.screenshot) {
+        const imgPad = 3;
+        const imgWidth = node.width - imgPad * 2;
+        const imgHeight = node.height - 28 - imgPad;
         const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
         img.setAttribute('href', node.screenshot);
-        img.setAttribute('x', '4');
-        img.setAttribute('y', '4');
-        img.setAttribute('width', node.width - 8);
-        img.setAttribute('height', node.height - 36);
-        img.setAttribute('preserveAspectRatio', 'xMidYMin slice');
+        img.setAttribute('x', imgPad);
+        img.setAttribute('y', imgPad);
+        img.setAttribute('width', imgWidth);
+        img.setAttribute('height', imgHeight);
+        img.setAttribute('preserveAspectRatio', 'xMidYMin meet');
         img.setAttribute('class', 'node-screenshot');
         // Clip to rounded rect
         const clipId = 'clip-' + node.id.replace(/[^a-zA-Z0-9]/g, '-');
         const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
         clipPath.setAttribute('id', clipId);
         const clipRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        clipRect.setAttribute('x', '4');
-        clipRect.setAttribute('y', '4');
-        clipRect.setAttribute('width', node.width - 8);
-        clipRect.setAttribute('height', node.height - 36);
-        clipRect.setAttribute('rx', '4');
+        clipRect.setAttribute('x', imgPad);
+        clipRect.setAttribute('y', imgPad);
+        clipRect.setAttribute('width', imgWidth);
+        clipRect.setAttribute('height', imgHeight);
+        clipRect.setAttribute('rx', '3');
         clipPath.appendChild(clipRect);
         defs.appendChild(clipPath);
         img.setAttribute('clip-path', 'url(#' + clipId + ')');
         group.appendChild(img);
       }
 
-      // Type badge
-      const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      badge.setAttribute('x', node.width / 2);
-      badge.setAttribute('y', hasScreenshots ? node.height - 20 : 16);
-      badge.setAttribute('class', 'node-type-badge');
-      badge.textContent = node.type || '';
-      group.appendChild(badge);
-
-      // Title label
+      // Title label (below the screenshot)
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.setAttribute('x', node.width / 2);
       label.setAttribute('y', hasScreenshots ? node.height - 8 : 34);
       label.setAttribute('class', 'node-label');
-      label.textContent = truncate(node.label, 28);
+      label.textContent = truncate(node.label, 24);
       group.appendChild(label);
 
-      // URL path (small text)
+      // URL path (small text) — only when no screenshots
       if (!hasScreenshots) {
+        const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        badge.setAttribute('x', node.width / 2);
+        badge.setAttribute('y', 16);
+        badge.setAttribute('class', 'node-type-badge');
+        badge.textContent = node.type || '';
+        group.appendChild(badge);
+
         const pathLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         pathLabel.setAttribute('x', node.width / 2);
         pathLabel.setAttribute('y', 50);

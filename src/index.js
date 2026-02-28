@@ -61,7 +61,7 @@ async function generate(options) {
 
   // Step 6: Build the viewer
   console.log("6️⃣  Building interactive viewer...");
-  await buildViewer(graph, outputDir, screenshots);
+  await buildViewer(graph, outputDir, screenshots, viewport);
   console.log("   Viewer built");
 }
 
