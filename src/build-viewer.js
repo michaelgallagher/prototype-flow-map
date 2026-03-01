@@ -547,20 +547,54 @@ function generateViewerJs() {
       layoutNodes[id] = g.node(id);
     });
 
-    // Force start nodes to top rank and correct left-to-right order
+    // Assign each node to its nearest start node's subgraph (BFS, first-reached wins)
+    const subgraphOf = {};
+    if (startNodes.length > 1) {
+      const forwardAdj = {};
+      filteredEdges.forEach(e => {
+        if (!forwardAdj[e.source]) forwardAdj[e.source] = [];
+        forwardAdj[e.source].push(e.target);
+      });
+      const bfsOrder = [...startNodes].sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
+      bfsOrder.forEach(startNode => {
+        const queue = [startNode.id];
+        while (queue.length > 0) {
+          const current = queue.shift();
+          if (subgraphOf[current] !== undefined) continue;
+          subgraphOf[current] = startNode.id;
+          (forwardAdj[current] || []).forEach(t => {
+            if (subgraphOf[t] === undefined) queue.push(t);
+          });
+        }
+      });
+    }
+
+    // Force start nodes to top rank and correct left-to-right order,
+    // shifting their entire subgraphs with them
     if (startNodes.length > 1) {
       const sorted = startNodes
         .map(n => layoutNodes[n.id])
         .filter(Boolean)
         .sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
       if (sorted.length > 1) {
-        // Align all start nodes to the same Y (topmost)
         const minY = Math.min(...sorted.map(n => n.y));
-        // Collect their current X positions in sorted order for spacing
         const xs = sorted.map(n => n.x).sort((a, b) => a - b);
+
+        // Compute X delta for each start node
+        const deltas = {};
         sorted.forEach((n, i) => {
+          deltas[n.id] = xs[i] - n.x;
           n.y = minY;
           n.x = xs[i];
+        });
+
+        // Shift all child nodes by their parent start node's delta
+        Object.keys(layoutNodes).forEach(nodeId => {
+          if (startNodeIds.has(nodeId)) return;
+          const parentStartId = subgraphOf[nodeId];
+          if (parentStartId && deltas[parentStartId]) {
+            layoutNodes[nodeId].x += deltas[parentStartId];
+          }
         });
       }
     }
@@ -585,12 +619,17 @@ function generateViewerJs() {
       });
     });
 
-    // Recompute edge points for edges touching repositioned nodes (manual overrides or start nodes)
-    layoutEdges = layoutEdges.map(edge => {
-      if (!manualPositions[edge.source] && !manualPositions[edge.target]
-          && !startNodeIds.has(edge.source) && !startNodeIds.has(edge.target)) return edge;
-      return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
-    });
+    // Recompute edge points after subgraph shifts
+    if (startNodes.length > 1) {
+      layoutEdges = layoutEdges.map(edge => {
+        return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
+      });
+    } else {
+      layoutEdges = layoutEdges.map(edge => {
+        if (!manualPositions[edge.source] && !manualPositions[edge.target]) return edge;
+        return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
+      });
+    }
 
     // Add nav edges and incoming-to-start edges as straight lines (not part of dagre layout)
     [...navEdges, ...incomingToStartEdges].forEach(edge => {
