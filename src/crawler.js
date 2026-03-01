@@ -144,11 +144,8 @@ async function crawlAndScreenshot(graph, options) {
         });
 
         // Add any edges discovered during crawl that weren't found in static analysis.
-        // Skip links that target start nodes — those are nav-bar links already
+        // Links targeting start nodes are skipped — those are nav-bar links already
         // represented by synthetic "nav" edges, not meaningful page-flow links.
-        const startNodePaths = new Set(
-          graph.nodes.filter((n) => n.isStartNode).map((n) => n.urlPath),
-        );
         const existingTargets = new Set(
           graph.edges
             .filter((e) => e.source === node.urlPath)
