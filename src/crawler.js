@@ -27,6 +27,11 @@ async function crawlAndScreenshot(graph, options) {
 
     const baseUrl = `http://localhost:${port}`;
 
+    // Collect start-node paths once so the crawl loop can skip nav-bar links
+    const startNodePaths = new Set(
+      graph.nodes.filter((n) => n.isStartNode).map((n) => n.urlPath),
+    );
+
     // Visit each node and take a screenshot
     for (const node of graph.nodes) {
       try {
@@ -138,7 +143,12 @@ async function crawlAndScreenshot(graph, options) {
           return links;
         });
 
-        // Add any edges discovered during crawl that weren't found in static analysis
+        // Add any edges discovered during crawl that weren't found in static analysis.
+        // Skip links that target start nodes — those are nav-bar links already
+        // represented by synthetic "nav" edges, not meaningful page-flow links.
+        const startNodePaths = new Set(
+          graph.nodes.filter((n) => n.isStartNode).map((n) => n.urlPath),
+        );
         const existingTargets = new Set(
           graph.edges
             .filter((e) => e.source === node.urlPath)
@@ -148,7 +158,8 @@ async function crawlAndScreenshot(graph, options) {
         for (const link of discoveredLinks) {
           if (
             !existingTargets.has(link.target) &&
-            link.target !== node.urlPath
+            link.target !== node.urlPath &&
+            !startNodePaths.has(link.target)
           ) {
             graph.edges.push({
               source: node.urlPath,
