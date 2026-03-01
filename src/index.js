@@ -6,6 +6,7 @@ const { parseRoutes } = require("./route-parser");
 const { crawlAndScreenshot } = require("./crawler");
 const { buildGraph, filterByReachability } = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
+const { buildMermaid } = require("./build-mermaid");
 const { buildIndex } = require("./build-index");
 
 async function generate(options) {
@@ -85,6 +86,10 @@ async function generate(options) {
   console.log("6\uFE0F\u20E3  Building interactive viewer...");
   await buildViewer(graph, mapOutputDir, screenshots, viewport, { name });
   console.log("   Viewer built");
+
+  // Step 6b: Generate Mermaid sitemap
+  buildMermaid(graph, mapOutputDir);
+  console.log("   Mermaid sitemap written");
 
   // Step 7: Write map metadata and rebuild collection index (multi-map mode)
   if (name) {
