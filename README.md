@@ -98,10 +98,14 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 `
 ## To do:
 
-- If a link goes in from a higher level page, it should not be shown as a back arrow too. 
+- ~Figure out why the messages and profile pages aren't being shown.~
+- ~If a link goes in from a higher level page, it should not be shown as a back arrow too.~
 - Make it possible to add your own images into the flow. 
 - Make it possible to save the maps, and give them a custom URL to share with people. 
 - Make the command line prompt easier to use (multiple steps).
-- Figure out why the messages and profile pages aren't being shown.
 - Make it an npm package and something that be installed into a prototype so it auto-runs on build?
 - Add an interface for exluding areas or pages.
+- Fix the hover view, where the screen disappears.
+- Add a mode for just showing the map nodes (add this to the viewer, not the command line).
+- Add the ability to output mermaid text. 
+- Add a text-based visualisation of the site.
