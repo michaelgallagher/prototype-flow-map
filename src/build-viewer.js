@@ -52,7 +52,6 @@ function generateViewerHtml(graph, hasScreenshots, viewport, name) {
       <span id="node-count"></span>
       <button onclick="zoomIn()">Zoom +</button>
       <button onclick="zoomOut()">Zoom −</button>
-      <button onclick="resetView()">Reset view</button>
       <button onclick="fitToScreen()">Fit to screen</button>
       <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
       <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
@@ -63,6 +62,7 @@ function generateViewerHtml(graph, hasScreenshots, viewport, name) {
       </select>
       <input type="text" id="search" placeholder="Search pages..." />
       <button id="show-all-btn" onclick="showAllNodes()" style="display:none">Show hidden (0)</button>
+      <button id="reset-positions-btn" onclick="resetPositions()">Reset positions</button>
     </div>
   </div>
   <div id="canvas-container">
@@ -1051,11 +1051,6 @@ function generateViewerJs() {
     applyTransform();
   };
 
-  window.resetView = function() {
-    transform = { x: 0, y: 0, scale: 1 };
-    applyTransform();
-  };
-
   window.fitToScreen = function() {
     const mainGroup = document.getElementById('main-group');
     if (!mainGroup) return;
@@ -1160,6 +1155,13 @@ function generateViewerJs() {
     hideScreenshots = !hideScreenshots;
     document.getElementById('toggle-screenshots').textContent =
       hideScreenshots ? 'Show screenshots' : 'Hide screenshots';
+    render();
+  };
+
+  // Reset manual positions
+  window.resetPositions = function() {
+    manualPositions = {};
+    savePositions();
     render();
   };
 
