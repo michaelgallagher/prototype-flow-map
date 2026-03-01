@@ -626,6 +626,55 @@ function generateViewerJs() {
       }
     }
 
+    // Resolve horizontal overlap between subgraphs after shifting
+    if (startNodes.length > 1) {
+      const gap = 40;
+      // Compute bounding boxes per subgraph
+      const bounds = {};
+      Object.keys(layoutNodes).forEach(nodeId => {
+        const n = layoutNodes[nodeId];
+        const owner = startNodeIds.has(nodeId) ? nodeId : subgraphOf[nodeId];
+        if (!owner) return;
+        const left = n.x - n.width / 2;
+        const right = n.x + n.width / 2;
+        if (!bounds[owner]) bounds[owner] = { minX: left, maxX: right };
+        else {
+          bounds[owner].minX = Math.min(bounds[owner].minX, left);
+          bounds[owner].maxX = Math.max(bounds[owner].maxX, right);
+        }
+      });
+
+      // Sort subgraphs left-to-right by current start node X
+      const orderedStarts = startNodes
+        .map(n => layoutNodes[n.id])
+        .filter(Boolean)
+        .sort((a, b) => a.x - b.x);
+
+      // Walk left to right, push apart if overlapping
+      for (let i = 1; i < orderedStarts.length; i++) {
+        const prevId = orderedStarts[i - 1].id;
+        const currId = orderedStarts[i].id;
+        if (!bounds[prevId] || !bounds[currId]) continue;
+        const overlap = (bounds[prevId].maxX + gap) - bounds[currId].minX;
+        if (overlap > 0) {
+          // Push current subgraph and all subsequent subgraphs right
+          for (let j = i; j < orderedStarts.length; j++) {
+            const shiftId = orderedStarts[j].id;
+            Object.keys(layoutNodes).forEach(nodeId => {
+              const owner = startNodeIds.has(nodeId) ? nodeId : subgraphOf[nodeId];
+              if (owner === shiftId) {
+                layoutNodes[nodeId].x += overlap;
+              }
+            });
+            if (bounds[shiftId]) {
+              bounds[shiftId].minX += overlap;
+              bounds[shiftId].maxX += overlap;
+            }
+          }
+        }
+      }
+    }
+
     // Apply any manual position overrides
     Object.keys(manualPositions).forEach(nodeId => {
       if (layoutNodes[nodeId]) {
