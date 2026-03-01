@@ -6,7 +6,8 @@ const path = require("path");
  * Outputs a single index.html with embedded JS that renders
  * an interactive, zoomable, pannable flow diagram.
  */
-async function buildViewer(graph, outputDir, hasScreenshots, viewport) {
+async function buildViewer(graph, outputDir, hasScreenshots, viewport, options = {}) {
+  const { name } = options;
   fs.mkdirSync(outputDir, { recursive: true });
 
   // Write graph data as JSON
@@ -17,7 +18,7 @@ async function buildViewer(graph, outputDir, hasScreenshots, viewport) {
   const htmlPath = path.join(outputDir, "index.html");
   fs.writeFileSync(
     htmlPath,
-    generateViewerHtml(graph, hasScreenshots, viewport),
+    generateViewerHtml(graph, hasScreenshots, viewport, name),
   );
 
   // Write the CSS
@@ -29,9 +30,12 @@ async function buildViewer(graph, outputDir, hasScreenshots, viewport) {
   fs.writeFileSync(jsPath, generateViewerJs());
 }
 
-function generateViewerHtml(graph, hasScreenshots, viewport) {
+function generateViewerHtml(graph, hasScreenshots, viewport, name) {
   const vpWidth = (viewport && viewport.width) || 375;
   const vpHeight = (viewport && viewport.height) || 812;
+  const backLink = name
+    ? '<a href="../../index.html" class="back-to-index">&larr; All maps</a>'
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -42,6 +46,7 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
 </head>
 <body>
   <div id="toolbar">
+    ${backLink}
     <h1>Prototype Flow Map</h1>
     <div class="toolbar-controls">
       <span id="node-count"></span>
@@ -119,6 +124,19 @@ body {
   font-weight: 600;
   color: #fff;
   white-space: nowrap;
+}
+
+.back-to-index {
+  color: #53d8fb;
+  text-decoration: none;
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.back-to-index:hover {
+  background: #0f3460;
 }
 
 .toolbar-controls {

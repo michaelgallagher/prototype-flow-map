@@ -47,12 +47,33 @@ program
     "",
   )
   .option("--start-url <url>", "URL to begin crawling from", "/")
+  .option(
+    "--name <slug>",
+    "Name for this map (enables multi-map collection mode, e.g. nhsapp-nav)",
+  )
+  .option(
+    "--title <title>",
+    "Human-readable title for the map (defaults to prototype directory name)",
+  )
   .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
+
+    // Validate --name slug if provided
+    if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
+      console.error(
+        `\n❌ Error: --name must be lowercase alphanumeric with hyphens (e.g. "nhsapp-nav")\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`\n📐 Prototype Flow Map\n`);
     console.log(`   Prototype: ${resolvedPath}`);
-    console.log(`   Output:    ${path.resolve(options.output)}\n`);
+    console.log(`   Output:    ${path.resolve(options.output)}`);
+    if (options.name) {
+      console.log(`   Map:       ${options.name}`);
+    }
+    console.log();
 
     try {
       await generate({
@@ -68,14 +89,20 @@ program
         exclude: options.exclude,
         from: options.from,
         startUrl: options.startUrl,
+        name: options.name || null,
+        title: options.title || null,
       });
-      const indexPath = path.resolve(options.output, "index.html");
+
+      const viewerPath = options.name
+        ? path.resolve(options.output, "maps", options.name, "index.html")
+        : path.resolve(options.output, "index.html");
+
       console.log(`\n✅ Flow map generated at ${path.resolve(options.output)}`);
       if (options.open) {
-        console.log(`   Opening ${indexPath} in your browser...\n`);
-        openInBrowser(indexPath);
+        console.log(`   Opening ${viewerPath} in your browser...\n`);
+        openInBrowser(viewerPath);
       } else {
-        console.log(`   Open ${indexPath} in a browser\n`);
+        console.log(`   Open ${viewerPath} in a browser\n`);
       }
     } catch (err) {
       console.error(`\n❌ Error: ${err.message}\n`);
