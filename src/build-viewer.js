@@ -71,6 +71,7 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
     <div class="legend-item"><span class="legend-swatch" style="background:#4a6fa5;height:1.5px"></span> Link</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#e8a838;height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#444;height:1px"></span> Back link</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #53d8fb;background:none"></span> Global nav</div>
   </div>
   <div id="detail-panel" class="hidden">
     <button id="close-panel" onclick="closePanel()">✕</button>
@@ -254,6 +255,7 @@ body {
 .edge-path--redirect   { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
 .edge-path--back       { stroke: #444; stroke-width: 0.8; stroke-dasharray: 3,3; opacity: 0.3; }
 .edge-path--render     { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
+.edge-path--nav        { stroke: #53d8fb; stroke-width: 1; stroke-dasharray: 8,4; opacity: 0.5; }
 
 .edge-label {
   font-size: 9px;
@@ -275,6 +277,9 @@ body {
 .edge-arrowhead--redirect { fill: #aa55cc; }
 .edge-arrowhead--back { fill: #444; }
 .edge-arrowhead--render { fill: #aa55cc; }
+.edge-arrowhead--nav { fill: #53d8fb; }
+
+.node-rect--start-node { stroke: #53d8fb !important; stroke-width: 2.5 !important; }
 
 /* Detail panel */
 #detail-panel {
@@ -495,9 +500,12 @@ function generateViewerJs() {
       g.setNode(node.id, { width: w, height: h, ...node });
     });
 
+    // Separate nav edges from dagre-layoutable edges
+    const navEdges = [];
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
       if (!showBackLinks && e.type === 'back') return false;
+      if (e.type === 'nav') { navEdges.push(e); return false; }
       return true;
     });
 
@@ -537,6 +545,14 @@ function generateViewerJs() {
       return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
     });
 
+    // Add nav edges as straight lines (not part of dagre layout)
+    navEdges.forEach(edge => {
+      layoutEdges.push({
+        ...edge,
+        points: computeStraightEdge(edge.source, edge.target),
+      });
+    });
+
     return g;
   }
 
@@ -550,7 +566,7 @@ function generateViewerJs() {
 
     // Add defs for arrowheads
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    ['link', 'form', 'conditional', 'redirect', 'back', 'render', 'main-flow'].forEach(type => {
+    ['link', 'form', 'conditional', 'redirect', 'back', 'render', 'main-flow', 'nav'].forEach(type => {
       const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
       marker.setAttribute('id', 'arrow-' + type);
       marker.setAttribute('viewBox', '0 0 10 10');
@@ -573,7 +589,7 @@ function generateViewerJs() {
     svg.appendChild(mainGroup);
 
     // Sort edges so main flow renders on top
-    const edgePriority = { back: 0, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
+    const edgePriority = { nav: -1, back: 0, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
     const sortedEdges = [...layoutEdges].sort((a, b) => {
       const pa = a.isMainFlow ? 6 : (edgePriority[a.type] || 1);
       const pb = b.isMainFlow ? 6 : (edgePriority[b.type] || 1);
@@ -676,7 +692,9 @@ function generateViewerJs() {
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       rect.setAttribute('width', node.width);
       rect.setAttribute('height', node.height);
-      rect.setAttribute('class', 'node-rect node-rect--' + (node.type || 'content'));
+      let rectClass = 'node-rect node-rect--' + (node.type || 'content');
+      if (node.isStartNode) rectClass += ' node-rect--start-node';
+      rect.setAttribute('class', rectClass);
       rect.dataset.nodeId = node.id;
       group.appendChild(rect);
 
@@ -808,6 +826,7 @@ function generateViewerJs() {
     html += '<dt>File</dt><dd>' + escapeHtml(node.filePath || '–') + '</dd>';
     html += '<dt>Type</dt><dd>' + escapeHtml(node.type || '–') + '</dd>';
     if (node.hub) html += '<dt>Hub</dt><dd>' + escapeHtml(node.hub) + '</dd>';
+    if (node.isStartNode) html += '<dt>Role</dt><dd>Start page (--from)</dd>';
     html += '</dl>';
 
     // Outgoing edges

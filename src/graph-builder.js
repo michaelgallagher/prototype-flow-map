@@ -321,26 +321,57 @@ function categoriseNode(tpl) {
 }
 
 /**
- * Filter a graph to only nodes reachable from a given starting page,
+ * Filter a graph to only nodes reachable from one or more starting pages,
  * following forward navigation edges (not back-links).
- * This lets you scope a flow that doesn't share a URL prefix.
+ * Accepts a comma-separated string of start pages.
+ * When multiple start pages are given, synthetic "nav" edges connect them
+ * so they appear related in the viewer.
  */
-function filterByReachability(graph, fromPage) {
-  if (!fromPage) return graph;
+function filterByReachability(graph, fromPages) {
+  if (!fromPages) return graph;
 
-  const startNode = graph.nodes.find(
-    (n) => n.id === fromPage || n.urlPath === fromPage,
-  );
+  // Parse comma-separated start pages (consistent with --base-path and --exclude)
+  const startPageIds = [
+    ...new Set(
+      fromPages
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean),
+    ),
+  ];
 
-  if (!startNode) {
+  if (startPageIds.length === 0) return graph;
+
+  // Resolve each start page to a graph node
+  const validStartNodes = [];
+  for (const pageId of startPageIds) {
+    const node = graph.nodes.find(
+      (n) => n.id === pageId || n.urlPath === pageId,
+    );
+    if (!node) {
+      console.warn(
+        `⚠️  Warning: --from page "${pageId}" not found in graph — skipping`,
+      );
+    } else {
+      validStartNodes.push(node);
+    }
+  }
+
+  if (validStartNodes.length === 0) {
     console.warn(
-      `⚠️  Warning: --from page "${fromPage}" not found in graph — showing full graph`,
+      `⚠️  Warning: none of the --from pages were found in graph — showing full graph`,
     );
     return graph;
   }
 
-  // Build adjacency list following forward edges only (not back-links)
-  const forwardEdgeTypes = new Set(["form", "link", "redirect", "conditional", "render"]);
+  // Build adjacency list following forward edges only (not back-links or nav)
+  const forwardEdgeTypes = new Set([
+    "form",
+    "link",
+    "redirect",
+    "conditional",
+    "render",
+  ]);
   const adj = {};
   graph.edges.forEach((e) => {
     if (!forwardEdgeTypes.has(e.type)) return;
@@ -348,24 +379,55 @@ function filterByReachability(graph, fromPage) {
     adj[e.source].push(e.target);
   });
 
-  // BFS from start node
+  // BFS from all valid start nodes, unioning the reachable sets
   const reachable = new Set();
-  const queue = [fromPage];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (reachable.has(current)) continue;
-    reachable.add(current);
-    (adj[current] || []).forEach((target) => {
-      if (!reachable.has(target)) queue.push(target);
-    });
+  for (const startNode of validStartNodes) {
+    const queue = [startNode.id];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (reachable.has(current)) continue;
+      reachable.add(current);
+      (adj[current] || []).forEach((target) => {
+        if (!reachable.has(target)) queue.push(target);
+      });
+    }
   }
 
-  return {
-    nodes: graph.nodes.filter((n) => reachable.has(n.id)),
-    edges: graph.edges.filter(
-      (e) => reachable.has(e.source) && reachable.has(e.target),
-    ),
-  };
+  // Filter nodes and edges to reachable set
+  const filteredNodes = graph.nodes.filter((n) => reachable.has(n.id));
+  const filteredEdges = graph.edges.filter(
+    (e) => reachable.has(e.source) && reachable.has(e.target),
+  );
+
+  // Mark start nodes so the viewer can highlight them
+  const startNodeIds = new Set(validStartNodes.map((n) => n.id));
+  filteredNodes.forEach((n) => {
+    n.isStartNode = startNodeIds.has(n.id);
+  });
+
+  // Add synthetic "nav" edges between start pages (all-to-all, bidirectional)
+  if (validStartNodes.length > 1) {
+    for (let i = 0; i < validStartNodes.length; i++) {
+      for (let j = i + 1; j < validStartNodes.length; j++) {
+        const a = validStartNodes[i].id;
+        const b = validStartNodes[j].id;
+        filteredEdges.push({
+          source: a,
+          target: b,
+          type: "nav",
+          label: "Global nav",
+        });
+        filteredEdges.push({
+          source: b,
+          target: a,
+          type: "nav",
+          label: "Global nav",
+        });
+      }
+    }
+  }
+
+  return { nodes: filteredNodes, edges: filteredEdges };
 }
 
 module.exports = { buildGraph, filterByReachability };

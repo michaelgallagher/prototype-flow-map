@@ -43,7 +43,7 @@ program
   )
   .option(
     "--from <url>",
-    "Only show pages reachable from this page (e.g. /pages/home-p9)",
+    "Only show pages reachable from these pages (comma-separated, e.g. /pages/home-p9,/pages/messages-p9)",
     "",
   )
   .option("--start-url <url>", "URL to begin crawling from", "/")

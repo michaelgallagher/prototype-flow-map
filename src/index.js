@@ -42,7 +42,15 @@ async function generate(options) {
   let graph = buildGraph(templateData, explicitRoutes, basePath, exclude);
   if (from) {
     graph = filterByReachability(graph, from);
-    console.log(`   Filtered to pages reachable from ${from}`);
+    const fromPages = from
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const label =
+      fromPages.length === 1
+        ? fromPages[0]
+        : `${fromPages.length} start pages`;
+    console.log(`   Filtered to pages reachable from ${label}`);
   }
   console.log(
     `   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
