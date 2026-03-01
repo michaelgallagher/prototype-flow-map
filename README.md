@@ -59,6 +59,8 @@ node bin/cli.js /path/to/your/prototype --no-screenshots
 | `--no-screenshots` | `false` | Skip screenshotting (much faster) |
 | `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
 | `--start-url` | `/` | URL to begin crawling from |
+| `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
+| `--no-open` | `false` | Don't automatically open the viewer in a browser
 
 ## Output
 
