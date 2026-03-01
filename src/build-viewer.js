@@ -51,7 +51,6 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
       <button onclick="fitToScreen()">Fit to screen</button>
       <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
       <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
-      <label><input type="checkbox" id="toggle-back-links"> Show back links</label>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       <select id="hub-filter">
         <option value="">All hubs</option>
@@ -70,7 +69,6 @@ function generateViewerHtml(graph, hasScreenshots, viewport) {
     <div class="legend-item"><span class="legend-swatch" style="background:#5aaf6a;height:2px"></span> Form submission</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#4a6fa5;height:1.5px"></span> Link</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#e8a838;height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#444;height:1px"></span> Back link</div>
     <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #53d8fb;background:none"></span> Global nav</div>
   </div>
   <div id="detail-panel" class="hidden">
@@ -253,7 +251,6 @@ body {
 .edge-path--link       { stroke: #4a6fa5; stroke-width: 1.2; opacity: 0.6; }
 .edge-path--conditional { stroke: #e8a838; stroke-width: 1; stroke-dasharray: 6,3; opacity: 0.7; }
 .edge-path--redirect   { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
-.edge-path--back       { stroke: #444; stroke-width: 0.8; stroke-dasharray: 3,3; opacity: 0.3; }
 .edge-path--render     { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
 .edge-path--nav        { stroke: #53d8fb; stroke-width: 1; stroke-dasharray: 8,4; opacity: 0.5; }
 
@@ -275,7 +272,6 @@ body {
 .edge-arrowhead--form { fill: #5aaf6a; }
 .edge-arrowhead--conditional { fill: #e8a838; }
 .edge-arrowhead--redirect { fill: #aa55cc; }
-.edge-arrowhead--back { fill: #444; }
 .edge-arrowhead--render { fill: #aa55cc; }
 .edge-arrowhead--nav { fill: #53d8fb; }
 
@@ -416,7 +412,6 @@ function generateViewerJs() {
   let panStart = { x: 0, y: 0 };
   let layoutNodes = {};
   let layoutEdges = [];
-  let showBackLinks = false;
   let showLabels = true;
   let mainFlowOnly = false;
   let thumbnailMode = false; // false = full page, true = compact thumbnail
@@ -516,7 +511,6 @@ function generateViewerJs() {
     const incomingToStartEdges = [];
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
-      if (!showBackLinks && e.type === 'back') return false;
       if (e.type === 'nav') { navEdges.push(e); return false; }
       // Exclude incoming edges to start nodes from dagre so they stay at top rank
       if (startNodeIds.size > 1 && startNodeIds.has(e.target) && !startNodeIds.has(e.source)) {
@@ -547,26 +541,40 @@ function generateViewerJs() {
       layoutNodes[id] = g.node(id);
     });
 
-    // Assign each node to its nearest start node's subgraph (BFS, first-reached wins)
+    // Assign each node to its nearest start node's subgraph (multi-source BFS)
     const subgraphOf = {};
     if (startNodes.length > 1) {
+      // Build adjacency from ALL graph edges (not just dagre-filtered ones)
+      // so that crawler-discovered edges don't change subgraph assignment
       const forwardAdj = {};
-      filteredEdges.forEach(e => {
+      graph.edges.forEach(e => {
+        if (e.type === 'nav') return;
+        if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return;
         if (!forwardAdj[e.source]) forwardAdj[e.source] = [];
         forwardAdj[e.source].push(e.target);
       });
-      const bfsOrder = [...startNodes].sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
-      bfsOrder.forEach(startNode => {
-        const queue = [startNode.id];
-        while (queue.length > 0) {
-          const current = queue.shift();
-          if (subgraphOf[current] !== undefined) continue;
-          subgraphOf[current] = startNode.id;
-          (forwardAdj[current] || []).forEach(t => {
-            if (subgraphOf[t] === undefined) queue.push(t);
-          });
-        }
-      });
+
+      // Multi-source BFS: all start nodes enqueued at distance 0.
+      // Processes level-by-level so each node is claimed by its nearest start node.
+      const queue = [];
+      [...startNodes]
+        .sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0))
+        .forEach(n => {
+          subgraphOf[n.id] = n.id;
+          queue.push(n.id);
+        });
+
+      let head = 0;
+      while (head < queue.length) {
+        const current = queue[head++];
+        const owner = subgraphOf[current];
+        (forwardAdj[current] || []).forEach(t => {
+          if (subgraphOf[t] === undefined) {
+            subgraphOf[t] = owner;
+            queue.push(t);
+          }
+        });
+      }
     }
 
     // Force start nodes to top rank and correct left-to-right order,
@@ -652,7 +660,7 @@ function generateViewerJs() {
 
     // Add defs for arrowheads
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    ['link', 'form', 'conditional', 'redirect', 'back', 'render', 'main-flow', 'nav'].forEach(type => {
+    ['link', 'form', 'conditional', 'redirect', 'render', 'main-flow', 'nav'].forEach(type => {
       const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
       marker.setAttribute('id', 'arrow-' + type);
       marker.setAttribute('viewBox', '0 0 10 10');
@@ -675,7 +683,7 @@ function generateViewerJs() {
     svg.appendChild(mainGroup);
 
     // Sort edges so main flow renders on top
-    const edgePriority = { nav: -1, back: 0, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
+    const edgePriority = { nav: -1, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
     const sortedEdges = [...layoutEdges].sort((a, b) => {
       const pa = a.isMainFlow ? 6 : (edgePriority[a.type] || 1);
       const pb = b.isMainFlow ? 6 : (edgePriority[b.type] || 1);
@@ -1057,11 +1065,6 @@ function generateViewerJs() {
   };
 
   // Controls
-  document.getElementById('toggle-back-links').addEventListener('change', (e) => {
-    showBackLinks = e.target.checked;
-    render();
-  });
-
   document.getElementById('toggle-labels').addEventListener('change', (e) => {
     showLabels = e.target.checked;
     render();

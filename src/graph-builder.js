@@ -146,13 +146,8 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
       });
     }
 
-    // Back link (dashed edge)
-    if (tpl.backLink) {
-      addEdge(edges, tpl.urlPath, tpl.backLink, {
-        type: "back",
-        label: "Back",
-      });
-    }
+    // Back links are intentionally omitted — the forward edge to a page
+    // already implies the user can navigate back.
   }
 
   // Step 3: Add edges from explicit route handlers
