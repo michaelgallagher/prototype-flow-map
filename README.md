@@ -98,10 +98,8 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 `
 ## To do:
 
-- Add a mode for just showing the map nodes (add this to the viewer, not the command line).
 - Add an interface for exluding areas or pages.
 - Make it possible to add your own images into the flow. 
-- Make it possible to save the maps, and give them a custom URL to share with people. 
 - Make the command line prompt easier to use (multiple steps).
 - Make it an npm package and something that be installed into a prototype so it auto-runs on build?
 - Add the ability to output mermaid text. 

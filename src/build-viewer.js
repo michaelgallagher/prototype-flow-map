@@ -56,13 +56,13 @@ function generateViewerHtml(graph, hasScreenshots, viewport, name) {
       <button onclick="fitToScreen()">Fit to screen</button>
       <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
       <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
+      <button id="toggle-screenshots" onclick="toggleScreenshots()" style="display:none">Hide screenshots</button>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       <select id="hub-filter">
         <option value="">All hubs</option>
       </select>
       <input type="text" id="search" placeholder="Search pages..." />
       <button id="show-all-btn" onclick="showAllNodes()" style="display:none">Show hidden (0)</button>
-      <button id="reset-positions-btn" onclick="resetPositions()" style="display:none">Reset positions</button>
     </div>
   </div>
   <div id="canvas-container">
@@ -433,6 +433,7 @@ function generateViewerJs() {
   let showLabels = true;
   let mainFlowOnly = false;
   let thumbnailMode = false; // false = full page, true = compact thumbnail
+  let hideScreenshots = false;
   let hubFilter = '';
   let searchTerm = '';
 
@@ -480,7 +481,7 @@ function generateViewerJs() {
   // Returns { w, h } for a node, varying by thumbnailMode
   function getNodeDims(isMainFlow) {
     const w = isMainFlow ? MAIN_FLOW_WIDTH : NODE_WIDTH;
-    if (!hasScreenshots) {
+    if (!hasScreenshots || hideScreenshots) {
       return { w, h: isMainFlow ? Math.round(56 * MAIN_FLOW_SCALE) : 56 };
     }
     // Full-page mode: height matches the screenshot's true aspect ratio
@@ -823,7 +824,7 @@ function generateViewerJs() {
       }
 
       // Screenshot — full page by default, cropped thumbnail when thumbnailMode is on
-      if (hasScreenshots && node.screenshot) {
+      if (hasScreenshots && !hideScreenshots && node.screenshot) {
         const imgWidth = node.width - IMG_PAD * 2;
         const imgHeight = node.height - LABEL_AREA - IMG_PAD;
         const img = document.createElementNS('http://www.w3.org/2000/svg', 'image');
@@ -855,7 +856,7 @@ function generateViewerJs() {
       // Title label
       const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       label.setAttribute('x', node.width / 2);
-      label.setAttribute('y', hasScreenshots ? node.height - 14 : 28);
+      label.setAttribute('y', (hasScreenshots && !hideScreenshots) ? node.height - 14 : 28);
       label.setAttribute('class', 'node-label');
       label.textContent = truncate(node.actualTitle || node.label, 20);
       group.appendChild(label);
@@ -874,13 +875,13 @@ function generateViewerJs() {
       // Type badge (always visible)
       const typeBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       typeBadge.setAttribute('x', node.width / 2);
-      typeBadge.setAttribute('y', hasScreenshots ? node.height - 3 : 42);
+      typeBadge.setAttribute('y', (hasScreenshots && !hideScreenshots) ? node.height - 3 : 42);
       typeBadge.setAttribute('class', 'node-type-badge');
       typeBadge.textContent = (node.type || 'content').toUpperCase();
       group.appendChild(typeBadge);
 
-      // URL path (small text) — only when no screenshots
-      if (!hasScreenshots) {
+      // URL path (small text) — only when screenshots are hidden or absent
+      if (!hasScreenshots || hideScreenshots) {
         const pathLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         pathLabel.setAttribute('x', node.width / 2);
         pathLabel.setAttribute('y', 54);
@@ -921,8 +922,7 @@ function generateViewerJs() {
     } else {
       showAllBtn.style.display = 'none';
     }
-    const resetBtn = document.getElementById('reset-positions-btn');
-    resetBtn.style.display = Object.keys(manualPositions).length > 0 ? '' : 'none';
+    document.getElementById('toggle-screenshots').style.display = hasScreenshots ? '' : 'none';
 
     // Apply transform
     applyTransform();
@@ -940,7 +940,7 @@ function generateViewerJs() {
 
     let html = '<h2>' + escapeHtml(node.label) + '</h2>';
 
-    if (hasScreenshots && node.screenshot) {
+    if (hasScreenshots && !hideScreenshots && node.screenshot) {
       html += '<img class="panel-screenshot" src="' + node.screenshot + '" alt="Screenshot of ' + escapeHtml(node.label) + '" />';
     }
 
@@ -1155,10 +1155,11 @@ function generateViewerJs() {
     render();
   };
 
-  // Reset manual positions
-  window.resetPositions = function() {
-    manualPositions = {};
-    savePositions();
+  // Toggle screenshot visibility
+  window.toggleScreenshots = function() {
+    hideScreenshots = !hideScreenshots;
+    document.getElementById('toggle-screenshots').textContent =
+      hideScreenshots ? 'Show screenshots' : 'Hide screenshots';
     render();
   };
 
@@ -1264,11 +1265,12 @@ function generateViewerJs() {
     return colors[Math.abs(hash) % colors.length];
   }
 
-  // Show thumbnail toggle only when screenshots are present
+  // Show screenshot-related toggles only when screenshots are present
   if (hasScreenshots) {
     const btn = document.getElementById('toggle-thumbnail');
     btn.style.display = '';
     btn.textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
+    document.getElementById('toggle-screenshots').style.display = '';
   }
 
   // Initial render
