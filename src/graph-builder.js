@@ -399,10 +399,15 @@ function filterByReachability(graph, fromPages) {
     (e) => reachable.has(e.source) && reachable.has(e.target),
   );
 
-  // Mark start nodes so the viewer can highlight them
-  const startNodeIds = new Set(validStartNodes.map((n) => n.id));
+  // Mark start nodes and preserve --from order for the viewer
+  const startNodeOrder = new Map(
+    validStartNodes.map((n, i) => [n.id, i]),
+  );
   filteredNodes.forEach((n) => {
-    n.isStartNode = startNodeIds.has(n.id);
+    if (startNodeOrder.has(n.id)) {
+      n.isStartNode = true;
+      n.startOrder = startNodeOrder.get(n.id);
+    }
   });
 
   // Add synthetic "nav" edges between start pages (all-to-all, bidirectional)

@@ -547,6 +547,24 @@ function generateViewerJs() {
       layoutNodes[id] = g.node(id);
     });
 
+    // Force start nodes to top rank and correct left-to-right order
+    if (startNodes.length > 1) {
+      const sorted = startNodes
+        .map(n => layoutNodes[n.id])
+        .filter(Boolean)
+        .sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
+      if (sorted.length > 1) {
+        // Align all start nodes to the same Y (topmost)
+        const minY = Math.min(...sorted.map(n => n.y));
+        // Collect their current X positions in sorted order for spacing
+        const xs = sorted.map(n => n.x).sort((a, b) => a - b);
+        sorted.forEach((n, i) => {
+          n.y = minY;
+          n.x = xs[i];
+        });
+      }
+    }
+
     // Apply any manual position overrides
     Object.keys(manualPositions).forEach(nodeId => {
       if (layoutNodes[nodeId]) {
@@ -567,9 +585,10 @@ function generateViewerJs() {
       });
     });
 
-    // Recompute edge points for edges touching manually-positioned nodes
+    // Recompute edge points for edges touching repositioned nodes (manual overrides or start nodes)
     layoutEdges = layoutEdges.map(edge => {
-      if (!manualPositions[edge.source] && !manualPositions[edge.target]) return edge;
+      if (!manualPositions[edge.source] && !manualPositions[edge.target]
+          && !startNodeIds.has(edge.source) && !startNodeIds.has(edge.target)) return edge;
       return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
     });
 
