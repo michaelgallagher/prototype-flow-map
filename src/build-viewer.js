@@ -279,7 +279,14 @@ body {
 .edge-arrowhead--render { fill: #aa55cc; }
 .edge-arrowhead--nav { fill: #53d8fb; }
 
-.node-rect--start-node { stroke: #53d8fb !important; stroke-width: 2.5 !important; }
+.node-rect--start-node { stroke: #53d8fb !important; stroke-width: 2.5 !important; filter: drop-shadow(0 0 4px rgba(83, 216, 251, 0.4)); }
+
+.start-node-badge {
+  font-size: 9px;
+  font-weight: 600;
+  fill: #53d8fb;
+  letter-spacing: 1.5px;
+}
 
 /* Detail panel */
 #detail-panel {
@@ -496,16 +503,26 @@ function generateViewerJs() {
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
 
     filteredNodes.forEach(node => {
-      const { w, h } = getNodeDims(node.isMainFlow);
+      const { w, h } = getNodeDims(node.isMainFlow || node.isStartNode);
       g.setNode(node.id, { width: w, height: h, ...node });
     });
 
-    // Separate nav edges from dagre-layoutable edges
+    // Identify start nodes and collect their IDs for layout pinning
+    const startNodes = filteredNodes.filter(n => n.isStartNode);
+    const startNodeIds = new Set(startNodes.map(n => n.id));
+
+    // Separate nav edges and incoming-to-start edges from dagre-layoutable edges
     const navEdges = [];
+    const incomingToStartEdges = [];
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
       if (!showBackLinks && e.type === 'back') return false;
       if (e.type === 'nav') { navEdges.push(e); return false; }
+      // Exclude incoming edges to start nodes from dagre so they stay at top rank
+      if (startNodeIds.size > 1 && startNodeIds.has(e.target) && !startNodeIds.has(e.source)) {
+        incomingToStartEdges.push(e);
+        return false;
+      }
       return true;
     });
 
@@ -513,10 +530,20 @@ function generateViewerJs() {
       g.setEdge(edge.source, edge.target, { ...edge, id: 'edge-' + i });
     });
 
+    // Add virtual root to pin start nodes to the top rank
+    const virtualRootId = '__virtual_root__';
+    if (startNodes.length > 1) {
+      g.setNode(virtualRootId, { width: 0, height: 0 });
+      startNodes.forEach(n => {
+        g.setEdge(virtualRootId, n.id, { weight: 2, minlen: 1 });
+      });
+    }
+
     dagre.layout(g);
 
     layoutNodes = {};
     g.nodes().forEach(id => {
+      if (id === virtualRootId) return;
       layoutNodes[id] = g.node(id);
     });
 
@@ -530,6 +557,7 @@ function generateViewerJs() {
 
     layoutEdges = [];
     g.edges().forEach(e => {
+      if (e.v === virtualRootId || e.w === virtualRootId) return;
       const edgeData = g.edge(e);
       layoutEdges.push({
         ...edgeData,
@@ -545,8 +573,8 @@ function generateViewerJs() {
       return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
     });
 
-    // Add nav edges as straight lines (not part of dagre layout)
-    navEdges.forEach(edge => {
+    // Add nav edges and incoming-to-start edges as straight lines (not part of dagre layout)
+    [...navEdges, ...incomingToStartEdges].forEach(edge => {
       layoutEdges.push({
         ...edge,
         points: computeStraightEdge(edge.source, edge.target),
@@ -747,6 +775,17 @@ function generateViewerJs() {
       label.setAttribute('class', 'node-label');
       label.textContent = truncate(node.actualTitle || node.label, 20);
       group.appendChild(label);
+
+      // Start node badge
+      if (node.isStartNode) {
+        const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        badge.setAttribute('x', node.width / 2);
+        badge.setAttribute('y', -6);
+        badge.setAttribute('text-anchor', 'middle');
+        badge.setAttribute('class', 'start-node-badge');
+        badge.textContent = 'START';
+        group.appendChild(badge);
+      }
 
       // Type badge (always visible)
       const typeBadge = document.createElementNS('http://www.w3.org/2000/svg', 'text');

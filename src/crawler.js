@@ -33,7 +33,7 @@ async function crawlAndScreenshot(graph, options) {
         const page = await context.newPage();
         const url = `${baseUrl}${node.urlPath}`;
 
-        await page.goto(url, {
+        const response = await page.goto(url, {
           waitUntil: "networkidle",
           timeout: 10000,
         });
@@ -41,39 +41,63 @@ async function crawlAndScreenshot(graph, options) {
         // Wait a moment for any animations/transitions
         await page.waitForTimeout(500);
 
+        // Check if the page navigated away (JS redirect)
+        const finalUrl = new URL(page.url());
+        const requestedPath = node.urlPath;
+        const landedPath = finalUrl.pathname;
+        if (landedPath !== requestedPath) {
+          console.warn(
+            `   ⚠️  ${requestedPath} redirected to ${landedPath} — skipping screenshot`,
+          );
+          await page.close();
+          continue;
+        }
+
         // Reposition fixed elements so they appear correctly in full-page screenshots.
         // Fixed footers (bottom-anchored) are moved to the document bottom;
-        // fixed headers (top-anchored) stay at the document top.
+        // fixed headers (top-anchored) stays at the document top.
         // Without this, a fixed footer appears mid-image on tall pages.
-        await page.evaluate(() => {
-          const viewportH = window.innerHeight;
-          const fixedEls = Array.from(document.querySelectorAll("*")).filter(
-            (el) => window.getComputedStyle(el).position === "fixed",
-          );
-          if (fixedEls.length === 0) return;
+        // Wrapped in try/catch because late-firing JS redirects can destroy the context.
+        try {
+          await page.evaluate(() => {
+            const viewportH = window.innerHeight;
+            const fixedEls = Array.from(document.querySelectorAll("*")).filter(
+              (el) => window.getComputedStyle(el).position === "fixed",
+            );
+            if (fixedEls.length === 0) return;
 
-          // Make body a positioning context so `bottom: 0` = bottom of document
-          document.body.style.position = "relative";
+            // Make body a positioning context so `bottom: 0` = bottom of document
+            document.body.style.position = "relative";
 
-          fixedEls.forEach((el) => {
-            const rect = el.getBoundingClientRect();
-            const isBottomFixed = rect.top > viewportH / 2;
+            fixedEls.forEach((el) => {
+              const rect = el.getBoundingClientRect();
+              const isBottomFixed = rect.top > viewportH / 2;
 
-            document.body.appendChild(el); // re-parent to avoid containing-block issues
-            el.style.position = "absolute";
-            el.style.left = "0";
-            el.style.right = "0";
-            el.style.margin = "0";
+              document.body.appendChild(el); // re-parent to avoid containing-block issues
+              el.style.position = "absolute";
+              el.style.left = "0";
+              el.style.right = "0";
+              el.style.margin = "0";
 
-            if (isBottomFixed) {
-              el.style.top = "auto";
-              el.style.bottom = "0";
-            } else {
-              el.style.bottom = "auto";
-              el.style.top = "0";
-            }
+              if (isBottomFixed) {
+                el.style.top = "auto";
+                el.style.bottom = "0";
+              } else {
+                el.style.bottom = "auto";
+                el.style.top = "0";
+              }
+            });
           });
-        });
+        } catch (evalErr) {
+          if (evalErr.message.includes("Execution context was destroyed")) {
+            console.warn(
+              `   ⚠️  ${requestedPath} navigated away during processing — skipping screenshot`,
+            );
+            await page.close();
+            continue;
+          }
+          throw evalErr;
+        }
 
         const filename = urlToFilename(node.urlPath);
         const screenshotPath = path.join(screenshotsDir, filename);
