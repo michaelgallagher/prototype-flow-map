@@ -101,3 +101,5 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 - Make it possible to save the maps, and give them a custom URL to share with people. 
 - Make the command line prompt easier to use (multiple steps).
 - Figure out why the messages and profile pages aren't being shown.
+- Make it an npm package and something that be installed into a prototype so it auto-runs on build?
+- Add an interface for exluding areas or pages.
