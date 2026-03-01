@@ -67,8 +67,8 @@ node bin/cli.js /path/to/your/prototype --no-screenshots
 The tool generates a folder (default `./flow-map-output/`) containing:
 
 ```
-flow-map-output/
-  index.html          # Interactive viewer — open this
+flow-map-output/maps/{your-map-here}
+  index.html           # Interactive viewer — open this
   styles.css           # Viewer styles
   viewer.js            # Viewer logic
   graph-data.json      # Raw graph data (nodes + edges)
