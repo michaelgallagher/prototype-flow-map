@@ -98,8 +98,8 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 `
 ## To do:
 
-- Add an interface for exluding areas or pages.
-- Make it possible to add your own images into the flow. 
+- Add an interface for exluding areas or pages
+- Make it possible to add your own images into the flow?
 - Make the command line prompt easier to use (multiple steps)
   - The sequence:
     - Path to the prototype
@@ -109,5 +109,4 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
     - Screenshots option
   - At each step, if you just press enter, it will use the default value
 - Make it an npm package and something that be installed into a prototype so it auto-runs on build?
-- Add the ability to output mermaid text. 
-- Add a text-based visualisation of the site.
+- Add a text-based visualisation of the site
