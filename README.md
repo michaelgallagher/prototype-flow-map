@@ -33,21 +33,21 @@ npx playwright install chromium
 
 ```bash
 # Point it at any prototype project
-node bin/cli.js /path/to/your/prototype
+npx prototype-flow-map /path/to/your/prototype
 
 # With options
-node bin/cli.js /path/to/your/prototype \
+npx prototype-flow-map /path/to/your/prototype \
   --output ./my-flow-map \
   --port 4321 \
   --width 375 \
   --height 812 \
   --base-path /pages
-  --from /pages/xxxxx (determines the start point)
+  --from /pages/xxxxx (determines the start point, can have mulitple – separate with commas)
   --no-screenshots (don't add screenshots to the output)
   --no-open (don't automatically open the viewer)
 
 # Skip screenshots (faster, static analysis only)
-node bin/cli.js /path/to/your/prototype --no-screenshots
+npx prototype-flow-map /path/to/your/prototype --no-screenshots
 ```
 
 ## Options
@@ -66,7 +66,7 @@ node bin/cli.js /path/to/your/prototype --no-screenshots
 
 ## Output
 
-The tool generates a folder (default `./flow-map-output/`) containing:
+The tool generates a folder (default `./flow-map-output/`) containing a subfolder for each map:
 
 ```
 flow-map-output/maps/{your-map-here}
