@@ -4,6 +4,8 @@ Generate interactive flow maps from Express/Nunjucks prototype kit projects (NHS
 
 Analyses your prototype's templates, routes, and conditional logic to produce a visual map of every screen and the connections between them — with screenshots.
 
+![Example flowmap screenshot showing a graph of pages and connections, with a detail panel open for one page showing its screenshot and metadata](./docs/assets/example-flow-map.png)
+
 ## Features
 
 - **Auto-discovers all pages** from Nunjucks templates (mirrors the prototype kit's auto-routing)
