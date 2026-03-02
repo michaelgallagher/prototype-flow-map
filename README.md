@@ -100,7 +100,7 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 - **Toggle back links**: Show/hide the dashed "Back" link edges
 - **Toggle labels**: Show/hide edge labels and conditions
 `
-## To do:
+## To do
 
 - Add an interface for exluding areas or pages
 - Make it possible to add your own images into the flow?

@@ -6,9 +6,21 @@ const path = require("path");
  * Outputs a single index.html with embedded JS that renders
  * an interactive, zoomable, pannable flow diagram.
  */
-async function buildViewer(graph, outputDir, hasScreenshots, viewport, options = {}) {
-  const { name } = options;
+async function buildViewer(
+  graph,
+  outputDir,
+  hasScreenshots,
+  viewport,
+  options = {},
+) {
+  const { name, rootOutputDir } = options;
   fs.mkdirSync(outputDir, { recursive: true });
+
+  // CSS and JS live in the root output dir (shared across all maps).
+  // When running in named-map mode the map's index.html is two levels deep
+  // (maps/<name>/index.html), so we need to adjust the relative paths.
+  const sharedAssetsDir = rootOutputDir || outputDir;
+  const assetPrefix = rootOutputDir ? "../../" : "";
 
   // Write graph data as JSON
   const dataPath = path.join(outputDir, "graph-data.json");
@@ -18,31 +30,37 @@ async function buildViewer(graph, outputDir, hasScreenshots, viewport, options =
   const htmlPath = path.join(outputDir, "index.html");
   fs.writeFileSync(
     htmlPath,
-    generateViewerHtml(graph, hasScreenshots, viewport, name),
+    generateViewerHtml(graph, hasScreenshots, viewport, name, assetPrefix),
   );
 
-  // Write the CSS
-  const cssPath = path.join(outputDir, "styles.css");
+  // Write the CSS and JS only to the shared root directory
+  fs.mkdirSync(sharedAssetsDir, { recursive: true });
+  const cssPath = path.join(sharedAssetsDir, "styles.css");
   fs.writeFileSync(cssPath, generateViewerCss());
 
-  // Write the JS
-  const jsPath = path.join(outputDir, "viewer.js");
+  const jsPath = path.join(sharedAssetsDir, "viewer.js");
   fs.writeFileSync(jsPath, generateViewerJs());
 }
 
-function generateViewerHtml(graph, hasScreenshots, viewport, name) {
+function generateViewerHtml(
+  graph,
+  hasScreenshots,
+  viewport,
+  name,
+  assetPrefix = "",
+) {
   const vpWidth = (viewport && viewport.width) || 375;
   const vpHeight = (viewport && viewport.height) || 812;
   const backLink = name
     ? '<a href="../../index.html" class="back-to-index">&larr; All maps</a>'
-    : '';
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Prototype Flow Map</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="${assetPrefix}styles.css">
 </head>
 <body>
   <div id="toolbar">
@@ -87,7 +105,7 @@ function generateViewerHtml(graph, hasScreenshots, viewport, name) {
     window.__VIEWPORT_HEIGHT__ = ${vpHeight};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-  <script src="viewer.js"></script>
+  <script src="${assetPrefix}viewer.js"></script>
 </body>
 </html>`;
 }

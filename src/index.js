@@ -56,9 +56,7 @@ async function generate(options) {
       .map((p) => p.trim())
       .filter(Boolean);
     const label =
-      fromPages.length === 1
-        ? fromPages[0]
-        : `${fromPages.length} start pages`;
+      fromPages.length === 1 ? fromPages[0] : `${fromPages.length} start pages`;
     console.log(`   Filtered to pages reachable from ${label}`);
   }
   console.log(
@@ -67,7 +65,9 @@ async function generate(options) {
 
   // Step 5: Crawl and screenshot (if enabled)
   if (screenshots) {
-    console.log("5\uFE0F\u20E3  Crawling prototype and capturing screenshots...");
+    console.log(
+      "5\uFE0F\u20E3  Crawling prototype and capturing screenshots...",
+    );
     graph = await crawlAndScreenshot(graph, {
       prototypePath,
       port,
@@ -84,7 +84,10 @@ async function generate(options) {
 
   // Step 6: Build the viewer
   console.log("6\uFE0F\u20E3  Building interactive viewer...");
-  await buildViewer(graph, mapOutputDir, screenshots, viewport, { name });
+  await buildViewer(graph, mapOutputDir, screenshots, viewport, {
+    name,
+    rootOutputDir: name ? outputDir : null,
+  });
   console.log("   Viewer built");
 
   // Step 6b: Generate Mermaid sitemap
