@@ -40,6 +40,14 @@ async function buildViewer(
 
   const jsPath = path.join(sharedAssetsDir, "viewer.js");
   fs.writeFileSync(jsPath, generateViewerJs());
+
+  // Remove any stale per-map copies left over from older builds
+  if (rootOutputDir) {
+    for (const stale of ["viewer.js", "styles.css"]) {
+      const stalePath = path.join(outputDir, stale);
+      if (fs.existsSync(stalePath)) fs.unlinkSync(stalePath);
+    }
+  }
 }
 
 function generateViewerHtml(

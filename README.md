@@ -66,13 +66,20 @@ npx prototype-flow-map /path/to/your/prototype --no-screenshots
 
 ## Output
 
-The tool generates a folder (default `./flow-map-output/`) containing a subfolder for each map:
+The tool generates a folder (default `./flow-map-output/`) containing the index: 
+
+```
+  index.html           # The table of contents (open this)
+  style.css            # Styles for the viewer and maps
+  viewer.js            # JavaScript for the interactive viewer
+  maps/                # Subfolders for each generated map
+```
+
+Each time you run the tool it will also produce a subfolder for the specific map you are generating, which will contain::
 
 ```
 flow-map-output/maps/{your-map-here}
-  index.html           # Interactive viewer — open this
-  styles.css           # Viewer styles
-  viewer.js            # Viewer logic
+  index.html           # Interactive viewer (open this)
   graph-data.json      # Raw graph data (nodes + edges)
   sitemap.mmd          # Mermaid text-based graph definition
   meta.json            # Graph metadata (number of nodes, name, etc.)
