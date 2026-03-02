@@ -7,6 +7,7 @@ const { crawlAndScreenshot } = require("./crawler");
 const { buildGraph, filterByReachability } = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
 const { buildMermaid } = require("./build-mermaid");
+const { exportMural } = require("./export-mural");
 const { buildIndex } = require("./build-index");
 
 async function generate(options) {
@@ -22,6 +23,7 @@ async function generate(options) {
     startUrl,
     name,
     title,
+    exportMural: shouldExportMural,
   } = options;
 
   // When --name is provided, output goes to maps/<name>/ within the output dir
@@ -93,6 +95,11 @@ async function generate(options) {
   // Step 6b: Generate Mermaid sitemap
   buildMermaid(graph, mapOutputDir);
   console.log("   Mermaid sitemap written");
+
+  if (shouldExportMural) {
+    exportMural(graph, mapOutputDir);
+    console.log("   Mural MVP export written");
+  }
 
   // Step 7: Write map metadata and rebuild collection index (multi-map mode)
   if (name) {

@@ -15,6 +15,7 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 - **Screenshots every page** using Playwright (headless Chromium)
 - **Interactive web viewer** — pan, zoom, click nodes for detail, filter by hub, search
 - **Shareable output** — a static HTML site you can open locally or deploy anywhere
+- **Mural MVP export** — emits CSV + SVG artifacts from graph data for board import
 
 ## Prerequisites
 
@@ -44,6 +45,7 @@ npx prototype-flow-map /path/to/your/prototype \
   --base-path /pages
   --from /pages/xxxxx (determines the start point, can have mulitple – separate with commas)
   --no-screenshots (don't add screenshots to the output)
+  --export-mural (write Mural MVP files: nodes.csv, edges.csv, map.svg)
   --no-open (don't automatically open the viewer)
 
 # Skip screenshots (faster, static analysis only)
@@ -62,6 +64,7 @@ npx prototype-flow-map /path/to/your/prototype --no-screenshots
 | `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
 | `--start-url` | `/` | URL to begin crawling from |
 | `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
+| `--export-mural` | `false` | Generate Mural MVP files (`mural/nodes.csv`, `mural/edges.csv`, `mural/map.svg`) |
 | `--no-open` | `false` | Don't automatically open the viewer in a browser
 
 ## Output
@@ -81,6 +84,10 @@ Each time you run the tool it will also produce a subfolder for the specific map
   index.html           # Interactive viewer (open this)
   graph-data.json      # Raw graph data (nodes + edges)
   sitemap.mmd          # Mermaid text-based graph definition
+  mural/               # Mural MVP export artifacts (optional)
+    nodes.csv          # Node metadata from graph data
+    edges.csv          # Edge metadata from graph data
+    map.svg            # Visual flow map for upload/import into Mural
   meta.json            # Graph metadata (number of nodes, name, etc.)
   screenshots/         # PNG screenshot of every page
 ```
@@ -120,3 +127,5 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
   - At each step, if you just press enter, it will use the default value
 - Make it an npm package and something that be installed into a prototype so it auto-runs on build?
 - Add a text-based visualisation of the site
+- Can this output a file for Mural?
+- Can the changes the user makes to the map positions be saved?

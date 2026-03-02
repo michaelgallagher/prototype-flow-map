@@ -55,6 +55,10 @@ program
     "--title <title>",
     "Human-readable title for the map (defaults to prototype directory name)",
   )
+  .option(
+    "--export-mural",
+    "Generate MVP Mural export files (nodes.csv, edges.csv, map.svg)",
+  )
   .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
@@ -91,6 +95,7 @@ program
         startUrl: options.startUrl,
         name: options.name || null,
         title: options.title || null,
+        exportMural: Boolean(options.exportMural),
       });
 
       const viewerPath = options.name
