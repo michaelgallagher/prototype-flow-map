@@ -7,6 +7,7 @@ const { crawlAndScreenshot } = require("./crawler");
 const { buildGraph, filterByReachability } = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
 const { buildMermaid } = require("./build-mermaid");
+const { exportPdf } = require("./export-pdf");
 const { buildIndex } = require("./build-index");
 
 async function generate(options) {
@@ -22,6 +23,8 @@ async function generate(options) {
     startUrl,
     name,
     title,
+    exportPdf: shouldExportPdf,
+    pdfMode,
   } = options;
 
   // When --name is provided, output goes to maps/<name>/ within the output dir
@@ -89,6 +92,17 @@ async function generate(options) {
     rootOutputDir: name ? outputDir : null,
   });
   console.log("   Viewer built");
+
+  if (shouldExportPdf) {
+    const resolvedPdfMode = pdfMode || "canvas";
+    console.log(`   Generating PDF export (${resolvedPdfMode})...`);
+    await exportPdf({
+      viewerHtmlPath: path.join(mapOutputDir, "index.html"),
+      outputDir: mapOutputDir,
+      mode: resolvedPdfMode,
+    });
+    console.log("   PDF written (map.pdf)");
+  }
 
   // Step 6b: Generate Mermaid sitemap
   buildMermaid(graph, mapOutputDir);

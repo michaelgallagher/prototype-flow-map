@@ -15,6 +15,7 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 - **Screenshots every page** using Playwright (headless Chromium)
 - **Interactive web viewer** — pan, zoom, click nodes for detail, filter by hub, search
 - **Shareable output** — a static HTML site you can open locally or deploy anywhere
+- **PDF export** — optional `map.pdf`, with full-canvas layout as default
 
 ## Prerequisites
 
@@ -31,24 +32,29 @@ npx playwright install chromium
 
 ## Usage
 
+The most basic way to use the tool is like so:
+
 ```bash
 # Point it at any prototype project
 npx prototype-flow-map /path/to/your/prototype
-
-# With options
-npx prototype-flow-map /path/to/your/prototype \
-  --output ./my-flow-map \
-  --port 4321 \
-  --width 375 \
-  --height 812 \
-  --base-path /pages
-  --from /pages/xxxxx (determines the start point, can have mulitple – separate with commas)
-  --no-screenshots (don't add screenshots to the output)
-  --no-open (don't automatically open the viewer)
-
-# Skip screenshots (faster, static analysis only)
-npx prototype-flow-map /path/to/your/prototype --no-screenshots
 ```
+
+That will get you a map of *everything* in your prototype. Depending on how things are set up, that may or may not be a good idea. 
+
+There are lots of options you can use to tune the output, the most useful of which will be `--from`, which lets you scope the output to a specific start point. The tool will crawl from that point onward (i.e. down the tree). You can give this flag mutliple values if you want, which is useful because the default behaviour doesn't capture `{{ include }}` links (right now, anyway). If you give the tool multiple `--from` points, it will look for ways that they connect. 
+
+An example of how this would work with the NHS App prototype would be to use a prompt like: 
+
+```bash
+# Point it at any prototype project
+npx prototype-flow-map /path/to/your/prototype --from "/pages/home-p9,/pages/messages-p9,/pages/profile-p9"
+```
+
+That will get you a map of the three main tabs. Please note that the tool will arrange them in the order you list them, running from left to right on the output map. 
+
+If you want to save your map, you probably also want to give it a name. This has two parts: `--name` and `--title`. The name flag determines what the folder is called (you won't see this unless you're nosying around in a text editor) and the title flag sets the visible name in the site index. You don't *need* to set the `--name` and `--title` flags, but if you don't you can't have multiple maps. It will just write to the top level flow-map-output folder. Probably not a great idea. 
+
+The order of the flags doesn't matter. 
 
 ## Options
 
@@ -62,6 +68,10 @@ npx prototype-flow-map /path/to/your/prototype --no-screenshots
 | `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
 | `--start-url` | `/` | URL to begin crawling from |
 | `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
+| `--name` | |
+| `--title` | |
+| `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
+| `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas default) or `snapshot` (A3 fit-to-screen) |
 | `--no-open` | `false` | Don't automatically open the viewer in a browser
 
 ## Output
@@ -79,6 +89,7 @@ Each time you run the tool it will also produce a subfolder for the specific map
 
 ```
   index.html           # Interactive viewer (open this)
+  map.pdf              # Optional PDF export (full-canvas by default)
   graph-data.json      # Raw graph data (nodes + edges)
   sitemap.mmd          # Mermaid text-based graph definition
   meta.json            # Graph metadata (number of nodes, name, etc.)
@@ -120,3 +131,5 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
   - At each step, if you just press enter, it will use the default value
 - Make it an npm package and something that be installed into a prototype so it auto-runs on build?
 - Add a text-based visualisation of the site
+- Can this output a file for Mural?
+- Can the changes the user makes to the map positions be saved?

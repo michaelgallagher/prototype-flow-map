@@ -55,6 +55,12 @@ program
     "--title <title>",
     "Human-readable title for the map (defaults to prototype directory name)",
   )
+  .option("--export-pdf", "Generate a PDF export of the flow map (map.pdf)")
+  .option(
+    "--pdf-mode <mode>",
+    'PDF mode: "canvas" (full-canvas, default) or "snapshot" (A3 fit-to-screen)',
+    "canvas",
+  )
   .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
@@ -63,6 +69,14 @@ program
     if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
       console.error(
         `\n❌ Error: --name must be lowercase alphanumeric with hyphens (e.g. "nhsapp-nav")\n`,
+      );
+      process.exit(1);
+    }
+
+    const pdfMode = String(options.pdfMode || "canvas").toLowerCase();
+    if (!new Set(["canvas", "snapshot"]).has(pdfMode)) {
+      console.error(
+        `\n❌ Error: --pdf-mode must be "canvas" or "snapshot"\n`,
       );
       process.exit(1);
     }
@@ -91,6 +105,8 @@ program
         startUrl: options.startUrl,
         name: options.name || null,
         title: options.title || null,
+        exportPdf: Boolean(options.exportPdf),
+        pdfMode,
       });
 
       const viewerPath = options.name
