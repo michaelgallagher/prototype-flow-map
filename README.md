@@ -52,7 +52,7 @@ npx prototype-flow-map /path/to/your/prototype --from "/pages/home-p9,/pages/mes
 
 That will get you a map of the three main tabs. Please note that the tool will arrange them in the order you list them, running from left to right on the output map. 
 
-If you want to save your map, you probably also want to give it a name. This has two parts: `--name` and `--title`. The name flag determines what the folder is called (inside `flow-map-output/maps/`) and the title flag sets the visible name in the site index. You don't need to provide both. If you don't provide these flags, defaults are generated from the prototype folder name, and output still goes into `maps/<derived-name>/`. Given that this is all very manual right now, if you give your map a name or title, you should keep using the same one, otherwise it will create a new folder instead of writing over the current one. 
+If you want to save your map, you might also want to give it a name. This has two optional parts: `--name` and `--title`. The name flag determines what the folder is called (inside `flow-map-output/maps/`) and the title flag sets the visible name in the site index. If you don't provide either of these flags, the default behaviour is to use the prototype folder name. (*Given that this is all very manual right now, if you give your map a name or title, you should probably keep using the same one, otherwise it will create an entirely new folder instead of writing over the current one.)
 
 The order of the flags doesn't matter. 
 
