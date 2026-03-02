@@ -172,9 +172,6 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
   // Deduplicate edges
   const uniqueEdges = deduplicateEdges(edges);
 
-  // Identify the main user flows (form chains leading to confirmation/check-answers)
-  computeMainFlow(nodes, uniqueEdges);
-
   return { nodes, edges: uniqueEdges };
 }
 
@@ -222,78 +219,6 @@ function deduplicateEdges(edges) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
-}
-
-/**
- * Identify "main flow" chains — sequences of form submissions
- * that progress from questions through to confirmation/check-answers pages.
- * Tags matching nodes and edges with isMainFlow: true.
- */
-function computeMainFlow(nodes, edges) {
-  const nodeMap = {};
-  nodes.forEach((n) => {
-    nodeMap[n.id] = n;
-  });
-
-  // Build adjacency list of forward-progression edges (form + redirect)
-  const forwardAdj = {};
-  edges.forEach((e) => {
-    if (e.type === "form" || e.type === "redirect") {
-      if (!forwardAdj[e.source]) forwardAdj[e.source] = [];
-      forwardAdj[e.source].push(e);
-    }
-  });
-
-  const terminalTypes = new Set(["confirmation", "check-answers"]);
-
-  // DFS to find the longest chain from a start node to a terminal node
-  function findChain(startId, visited) {
-    if (visited.has(startId)) return [];
-    visited.add(startId);
-    const outEdges = forwardAdj[startId] || [];
-    let bestChain = [];
-    for (const edge of outEdges) {
-      const targetNode = nodeMap[edge.target];
-      if (!targetNode) continue;
-      if (terminalTypes.has(targetNode.type)) {
-        return [edge]; // reached a terminal
-      }
-      const sub = findChain(edge.target, new Set(visited));
-      if (sub.length > 0 && sub.length + 1 > bestChain.length) {
-        bestChain = [edge, ...sub];
-      }
-    }
-    return bestChain;
-  }
-
-  // Find chains starting from question nodes that have outgoing form edges
-  const mainFlowEdgeKeys = new Set();
-  const mainFlowNodeIds = new Set();
-
-  const starters = nodes.filter(
-    (n) => n.type === "question" && (forwardAdj[n.id] || []).length > 0,
-  );
-
-  starters.forEach((starter) => {
-    const chain = findChain(starter.id, new Set());
-    if (chain.length >= 2) {
-      // At least 2 form steps = a meaningful user flow
-      mainFlowNodeIds.add(starter.id);
-      chain.forEach((e) => {
-        mainFlowEdgeKeys.add(`${e.source}|${e.target}|${e.type}`);
-        mainFlowNodeIds.add(e.source);
-        mainFlowNodeIds.add(e.target);
-      });
-    }
-  });
-
-  // Tag nodes and edges
-  nodes.forEach((n) => {
-    n.isMainFlow = mainFlowNodeIds.has(n.id);
-  });
-  edges.forEach((e) => {
-    e.isMainFlow = mainFlowEdgeKeys.has(`${e.source}|${e.target}|${e.type}`);
   });
 }
 

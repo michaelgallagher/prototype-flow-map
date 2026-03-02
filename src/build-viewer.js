@@ -79,7 +79,6 @@ function generateViewerHtml(
       <button onclick="zoomIn()">Zoom +</button>
       <button onclick="zoomOut()">Zoom −</button>
       <button onclick="fitToScreen()">Fit to screen</button>
-      <button id="toggle-main-flow" onclick="toggleMainFlow()">Show main flow only</button>
       <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
       <button id="toggle-screenshots" onclick="toggleScreenshots()" style="display:none">Hide screenshots</button>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
@@ -96,7 +95,6 @@ function generateViewerHtml(
   </div>
   <div id="legend">
     <h3>Edge types</h3>
-    <div class="legend-item"><span class="legend-swatch" style="background:#4ade80;height:3px"></span> Main flow</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#5aaf6a;height:2px"></span> Form submission</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#4a6fa5;height:1.5px"></span> Link</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#e8a838;height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
@@ -247,14 +245,6 @@ body {
 .node-rect--index     { fill: #0f3460; stroke: #53d8fb; }
 .node-rect--highlight { stroke: #ffcc00 !important; stroke-width: 3 !important; }
 
-/* Main flow node emphasis */
-.main-flow-node .node-rect {
-  stroke-width: 2;
-  filter: drop-shadow(0 0 4px rgba(74, 222, 128, 0.3));
-}
-.has-main-flow .node-group:not(.main-flow-node) { opacity: 0.7; }
-.has-main-flow .node-group:not(.main-flow-node):hover { opacity: 1; }
-
 .node-label {
   fill: #ffffff;
   font-size: 11px;
@@ -290,7 +280,6 @@ body {
   transition: opacity 0.15s;
 }
 
-.edge-path--main-flow  { stroke: #4ade80; stroke-width: 3; opacity: 1; }
 .edge-path--form       { stroke: #5aaf6a; stroke-width: 2; opacity: 0.85; }
 .edge-path--link       { stroke: #4a6fa5; stroke-width: 1.2; opacity: 0.6; }
 .edge-path--conditional { stroke: #e8a838; stroke-width: 1; stroke-dasharray: 6,3; opacity: 0.7; }
@@ -312,7 +301,6 @@ body {
 }
 
 .edge-arrowhead { fill: #4a6fa5; }
-.edge-arrowhead--main-flow { fill: #4ade80; }
 .edge-arrowhead--form { fill: #5aaf6a; }
 .edge-arrowhead--conditional { fill: #e8a838; }
 .edge-arrowhead--redirect { fill: #aa55cc; }
@@ -457,7 +445,6 @@ function generateViewerJs() {
   let layoutNodes = {};
   let layoutEdges = [];
   let showLabels = true;
-  let mainFlowOnly = false;
   let thumbnailMode = false; // false = full page, true = compact thumbnail
   let hideScreenshots = false;
   let hubFilter = '';
@@ -501,20 +488,18 @@ function generateViewerJs() {
   const NODE_WIDTH = 140;
   const LABEL_AREA = 32;
   const IMG_PAD = 3;
-  const MAIN_FLOW_SCALE = 1.15;
-  const MAIN_FLOW_WIDTH = Math.round(NODE_WIDTH * MAIN_FLOW_SCALE);
 
   // Returns { w, h } for a node, varying by thumbnailMode
-  function getNodeDims(isMainFlow) {
-    const w = isMainFlow ? MAIN_FLOW_WIDTH : NODE_WIDTH;
+  function getNodeDims() {
+    const w = NODE_WIDTH;
     if (!hasScreenshots || hideScreenshots) {
-      return { w, h: isMainFlow ? Math.round(56 * MAIN_FLOW_SCALE) : 56 };
+      return { w, h: 56 };
     }
     // Full-page mode: height matches the screenshot's true aspect ratio
     // Thumbnail mode: fixed 90px crop
     const imgW = w - IMG_PAD * 2;
     const imgH = thumbnailMode
-      ? Math.round(90 * (isMainFlow ? MAIN_FLOW_SCALE : 1))
+      ? Math.round(90)
       : Math.round(imgW * VIEWPORT_HEIGHT / VIEWPORT_WIDTH);
     return { w, h: imgH + LABEL_AREA + IMG_PAD };
   }
@@ -534,7 +519,6 @@ function generateViewerJs() {
 
     const filteredNodes = graph.nodes.filter(n => {
       if (hiddenNodes.has(n.id)) return false;
-      if (mainFlowOnly && !n.isMainFlow) return false;
       if (hubFilter && n.hub !== hubFilter) return false;
       if (searchTerm && !n.label.toLowerCase().includes(searchTerm) && !n.urlPath.toLowerCase().includes(searchTerm)) return false;
       return true;
@@ -543,7 +527,7 @@ function generateViewerJs() {
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
 
     filteredNodes.forEach(node => {
-      const { w, h } = getNodeDims(node.isMainFlow || node.isStartNode);
+      const { w, h } = getNodeDims();
       g.setNode(node.id, { width: w, height: h, ...node });
     });
 
@@ -754,7 +738,7 @@ function generateViewerJs() {
 
     // Add defs for arrowheads
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    ['link', 'form', 'conditional', 'redirect', 'render', 'main-flow', 'nav'].forEach(type => {
+    ['link', 'form', 'conditional', 'redirect', 'render', 'nav'].forEach(type => {
       const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
       marker.setAttribute('id', 'arrow-' + type);
       marker.setAttribute('viewBox', '0 0 10 10');
@@ -776,11 +760,10 @@ function generateViewerJs() {
     mainGroup.setAttribute('id', 'main-group');
     svg.appendChild(mainGroup);
 
-    // Sort edges so main flow renders on top
     const edgePriority = { nav: -1, link: 1, render: 2, conditional: 3, redirect: 4, form: 5 };
     const sortedEdges = [...layoutEdges].sort((a, b) => {
-      const pa = a.isMainFlow ? 6 : (edgePriority[a.type] || 1);
-      const pb = b.isMainFlow ? 6 : (edgePriority[b.type] || 1);
+      const pa = edgePriority[a.type] || 1;
+      const pb = edgePriority[b.type] || 1;
       return pa - pb;
     });
 
@@ -811,8 +794,8 @@ function generateViewerJs() {
       }
 
       const edgeType = edge.type || 'link';
-      const cssClass = edge.isMainFlow ? 'edge-path edge-path--main-flow' : 'edge-path edge-path--' + edgeType;
-      const arrowType = edge.isMainFlow ? 'main-flow' : edgeType;
+      const cssClass = 'edge-path edge-path--' + edgeType;
+      const arrowType = edgeType;
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', d);
@@ -847,13 +830,10 @@ function generateViewerJs() {
       mainGroup.appendChild(edgeGroup);
     });
 
-    // Check if any main flow nodes exist
-    const hasMainFlow = Object.values(layoutNodes).some(n => n.isMainFlow);
-
     // Render nodes
     Object.values(layoutNodes).forEach(node => {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('class', 'node-group' + (node.isMainFlow ? ' main-flow-node' : ''));
+      group.setAttribute('class', 'node-group');
       group.setAttribute('transform', 'translate(' + (node.x - node.width/2) + ',' + (node.y - node.height/2) + ')');
       group.addEventListener('click', (e) => { e.stopPropagation(); if (!isDragging) showDetail(node); });
       group.addEventListener('mouseenter', () => { if (!dragTarget) highlightConnections(node.id); });
@@ -967,11 +947,6 @@ function generateViewerJs() {
 
       mainGroup.appendChild(group);
     });
-
-    // Apply main flow dimming class to parent group
-    if (hasMainFlow) {
-      mainGroup.classList.add('has-main-flow');
-    }
 
     // Update node count
     document.getElementById('node-count').textContent =
@@ -1194,14 +1169,6 @@ function generateViewerJs() {
     document.querySelectorAll('.edge-group').forEach(eg => { eg.style.opacity = ''; });
     document.querySelectorAll('.node-group').forEach(ng => { ng.style.opacity = ''; });
   }
-
-  // Main flow toggle
-  window.toggleMainFlow = function() {
-    mainFlowOnly = !mainFlowOnly;
-    const btn = document.getElementById('toggle-main-flow');
-    btn.textContent = mainFlowOnly ? 'Show all pages' : 'Show main flow only';
-    render();
-  };
 
   // Thumbnail / full-page toggle
   window.toggleThumbnail = function() {

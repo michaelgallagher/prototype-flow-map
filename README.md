@@ -93,6 +93,7 @@ Each time you run the tool it will also produce a subfolder for the specific map
   graph-data.json      # Raw graph data (nodes + edges)
   sitemap.mmd          # Mermaid text-based graph definition
   meta.json            # Graph metadata (number of nodes, name, etc.)
+  map.pdf              # A PDF of the map, if you've chosen to generate one
   screenshots/         # PNG screenshot of every page
 ```
 
