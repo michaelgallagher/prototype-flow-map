@@ -52,7 +52,7 @@ npx prototype-flow-map /path/to/your/prototype --from "/pages/home-p9,/pages/mes
 
 That will get you a map of the three main tabs. Please note that the tool will arrange them in the order you list them, running from left to right on the output map. 
 
-If you want to save your map, you probably also want to give it a name. This has two parts: `--name` and `--title`. The name flag determines what the folder is called (you won't see this unless you're nosying around in a text editor) and the title flag sets the visible name in the site index. You don't *need* to set the `--name` and `--title` flags, but if you don't you can't have multiple maps. It will just write to the top level flow-map-output folder. Probably not a great idea. 
+If you want to save your map, you probably also want to give it a name. This has two parts: `--name` and `--title`. The name flag determines what the folder is called (inside `flow-map-output/maps/`) and the title flag sets the visible name in the site index. If you don't provide these flags, defaults are generated from the prototype folder name, and output still goes into `maps/<derived-name>/`.
 
 The order of the flags doesn't matter. 
 
@@ -68,8 +68,8 @@ The order of the flags doesn't matter.
 | `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
 | `--start-url` | `/` | URL to begin crawling from |
 | `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
-| `--name` | |
-| `--title` | |
+| `--name` | prototype folder slug | Map folder slug (must be lowercase alphanumeric + hyphens) |
+| `--title` | prototype folder name | Human-readable map title shown in index |
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
 | `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas default) or `snapshot` (A3 fit-to-screen) |
 | `--no-open` | `false` | Don't automatically open the viewer in a browser

@@ -15,6 +15,14 @@ function openInBrowser(filePath) {
   }
 }
 
+function toSlug(value) {
+  const slug = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "prototype-map";
+}
+
 const program = new Command();
 
 program
@@ -64,6 +72,7 @@ program
   .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
+    const prototypeDirName = path.basename(resolvedPath);
 
     // Validate --name slug if provided
     if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
@@ -72,6 +81,9 @@ program
       );
       process.exit(1);
     }
+
+    const mapName = options.name || toSlug(prototypeDirName);
+    const mapTitle = options.title || prototypeDirName;
 
     const pdfMode = String(options.pdfMode || "canvas").toLowerCase();
     if (!new Set(["canvas", "snapshot"]).has(pdfMode)) {
@@ -84,9 +96,7 @@ program
     console.log(`\n📐 Prototype Flow Map\n`);
     console.log(`   Prototype: ${resolvedPath}`);
     console.log(`   Output:    ${path.resolve(options.output)}`);
-    if (options.name) {
-      console.log(`   Map:       ${options.name}`);
-    }
+    console.log(`   Map:       ${mapName}`);
     console.log();
 
     try {
@@ -103,15 +113,18 @@ program
         exclude: options.exclude,
         from: options.from,
         startUrl: options.startUrl,
-        name: options.name || null,
-        title: options.title || null,
+        name: mapName,
+        title: mapTitle,
         exportPdf: Boolean(options.exportPdf),
         pdfMode,
       });
 
-      const viewerPath = options.name
-        ? path.resolve(options.output, "maps", options.name, "index.html")
-        : path.resolve(options.output, "index.html");
+      const viewerPath = path.resolve(
+        options.output,
+        "maps",
+        mapName,
+        "index.html",
+      );
 
       console.log(`\n✅ Flow map generated at ${path.resolve(options.output)}`);
       if (options.open) {
