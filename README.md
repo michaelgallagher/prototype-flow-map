@@ -41,7 +41,7 @@ npx prototype-flow-map /path/to/your/prototype
 
 That will get you a map of *everything* in your prototype. Depending on how things are set up, that may or may not be a good idea. 
 
-There are lots of options you can use to tune the output, the most useful of which will be `--from`, which lets you scope the output to a specific start point. The tool will crawl from that point onward (i.e. down the tree). You can give this flag mutliple values if you want, which is useful because the default behaviour doesn't capture `{{ include }}` links (right now, anyway). If you give the tool multiple `--from` points, it will look for ways that they connect. 
+There are lots of options you can use to tune the output, the most useful of which is `--from`, which lets you scope the output to a specific start point. The tool will crawl from that point onward (i.e. down the tree). You can give this flag multiple values if you want, which is useful because the default behaviour won't capture sideways links from `{% include %}` partials right now (it gets messy if you do and is hard to limit the scope of the crawler). If you give the tool multiple `--from` points, it will look for ways that they connect and draw the connects that happen via the `{% include %} partials. This is something of a workaround right now. 
 
 An example of how this would work with the NHS App prototype would be to use a prompt like: 
 
