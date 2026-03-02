@@ -32,150 +32,162 @@ async function crawlAndScreenshot(graph, options) {
       graph.nodes.filter((n) => n.isStartNode).map((n) => n.urlPath),
     );
 
-    // Visit each node and take a screenshot
-    for (const node of graph.nodes) {
-      try {
-        const page = await context.newPage();
-        const url = `${baseUrl}${node.urlPath}`;
+    // Visit each node and take a screenshot — using a concurrent worker pool
+    // for speed. JS is single-threaded so shared state (graph.edges, nextIndex)
+    // is safe; each worker just awaits async I/O concurrently.
+    const CONCURRENCY = 6;
+    let nextIndex = 0;
 
-        const response = await page.goto(url, {
-          waitUntil: "networkidle",
-          timeout: 10000,
-        });
-
-        // Wait a moment for any animations/transitions
-        await page.waitForTimeout(500);
-
-        // Check if the page navigated away (JS redirect)
-        const finalUrl = new URL(page.url());
-        const requestedPath = node.urlPath;
-        const landedPath = finalUrl.pathname;
-        if (landedPath !== requestedPath) {
-          console.warn(
-            `   ⚠️  ${requestedPath} redirected to ${landedPath} — skipping screenshot`,
-          );
-          await page.close();
-          continue;
-        }
-
-        // Reposition fixed elements so they appear correctly in full-page screenshots.
-        // Fixed footers (bottom-anchored) are moved to the document bottom;
-        // fixed headers (top-anchored) stays at the document top.
-        // Without this, a fixed footer appears mid-image on tall pages.
-        // Wrapped in try/catch because late-firing JS redirects can destroy the context.
+    async function processNext() {
+      while (nextIndex < graph.nodes.length) {
+        const node = graph.nodes[nextIndex++];
         try {
-          await page.evaluate(() => {
-            const viewportH = window.innerHeight;
-            const fixedEls = Array.from(document.querySelectorAll("*")).filter(
-              (el) => window.getComputedStyle(el).position === "fixed",
-            );
-            if (fixedEls.length === 0) return;
+          const page = await context.newPage();
+          const url = `${baseUrl}${node.urlPath}`;
 
-            // Make body a positioning context so `bottom: 0` = bottom of document
-            document.body.style.position = "relative";
-
-            fixedEls.forEach((el) => {
-              const rect = el.getBoundingClientRect();
-              const isBottomFixed = rect.top > viewportH / 2;
-
-              document.body.appendChild(el); // re-parent to avoid containing-block issues
-              el.style.position = "absolute";
-              el.style.left = "0";
-              el.style.right = "0";
-              el.style.margin = "0";
-
-              if (isBottomFixed) {
-                el.style.top = "auto";
-                el.style.bottom = "0";
-              } else {
-                el.style.bottom = "auto";
-                el.style.top = "0";
-              }
-            });
+          const response = await page.goto(url, {
+            waitUntil: "networkidle",
+            timeout: 10000,
           });
-        } catch (evalErr) {
-          if (evalErr.message.includes("Execution context was destroyed")) {
+
+          // Wait a moment for any animations/transitions
+          await page.waitForTimeout(200);
+
+          // Check if the page navigated away (JS redirect)
+          const finalUrl = new URL(page.url());
+          const requestedPath = node.urlPath;
+          const landedPath = finalUrl.pathname;
+          if (landedPath !== requestedPath) {
             console.warn(
-              `   ⚠️  ${requestedPath} navigated away during processing — skipping screenshot`,
+              `   ⚠️  ${requestedPath} redirected to ${landedPath} — skipping screenshot`,
             );
             await page.close();
             continue;
           }
-          throw evalErr;
-        }
 
-        const filename = urlToFilename(node.urlPath);
-        const screenshotPath = path.join(screenshotsDir, filename);
+          // Reposition fixed elements so they appear correctly in full-page screenshots.
+          // Fixed footers (bottom-anchored) are moved to the document bottom;
+          // fixed headers (top-anchored) stays at the document top.
+          // Without this, a fixed footer appears mid-image on tall pages.
+          // Wrapped in try/catch because late-firing JS redirects can destroy the context.
+          try {
+            await page.evaluate(() => {
+              const viewportH = window.innerHeight;
+              const fixedEls = Array.from(document.querySelectorAll("*")).filter(
+                (el) => window.getComputedStyle(el).position === "fixed",
+              );
+              if (fixedEls.length === 0) return;
 
-        await page.screenshot({
-          path: screenshotPath,
-          fullPage: true,
-        });
+              // Make body a positioning context so `bottom: 0` = bottom of document
+              document.body.style.position = "relative";
 
-        node.screenshot = `screenshots/${filename}`;
-        node.actualTitle = await page.title();
+              fixedEls.forEach((el) => {
+                const rect = el.getBoundingClientRect();
+                const isBottomFixed = rect.top > viewportH / 2;
 
-        // Also extract any links we might have missed in static analysis
-        const discoveredLinks = await page.evaluate(() => {
-          const links = [];
-          document.querySelectorAll("a[href]").forEach((a) => {
-            const href = a.getAttribute("href");
-            if (href && href.startsWith("/") && !href.startsWith("//")) {
-              links.push({
-                target: href.split("?")[0].split("#")[0],
-                text: a.textContent.trim().substring(0, 60),
+                document.body.appendChild(el); // re-parent to avoid containing-block issues
+                el.style.position = "absolute";
+                el.style.left = "0";
+                el.style.right = "0";
+                el.style.margin = "0";
+
+                if (isBottomFixed) {
+                  el.style.top = "auto";
+                  el.style.bottom = "0";
+                } else {
+                  el.style.bottom = "auto";
+                  el.style.top = "0";
+                }
               });
-            }
-          });
-          document.querySelectorAll("form[action]").forEach((form) => {
-            const action = form.getAttribute("action");
-            if (action && action.startsWith("/")) {
-              links.push({
-                target: action.split("?")[0],
-                text:
-                  "[form] " +
-                  (form.querySelector("button")?.textContent?.trim() ||
-                    "Submit"),
-                isForm: true,
-              });
-            }
-          });
-          return links;
-        });
-
-        // Add any edges discovered during crawl that weren't found in static analysis.
-        // Links targeting start nodes are skipped — those are nav-bar links already
-        // represented by synthetic "nav" edges, not meaningful page-flow links.
-        const existingTargets = new Set(
-          graph.edges
-            .filter((e) => e.source === node.urlPath)
-            .map((e) => e.target),
-        );
-
-        for (const link of discoveredLinks) {
-          if (
-            !existingTargets.has(link.target) &&
-            link.target !== node.urlPath &&
-            !startNodePaths.has(link.target)
-          ) {
-            graph.edges.push({
-              source: node.urlPath,
-              target: link.target,
-              type: link.isForm ? "form" : "link",
-              label: link.text || "",
-              discoveredByCrawler: true,
             });
-            existingTargets.add(link.target);
+          } catch (evalErr) {
+            if (evalErr.message.includes("Execution context was destroyed")) {
+              console.warn(
+                `   ⚠️  ${requestedPath} navigated away during processing — skipping screenshot`,
+              );
+              await page.close();
+              continue;
+            }
+            throw evalErr;
           }
-        }
 
-        await page.close();
-      } catch (err) {
-        console.warn(
-          `   ⚠️  Could not capture ${node.urlPath}: ${err.message}`,
-        );
+          const filename = urlToFilename(node.urlPath);
+          const screenshotPath = path.join(screenshotsDir, filename);
+
+          await page.screenshot({
+            path: screenshotPath,
+            fullPage: true,
+          });
+
+          node.screenshot = `screenshots/${filename}`;
+          node.actualTitle = await page.title();
+
+          // Also extract any links we might have missed in static analysis
+          const discoveredLinks = await page.evaluate(() => {
+            const links = [];
+            document.querySelectorAll("a[href]").forEach((a) => {
+              const href = a.getAttribute("href");
+              if (href && href.startsWith("/") && !href.startsWith("//")) {
+                links.push({
+                  target: href.split("?")[0].split("#")[0],
+                  text: a.textContent.trim().substring(0, 60),
+                });
+              }
+            });
+            document.querySelectorAll("form[action]").forEach((form) => {
+              const action = form.getAttribute("action");
+              if (action && action.startsWith("/")) {
+                links.push({
+                  target: action.split("?")[0],
+                  text:
+                    "[form] " +
+                    (form.querySelector("button")?.textContent?.trim() ||
+                      "Submit"),
+                  isForm: true,
+                });
+              }
+            });
+            return links;
+          });
+
+          // Add any edges discovered during crawl that weren't found in static analysis.
+          // Links targeting start nodes are skipped — those are nav-bar links already
+          // represented by synthetic "nav" edges, not meaningful page-flow links.
+          const existingTargets = new Set(
+            graph.edges
+              .filter((e) => e.source === node.urlPath)
+              .map((e) => e.target),
+          );
+
+          for (const link of discoveredLinks) {
+            if (
+              !existingTargets.has(link.target) &&
+              link.target !== node.urlPath &&
+              !startNodePaths.has(link.target)
+            ) {
+              graph.edges.push({
+                source: node.urlPath,
+                target: link.target,
+                type: link.isForm ? "form" : "link",
+                label: link.text || "",
+                discoveredByCrawler: true,
+              });
+              existingTargets.add(link.target);
+            }
+          }
+
+          await page.close();
+        } catch (err) {
+          console.warn(
+            `   ⚠️  Could not capture ${node.urlPath}: ${err.message}`,
+          );
+        }
       }
     }
+
+    await Promise.all(
+      Array.from({ length: CONCURRENCY }, () => processNext()),
+    );
 
     // Also try to crawl the start URL to discover the entry point
     if (startUrl && startUrl !== "/") {
