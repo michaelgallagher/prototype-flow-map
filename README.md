@@ -74,6 +74,8 @@ flow-map-output/maps/{your-map-here}
   styles.css           # Viewer styles
   viewer.js            # Viewer logic
   graph-data.json      # Raw graph data (nodes + edges)
+  sitemap.mmd          # Mermaid text-based graph definition
+  meta.json            # Graph metadata (number of nodes, name, etc.)
   screenshots/         # PNG screenshot of every page
 ```
 
