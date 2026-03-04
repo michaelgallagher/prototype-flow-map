@@ -68,7 +68,7 @@ The order of the flags doesn't matter.
 | `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
 | `--start-url` | `/` | URL to begin crawling from |
 | `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
-| `--exlude` | "" | Removes pages and their children |
+| `--exclude` | "" | Removes pages and their children |
 | `--name` | prototype folder slug | Map folder slug (must be lowercase alphanumeric + hyphens) |
 | `--title` | prototype folder name | Human-readable map title shown in index |
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
