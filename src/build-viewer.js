@@ -541,8 +541,10 @@ function generateViewerJs() {
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
       if (e.type === 'nav') { navEdges.push(e); return false; }
-      // Exclude incoming edges to start nodes from dagre so they stay at top rank
-      if (startNodeIds.size > 1 && startNodeIds.has(e.target) && !startNodeIds.has(e.source)) {
+      // Exclude incoming edges to start nodes from dagre so they stay at top rank.
+      // Applies for any number of start nodes — even a single --from page can be
+      // pulled down the rank if something in the graph links back to it.
+      if (startNodeIds.size >= 1 && startNodeIds.has(e.target) && !startNodeIds.has(e.source)) {
         incomingToStartEdges.push(e);
         return false;
       }
@@ -553,9 +555,11 @@ function generateViewerJs() {
       g.setEdge(edge.source, edge.target, { ...edge, id: 'edge-' + i });
     });
 
-    // Add virtual root to pin start nodes to the top rank
+    // Add virtual root to pin start nodes to the top rank.
+    // Used for any number of start nodes — a single --from page also needs this
+    // anchor so dagre doesn't assign it a lower rank due to back-edges or cycles.
     const virtualRootId = '__virtual_root__';
-    if (startNodes.length > 1) {
+    if (startNodes.length >= 1) {
       g.setNode(virtualRootId, { width: 0, height: 0 });
       startNodes.forEach(n => {
         g.setEdge(virtualRootId, n.id, { weight: 2, minlen: 1 });
