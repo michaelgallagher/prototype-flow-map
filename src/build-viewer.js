@@ -281,7 +281,7 @@ body {
 }
 
 .edge-path--form       { stroke: #5aaf6a; stroke-width: 2; opacity: 0.85; }
-.edge-path--link       { stroke: #4a6fa5; stroke-width: 1.2; opacity: 0.6; }
+.edge-path--link       { stroke: #6b9fd4; stroke-width: 1.2; opacity: 0.75; }
 .edge-path--conditional { stroke: #e8a838; stroke-width: 1; stroke-dasharray: 6,3; opacity: 0.7; }
 .edge-path--redirect   { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
 .edge-path--render     { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
@@ -300,7 +300,7 @@ body {
   font-style: italic;
 }
 
-.edge-arrowhead { fill: #4a6fa5; }
+.edge-arrowhead { fill: #6b9fd4; }
 .edge-arrowhead--form { fill: #5aaf6a; }
 .edge-arrowhead--conditional { fill: #e8a838; }
 .edge-arrowhead--redirect { fill: #aa55cc; }
@@ -709,19 +709,12 @@ function generateViewerJs() {
       });
     });
 
-    // Recompute edge points after subgraph shifts
-    if (startNodes.length > 1) {
-      layoutEdges = layoutEdges.map(edge => {
-        return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
-      });
-    } else {
-      layoutEdges = layoutEdges.map(edge => {
-        if (!manualPositions[edge.source] && !manualPositions[edge.target]) return edge;
-        return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
-      });
-    }
+    // Use straight border-to-border lines for all edges.
+    layoutEdges = layoutEdges.map(edge => {
+      return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
+    });
 
-    // Add nav edges and incoming-to-start edges as straight lines (not part of dagre layout)
+    // Add nav edges and incoming-to-start edges as straight lines.
     [...navEdges, ...incomingToStartEdges].forEach(edge => {
       layoutEdges.push({
         ...edge,
@@ -778,24 +771,9 @@ function generateViewerJs() {
       edgeGroup.dataset.source = edge.source;
       edgeGroup.dataset.target = edge.target;
 
-      // Build smooth path from points
+      // Build orthogonal path with rounded corners from points
       const points = edge.points;
-      let d;
-      if (points.length <= 2) {
-        d = 'M ' + points[0].x + ' ' + points[0].y;
-        for (let i = 1; i < points.length; i++) {
-          d += ' L ' + points[i].x + ' ' + points[i].y;
-        }
-      } else {
-        d = 'M ' + points[0].x + ' ' + points[0].y;
-        for (let i = 1; i < points.length - 1; i++) {
-          const cx = points[i].x, cy = points[i].y;
-          const nx = points[i+1].x, ny = points[i+1].y;
-          d += ' Q ' + cx + ' ' + cy + ' ' + ((cx+nx)/2) + ' ' + ((cy+ny)/2);
-        }
-        const last = points[points.length - 1];
-        d += ' L ' + last.x + ' ' + last.y;
-      }
+      const d = buildOrthogonalPath(points);
 
       const edgeType = edge.type || 'link';
       const cssClass = 'edge-path edge-path--' + edgeType;
@@ -1212,6 +1190,18 @@ function generateViewerJs() {
   };
 
   // Edge geometry helpers
+
+  // Build a straight SVG path string from two points.
+  function buildOrthogonalPath(points) {
+    if (!points || points.length === 0) return '';
+    if (points.length === 1) return 'M ' + points[0].x + ' ' + points[0].y;
+    const p0 = points[0], p1 = points[points.length - 1];
+    return 'M ' + p0.x + ' ' + p0.y + ' L ' + p1.x + ' ' + p1.y;
+  }
+
+
+  // Returns the point on the border of a rectangle (cx, cy, w, h) that lies
+  // on the straight line towards (targetX, targetY).
   function getEdgePoint(cx, cy, w, h, targetX, targetY) {
     const dx = targetX - cx;
     const dy = targetY - cy;
@@ -1229,6 +1219,7 @@ function generateViewerJs() {
     }
   }
 
+  // Straight border-to-border line (used for manually repositioned nodes).
   function computeStraightEdge(sourceId, targetId) {
     const s = layoutNodes[sourceId];
     const t = layoutNodes[targetId];
@@ -1238,6 +1229,8 @@ function generateViewerJs() {
       getEdgePoint(t.x, t.y, t.width, t.height, s.x, s.y),
     ];
   }
+
+
 
   function updateConnectedEdges(nodeId) {
     document.querySelectorAll('.edge-group').forEach(eg => {
