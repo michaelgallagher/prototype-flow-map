@@ -4,7 +4,11 @@ const { scanTemplates } = require("./scanner");
 const { parseTemplate } = require("./template-parser");
 const { parseRoutes } = require("./route-parser");
 const { crawlAndScreenshot } = require("./crawler");
-const { buildGraph, filterByReachability } = require("./graph-builder");
+const {
+  buildGraph,
+  filterByExclusion,
+  filterByReachability,
+} = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
 const { buildMermaid } = require("./build-mermaid");
 const { exportPdf } = require("./export-pdf");
@@ -51,7 +55,10 @@ async function generate(options) {
 
   // Step 4: Build the graph from static analysis
   console.log("4\uFE0F\u20E3  Building flow graph...");
-  let graph = buildGraph(templateData, explicitRoutes, basePath, exclude);
+  let graph = buildGraph(templateData, explicitRoutes, basePath);
+  if (exclude) {
+    graph = filterByExclusion(graph, exclude);
+  }
   if (from) {
     graph = filterByReachability(graph, from);
     const fromPages = from

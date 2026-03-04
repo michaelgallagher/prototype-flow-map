@@ -1,6 +1,18 @@
 const { minimatch } = require("minimatch");
 
 /**
+ * The set of edge types that represent meaningful forward navigation.
+ * Used consistently by both filterByReachability and filterByExclusion.
+ */
+const FORWARD_EDGE_TYPES = new Set([
+  "form",
+  "link",
+  "redirect",
+  "conditional",
+  "render",
+]);
+
+/**
  * Check if a URL path matches any of the comma-separated base path patterns.
  * Supports prefixes and glob patterns (e.g. "/pages/gp,/pages/booking" or "/pages/gp-*").
  */
@@ -48,6 +60,13 @@ function matchesExclude(urlPath, exclude) {
  * Edges = navigation links between pages
  */
 function buildGraph(templateData, explicitRoutes, basePath, exclude) {
+  // We intentionally do NOT filter nodes by `exclude` at build time any more.
+  // The graph is built in full so that filterByExclusion can later perform a
+  // proper subtree-aware prune (removing excluded roots AND any nodes that are
+  // only reachable through them). matchesExclude is still used below to skip
+  // creating nodes/edges for paths that match file-path prefixes, but the
+  // semantic "exclude this page and its children" logic lives in
+  // filterByExclusion, which is called in index.js after the graph is built.
   const nodes = [];
   const edges = [];
   const nodeMap = new Map(); // urlPath -> node
@@ -65,10 +84,7 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
 
   // Step 1: Create nodes for each template
   for (const tpl of templateData) {
-    if (
-      !matchesBasePaths(tpl.urlPath, basePath) ||
-      matchesExclude(tpl.urlPath, exclude)
-    ) {
+    if (!matchesBasePaths(tpl.urlPath, basePath)) {
       continue;
     }
 
@@ -88,10 +104,7 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
 
   // Step 2: Create edges from links, forms, conditionals, and JS redirects
   for (const tpl of templateData) {
-    if (
-      !matchesBasePaths(tpl.urlPath, basePath) ||
-      matchesExclude(tpl.urlPath, exclude)
-    ) {
+    if (!matchesBasePaths(tpl.urlPath, basePath)) {
       continue;
     }
 
@@ -222,6 +235,116 @@ function deduplicateEdges(edges) {
   });
 }
 
+/**
+ * Build a forward-edge adjacency list from a graph.
+ */
+function buildAdjacency(graph) {
+  const adj = {};
+  graph.edges.forEach((e) => {
+    if (!FORWARD_EDGE_TYPES.has(e.type)) return;
+    if (!adj[e.source]) adj[e.source] = [];
+    adj[e.source].push(e.target);
+  });
+  return adj;
+}
+
+/**
+ * Collect all node IDs reachable from `startIds` via forward edges (BFS).
+ */
+function collectReachable(startIds, adj) {
+  const reachable = new Set();
+  const queue = [...startIds];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (reachable.has(current)) continue;
+    reachable.add(current);
+    (adj[current] || []).forEach((target) => {
+      if (!reachable.has(target)) queue.push(target);
+    });
+  }
+  return reachable;
+}
+
+/**
+ * Remove excluded pages and any descendants that have no other route into them.
+ *
+ * Algorithm:
+ *  1. Find all "exclude root" nodes whose urlPath matches the --exclude patterns.
+ *  2. BFS forward from those roots to collect the full candidate subtree.
+ *  3. For each node in the subtree, check whether it has any incoming forward
+ *     edge from a node that is NOT itself in the subtree. If it does, the node
+ *     is reachable via another path and is kept. If every incoming edge comes
+ *     from inside the subtree (or from an excluded root), it is removed.
+ *  4. Edges whose source or target has been removed are also dropped.
+ *
+ * This means that a shared page (e.g. a common confirmation screen) that is
+ * also linked from outside the excluded subtree will be preserved.
+ */
+function filterByExclusion(graph, exclude) {
+  if (!exclude) return graph;
+
+  const patterns = exclude
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  if (patterns.length === 0) return graph;
+
+  // Step 1: find all nodes that are exclude roots
+  const excludeRootIds = new Set(
+    graph.nodes
+      .filter((n) => matchesExclude(n.urlPath, exclude))
+      .map((n) => n.id),
+  );
+
+  if (excludeRootIds.size === 0) {
+    patterns.forEach((p) =>
+      console.warn(`⚠️  Warning: --exclude pattern "${p}" matched no pages`),
+    );
+    return graph;
+  }
+
+  // Step 2: BFS forward from exclude roots to find the full candidate subtree
+  const adj = buildAdjacency(graph);
+  const subtree = collectReachable([...excludeRootIds], adj);
+
+  // Step 3: build a reverse adjacency so we can check incoming edges
+  const reverseAdj = {};
+  graph.edges.forEach((e) => {
+    if (!FORWARD_EDGE_TYPES.has(e.type)) return;
+    if (!reverseAdj[e.target]) reverseAdj[e.target] = [];
+    reverseAdj[e.target].push(e.source);
+  });
+
+  // A node in the subtree is removable only if ALL of its incoming forward
+  // edges originate from within the subtree itself (i.e. no outside entry point).
+  // Exclude roots are always removed regardless of incoming edges.
+  const toRemove = new Set();
+
+  for (const nodeId of subtree) {
+    if (excludeRootIds.has(nodeId)) {
+      toRemove.add(nodeId);
+      continue;
+    }
+    const incomers = reverseAdj[nodeId] || [];
+    const hasOutsideIncomer = incomers.some((src) => !subtree.has(src));
+    if (!hasOutsideIncomer) {
+      toRemove.add(nodeId);
+    }
+  }
+
+  const keptNodes = graph.nodes.filter((n) => !toRemove.has(n.id));
+  const keptEdges = graph.edges.filter(
+    (e) => !toRemove.has(e.source) && !toRemove.has(e.target),
+  );
+
+  const removedCount = toRemove.size;
+  const rootList = [...excludeRootIds].join(", ");
+  console.log(`   Excluded ${removedCount} node(s) rooted at: ${rootList}`);
+
+  return { nodes: keptNodes, edges: keptEdges };
+}
+
 function categoriseNode(tpl) {
   if (tpl.urlPath === "/" || tpl.urlPath.endsWith("/index")) return "index";
   if (tpl.extendsLayout === "layout-app-splash-screen.html") return "splash";
@@ -250,7 +373,6 @@ function categoriseNode(tpl) {
 function filterByReachability(graph, fromPages) {
   if (!fromPages) return graph;
 
-  // Parse comma-separated start pages (consistent with --base-path and --exclude)
   const startPageIds = [
     ...new Set(
       fromPages
@@ -284,34 +406,12 @@ function filterByReachability(graph, fromPages) {
     return graph;
   }
 
-  // Build adjacency list following forward edges only (not back-links or nav)
-  const forwardEdgeTypes = new Set([
-    "form",
-    "link",
-    "redirect",
-    "conditional",
-    "render",
-  ]);
-  const adj = {};
-  graph.edges.forEach((e) => {
-    if (!forwardEdgeTypes.has(e.type)) return;
-    if (!adj[e.source]) adj[e.source] = [];
-    adj[e.source].push(e.target);
-  });
-
-  // BFS from all valid start nodes, unioning the reachable sets
-  const reachable = new Set();
-  for (const startNode of validStartNodes) {
-    const queue = [startNode.id];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (reachable.has(current)) continue;
-      reachable.add(current);
-      (adj[current] || []).forEach((target) => {
-        if (!reachable.has(target)) queue.push(target);
-      });
-    }
-  }
+  // Build adjacency list and BFS from all valid start nodes
+  const adj = buildAdjacency(graph);
+  const reachable = collectReachable(
+    validStartNodes.map((n) => n.id),
+    adj,
+  );
 
   // Filter nodes and edges to reachable set
   const filteredNodes = graph.nodes.filter((n) => reachable.has(n.id));
@@ -320,9 +420,7 @@ function filterByReachability(graph, fromPages) {
   );
 
   // Mark start nodes and preserve --from order for the viewer
-  const startNodeOrder = new Map(
-    validStartNodes.map((n, i) => [n.id, i]),
-  );
+  const startNodeOrder = new Map(validStartNodes.map((n, i) => [n.id, i]));
   filteredNodes.forEach((n) => {
     if (startNodeOrder.has(n.id)) {
       n.isStartNode = true;
@@ -355,4 +453,4 @@ function filterByReachability(graph, fromPages) {
   return { nodes: filteredNodes, edges: filteredEdges };
 }
 
-module.exports = { buildGraph, filterByReachability };
+module.exports = { buildGraph, filterByExclusion, filterByReachability };
