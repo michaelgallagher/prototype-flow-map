@@ -96,9 +96,13 @@ function generateViewerHtml(
   <div id="legend">
     <h3>Edge types</h3>
     <div class="legend-item"><span class="legend-swatch" style="background:#5aaf6a;height:2px"></span> Form submission</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#4a6fa5;height:1.5px"></span> Link</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#e8a838;height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
-    <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #53d8fb;background:none"></span> Global nav</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#6b9fd4;height:1.5px"></span> Link / push nav</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #e8a838;background:none"></span> Conditional</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #53d8fb;background:none"></span> Tab / global nav</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1.5px;border-top:1.5px dashed #c47ab0;background:none"></span> Sheet (modal)</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#d47a6b;height:2px"></span> Full-screen cover</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1.5px;border-top:1.5px dashed #5aaf6a;background:none"></span> Web view</div>
+    <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #8f8f40;background:none"></span> Safari / external</div>
   </div>
   <div id="detail-panel" class="hidden">
     <button id="close-panel" onclick="closePanel()">✕</button>
@@ -244,6 +248,10 @@ body {
 .node-rect--splash    { fill: #2e1e4f; stroke: #5a2a8f; }
 .node-rect--index     { fill: #0f3460; stroke: #53d8fb; }
 .node-rect--highlight { stroke: #ffcc00 !important; stroke-width: 3 !important; }
+/* iOS / native platform node types */
+.node-rect--screen    { fill: #1a3545; stroke: #2a7a9f; }
+.node-rect--web-view  { fill: #1a3f22; stroke: #2a8f40; }
+.node-rect--external  { fill: #3a3520; stroke: #8f7a30; }
 
 .node-label {
   fill: #ffffff;
@@ -280,12 +288,18 @@ body {
   transition: opacity 0.15s;
 }
 
-.edge-path--form       { stroke: #5aaf6a; stroke-width: 2; opacity: 0.85; }
-.edge-path--link       { stroke: #6b9fd4; stroke-width: 1.2; opacity: 0.75; }
+.edge-path--form        { stroke: #5aaf6a; stroke-width: 2; opacity: 0.85; }
+.edge-path--link        { stroke: #6b9fd4; stroke-width: 1.2; opacity: 0.75; }
 .edge-path--conditional { stroke: #e8a838; stroke-width: 1; stroke-dasharray: 6,3; opacity: 0.7; }
-.edge-path--redirect   { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
-.edge-path--render     { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
-.edge-path--nav        { stroke: #53d8fb; stroke-width: 1; stroke-dasharray: 8,4; opacity: 0.5; }
+.edge-path--redirect    { stroke: #aa55cc; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
+.edge-path--render      { stroke: #aa55cc; stroke-width: 1; opacity: 0.5; }
+.edge-path--nav         { stroke: #53d8fb; stroke-width: 1; stroke-dasharray: 8,4; opacity: 0.5; }
+/* iOS / native platform edge types */
+.edge-path--sheet       { stroke: #c47ab0; stroke-width: 1.5; stroke-dasharray: 5,3; opacity: 0.8; }
+.edge-path--full-screen { stroke: #d47a6b; stroke-width: 2; opacity: 0.85; }
+.edge-path--tab         { stroke: #53d8fb; stroke-width: 1.5; opacity: 0.65; }
+.edge-path--web-view    { stroke: #5aaf6a; stroke-width: 1.5; stroke-dasharray: 4,3; opacity: 0.75; }
+.edge-path--safari      { stroke: #8f8f40; stroke-width: 1; stroke-dasharray: 3,3; opacity: 0.6; }
 
 .edge-label {
   font-size: 9px;
@@ -306,6 +320,12 @@ body {
 .edge-arrowhead--redirect { fill: #aa55cc; }
 .edge-arrowhead--render { fill: #aa55cc; }
 .edge-arrowhead--nav { fill: #53d8fb; }
+/* iOS / native platform arrowheads */
+.edge-arrowhead--sheet       { fill: #c47ab0; }
+.edge-arrowhead--full-screen { fill: #d47a6b; }
+.edge-arrowhead--tab         { fill: #53d8fb; }
+.edge-arrowhead--web-view    { fill: #5aaf6a; }
+.edge-arrowhead--safari      { fill: #8f8f40; }
 
 .node-rect--start-node { stroke: #53d8fb !important; stroke-width: 2.5 !important; filter: drop-shadow(0 0 4px rgba(83, 216, 251, 0.4)); }
 

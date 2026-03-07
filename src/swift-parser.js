@@ -1,0 +1,430 @@
+const fs = require("fs");
+const path = require("path");
+
+// Standard SwiftUI container/wrapper views that are not navigation destinations
+const SWIFTUI_CONTAINERS = new Set([
+  "NavigationStack",
+  "NavigationView",
+  "NavigationSplitView",
+  "TabView",
+  "ScrollView",
+  "VStack",
+  "HStack",
+  "ZStack",
+  "List",
+  "ForEach",
+  "Group",
+  "Section",
+  "LazyVStack",
+  "LazyHStack",
+  "LazyVGrid",
+  "LazyHGrid",
+  "GeometryReader",
+  "Form",
+  "AsyncImage",
+  "DisclosureGroup",
+  "OutlineGroup",
+]);
+
+// Views that are web content, not native navigation destinations
+const WEB_VIEW_NAMES = new Set(["WebView", "SafariView", "CustomWebView", "WKWebView"]);
+
+/**
+ * Parse a Swift file and extract all navigation information.
+ *
+ * Returns null if the file contains no SwiftUI View struct.
+ * Otherwise returns:
+ * {
+ *   viewName,         // "HomeView"
+ *   relativePath,     // relative to project root
+ *   navigationTitle,  // from .navigationTitle("...")
+ *   pushLinks:        [{ target, label }]
+ *   sheets:           [{ target }]
+ *   fullScreenCovers: [{ target }]
+ *   webLinks:         [{ url, label, mode }]  mode = webview|safari|custom-webview
+ *   tabChildren:      [{ target, label }]
+ *   navigationDestinations: [{ target, label }]
+ * }
+ */
+function parseSwiftFile(filePath, projectPath) {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const relativePath = path.relative(projectPath, filePath);
+
+  // Must contain a SwiftUI View struct
+  const structMatch = content.match(/\bstruct\s+(\w+)\s*:\s*(?:some\s+)?View\b/);
+  if (!structMatch) return null;
+
+  const viewName = structMatch[1];
+
+  const result = {
+    viewName,
+    filePath,
+    relativePath,
+    navigationTitle: extractNavigationTitle(content),
+    pushLinks: [],
+    sheets: [],
+    fullScreenCovers: [],
+    webLinks: [],
+    tabChildren: [],
+    navigationDestinations: [],
+  };
+
+  extractPushLinks(content, result);
+  extractSheets(content, result);
+  extractFullScreenCovers(content, result);
+  extractWebLinks(content, result);
+  extractTabChildren(content, result);
+  extractNavigationDestinations(content, result);
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Closure extraction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the next `{` at or after `from` and return the brace-matched closure.
+ * Returns { content, end } or null.
+ */
+function findNextClosure(source, from) {
+  const bracePos = source.indexOf("{", from);
+  if (bracePos === -1) return null;
+  return extractClosureAt(source, bracePos);
+}
+
+/**
+ * Extract the content of a Swift closure starting at `pos` (the `{`).
+ * Returns { content: string, end: number } where end is the index of `}`.
+ */
+function extractClosureAt(source, pos) {
+  let depth = 0;
+  for (let i = pos; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        return { content: source.slice(pos + 1, i), end: i };
+      }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// View name extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the first SwiftUI view instantiation in a string that is
+ * not a container/wrapper and not a web view type.
+ */
+function findFirstDestinationView(content) {
+  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const name = match[1];
+    if (!SWIFTUI_CONTAINERS.has(name) && !WEB_VIEW_NAMES.has(name)) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/**
+ * Find all distinct non-container, non-web view instantiations in a string.
+ */
+function findAllDestinationViews(content) {
+  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+  const seen = new Set();
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const name = match[1];
+    if (!SWIFTUI_CONTAINERS.has(name) && !WEB_VIEW_NAMES.has(name)) {
+      seen.add(name);
+    }
+  }
+  return [...seen];
+}
+
+// ---------------------------------------------------------------------------
+// Extractors
+// ---------------------------------------------------------------------------
+
+function extractNavigationTitle(content) {
+  const match = content.match(/\.navigationTitle\s*\(\s*"([^"]+)"\s*\)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Extract push navigation links from:
+ *   RowLink(title: "...") { ViewName() }
+ *   RowLink { ... } destination: { ViewName() }
+ *   HubRowLink(hubType: .case) { ViewName() }
+ *   NavigationLink { ViewName() } label: { ... }
+ */
+function extractPushLinks(content, result) {
+  // RowLink with title: RowLink(title: "...") { ViewName() }
+  const rowLinkTitleRe = /\bRowLink\s*\(\s*title\s*:\s*"([^"]+)"[^)]*\)/g;
+  let match;
+  while ((match = rowLinkTitleRe.exec(content)) !== null) {
+    const label = match[1];
+    const closure = findNextClosure(content, match.index + match[0].length);
+    if (!closure) continue;
+    const target = findFirstDestinationView(closure.content);
+    if (target) result.pushLinks.push({ target, label });
+  }
+
+  // RowLink with custom label: RowLink { label } destination: { ViewName() }
+  // Must start with RowLink immediately followed by { (no parentheses args)
+  const rowLinkCustomRe = /\bRowLink\s*(?=\{)/g;
+  while ((match = rowLinkCustomRe.exec(content)) !== null) {
+    const labelClosure = findNextClosure(content, match.index + match[0].length);
+    if (!labelClosure) continue;
+
+    // Look for destination: { ... } right after the label closure
+    const afterLabel = content.slice(labelClosure.end + 1, labelClosure.end + 300);
+    const destKeyword = afterLabel.match(/\bdestination\s*:\s*\{/);
+    if (!destKeyword) continue;
+
+    const destBracePos = labelClosure.end + 1 + destKeyword.index + destKeyword[0].lastIndexOf("{");
+    const destClosure = extractClosureAt(content, destBracePos);
+    if (!destClosure) continue;
+
+    const target = findFirstDestinationView(destClosure.content);
+    if (!target) continue;
+
+    // Try to extract a label from the first Text("...") in the label closure
+    const textMatch = labelClosure.content.match(/\bText\s*\(\s*"([^"]+)"\s*\)/);
+    const label = textMatch ? textMatch[1] : null;
+
+    result.pushLinks.push({ target, label });
+  }
+
+  // HubRowLink(hubType: .caseName) { ViewName() }
+  const hubRowLinkRe = /\bHubRowLink\s*\(\s*hubType\s*:\s*\.(\w+)[^)]*\)/g;
+  while ((match = hubRowLinkRe.exec(content)) !== null) {
+    const hubCase = match[1];
+    const closure = findNextClosure(content, match.index + match[0].length);
+    if (!closure) continue;
+    const target = findFirstDestinationView(closure.content);
+    if (target) {
+      // capitalise the enum case name as a label
+      const label = hubCase.charAt(0).toUpperCase() + hubCase.slice(1);
+      result.pushLinks.push({ target, label });
+    }
+  }
+
+  // NavigationLink { ViewName() } label: { ... }
+  const navLinkRe = /\bNavigationLink\s*\{/g;
+  while ((match = navLinkRe.exec(content)) !== null) {
+    const destClosure = findNextClosure(content, match.index + match[0].length - 1);
+    if (!destClosure) continue;
+    const target = findFirstDestinationView(destClosure.content);
+    if (!target) continue;
+
+    // Try to find label in the label: { ... } trailing closure
+    const afterDest = content.slice(destClosure.end + 1, destClosure.end + 400);
+    const labelKeyword = afterDest.match(/\blabel\s*:\s*\{/);
+    let label = null;
+    if (labelKeyword) {
+      const labelBracePos = destClosure.end + 1 + labelKeyword.index + labelKeyword[0].lastIndexOf("{");
+      const labelClosure = extractClosureAt(content, labelBracePos);
+      if (labelClosure) {
+        const textMatch = labelClosure.content.match(/\bText\s*\(\s*"([^"]+)"\s*\)/);
+        label = textMatch ? textMatch[1] : null;
+      }
+    }
+    result.pushLinks.push({ target, label });
+  }
+}
+
+/**
+ * Extract modal sheet presentations:
+ *   .sheet(isPresented: $var) { ... }
+ *   .sheet(item: $var) { item in ... }
+ */
+function extractSheets(content, result) {
+  const sheetRe = /\.sheet\s*\(\s*(?:isPresented|item)\s*:[^)]*\)/g;
+  let match;
+  while ((match = sheetRe.exec(content)) !== null) {
+    const closure = findNextClosure(content, match.index + match[0].length);
+    if (!closure) continue;
+    extractPresentedContent(closure.content, result, "sheet");
+  }
+}
+
+/**
+ * Extract full-screen cover presentations:
+ *   .fullScreenCover(isPresented: $var) { ... }
+ *   .fullScreenCover(item: $var) { item in ... }
+ */
+function extractFullScreenCovers(content, result) {
+  const fscRe = /\.fullScreenCover\s*\(\s*(?:isPresented|item)\s*:[^)]*\)/g;
+  let match;
+  while ((match = fscRe.exec(content)) !== null) {
+    const closure = findNextClosure(content, match.index + match[0].length);
+    if (!closure) continue;
+    extractPresentedContent(closure.content, result, "full-screen");
+  }
+}
+
+/**
+ * Shared logic for sheet / fullScreenCover closure content.
+ * Checks for web views first, then looks for native destinations.
+ */
+function extractPresentedContent(closureContent, result, edgeType) {
+  // WebView with a literal URL string
+  const webViewMatch = closureContent.match(
+    /\bWebView\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/
+  );
+  if (webViewMatch) {
+    result.webLinks.push({ url: webViewMatch[1], label: null, mode: "webview" });
+    return;
+  }
+
+  // CustomWebView / WKWebView with a literal URL
+  const customMatch = closureContent.match(
+    /\b(?:Custom)?W?K?WebView\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/
+  );
+  if (customMatch) {
+    result.webLinks.push({ url: customMatch[1], label: null, mode: "custom-webview" });
+    return;
+  }
+
+  // For switch-based items (e.g. activeCover switch), find all destination views
+  // If there are case branches, include them all
+  const hasSwitchCases = /\bcase\s+\./.test(closureContent);
+  if (hasSwitchCases) {
+    const targets = findAllDestinationViews(closureContent);
+    for (const target of targets) {
+      if (edgeType === "sheet") result.sheets.push({ target });
+      else result.fullScreenCovers.push({ target });
+    }
+    return;
+  }
+
+  // Otherwise find the first non-container destination view
+  const target = findFirstDestinationView(closureContent);
+  if (target) {
+    if (edgeType === "sheet") result.sheets.push({ target });
+    else result.fullScreenCovers.push({ target });
+  }
+}
+
+/**
+ * Extract web view / external link URLs:
+ *   WebView(url: URL(string: "..."))
+ *   activeCover = .webView(URL(string: "..."), userData)
+ *   WebLink(url: URL(string: "..."))  [with nearby Button label]
+ */
+function extractWebLinks(content, result) {
+  // Standalone WebView(url: URL(string: "..."))
+  const webViewRe = /\bWebView\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/g;
+  let match;
+  while ((match = webViewRe.exec(content)) !== null) {
+    if (!result.webLinks.some((l) => l.url === match[1])) {
+      result.webLinks.push({ url: match[1], label: null, mode: "webview" });
+    }
+  }
+
+  // .webView(URL(string: "..."), ...) — enum-based webview cover
+  const covWebViewRe = /\.webView\s*\(\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/g;
+  while ((match = covWebViewRe.exec(content)) !== null) {
+    if (!result.webLinks.some((l) => l.url === match[1])) {
+      result.webLinks.push({ url: match[1], label: null, mode: "custom-webview" });
+    }
+  }
+
+  // WebLink(url: URL(string: "...")) — look back for a Button("...") label
+  const webLinkRe = /\bWebLink\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/g;
+  while ((match = webLinkRe.exec(content)) !== null) {
+    const url = match[1];
+    if (result.webLinks.some((l) => l.url === url)) continue;
+
+    // Look backwards up to 500 chars for a Button("...") call
+    const preceding = content.slice(Math.max(0, match.index - 500), match.index);
+    const btnMatch = preceding.match(/Button\s*\(\s*"([^"]+)"\s*\)[^{]*\{[^}]*$/);
+    const label = btnMatch ? btnMatch[1] : null;
+
+    result.webLinks.push({ url, label, mode: "safari" });
+  }
+}
+
+/**
+ * Extract TabView children:
+ *   TabView { ViewName().tag(n).tabItem { Label("...") } }
+ */
+function extractTabChildren(content, result) {
+  // Find TabView (with or without selection parameter)
+  const tabViewMatch = content.match(/\bTabView\s*(?:\([^)]*\))?\s*\{/);
+  if (!tabViewMatch) return;
+
+  const closure = findNextClosure(content, tabViewMatch.index + tabViewMatch[0].length - 1);
+  if (!closure) return;
+
+  const tabContent = closure.content;
+
+  // Find each .tabItem { ... Label("name", ...) } and the view preceding it
+  const tabItemRe = /\.tabItem\s*\{/g;
+  let tiMatch;
+  while ((tiMatch = tabItemRe.exec(tabContent)) !== null) {
+    const tiClosure = findNextClosure(tabContent, tiMatch.index + tiMatch[0].length - 1);
+    if (!tiClosure) continue;
+
+    // Find Label("...") inside the tabItem closure
+    const labelMatch = tiClosure.content.match(/\bLabel\s*\(\s*"([^"]+)"/);
+    if (!labelMatch) continue;
+    const label = labelMatch[1];
+
+    // Look backwards in the tabContent before this .tabItem for the most recent view
+    const preceding = tabContent.slice(0, tiMatch.index);
+    const viewRe = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen))\s*\(/g;
+    let lastView = null;
+    let viewMatch;
+    while ((viewMatch = viewRe.exec(preceding)) !== null) {
+      if (!SWIFTUI_CONTAINERS.has(viewMatch[1]) && !WEB_VIEW_NAMES.has(viewMatch[1])) {
+        lastView = viewMatch[1];
+      }
+    }
+
+    if (lastView) result.tabChildren.push({ target: lastView, label });
+  }
+}
+
+/**
+ * Extract navigationDestination(for: Type.self) switch case → view mappings.
+ * These represent typed programmatic navigation destinations.
+ */
+function extractNavigationDestinations(content, result) {
+  const navDestRe = /\.navigationDestination\s*\(\s*for\s*:/g;
+  let match;
+  while ((match = navDestRe.exec(content)) !== null) {
+    const closure = findNextClosure(content, match.index + match[0].length);
+    if (!closure) continue;
+
+    // Parse switch case .enumCase: ViewName() pairs
+    const caseRe = /\bcase\s+\.(\w+)\s*:\s*\n?\s*([A-Z][A-Za-z0-9]*(?:View|Page|Screen))\s*\(/g;
+    let caseMatch;
+    while ((caseMatch = caseRe.exec(closure.content)) !== null) {
+      result.navigationDestinations.push({
+        target: caseMatch[2],
+        label: caseMatch[1], // enum case name as label
+      });
+    }
+  }
+}
+
+/**
+ * Convert a PascalCase view name to a human-readable label.
+ * "BookAppointmentView" → "Book Appointment"
+ * "PatchsStartPage" → "Patchs Start"
+ */
+function toLabel(viewName) {
+  return viewName
+    .replace(/(?:View|Page|Screen|Controller)$/, "")
+    .replace(/([A-Z])/g, " $1")
+    .trim();
+}
+
+module.exports = { parseSwiftFile, toLabel };

@@ -3,7 +3,8 @@
 const { Command } = require("commander");
 const path = require("path");
 const { execSync } = require("child_process");
-const { generate } = require("../src/index");
+const { generate, generateNative } = require("../src/index");
+const { isIosProject } = require("../src/swift-scanner");
 
 function openInBrowser(filePath) {
   const commands = { darwin: "open", win32: "start", linux: "xdg-open" };
@@ -69,6 +70,11 @@ program
     'PDF mode: "canvas" (full-canvas, default) or "snapshot" (A3 fit-to-screen)',
     "canvas",
   )
+  .option(
+    "--platform <platform>",
+    'Project platform: "web" (default) or "ios". Auto-detected if omitted.',
+    "",
+  )
   .option("--no-open", "Do not open the browser after generation")
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
@@ -93,31 +99,52 @@ program
       process.exit(1);
     }
 
+    // Determine platform (explicit flag > auto-detect)
+    let platform = (options.platform || "").toLowerCase();
+    if (!platform) {
+      platform = isIosProject(resolvedPath) ? "ios" : "web";
+    }
+    if (!["web", "ios"].includes(platform)) {
+      console.error(`\n❌ Error: --platform must be "web" or "ios"\n`);
+      process.exit(1);
+    }
+
     console.log(`\n📐 Prototype Flow Map\n`);
     console.log(`   Prototype: ${resolvedPath}`);
+    console.log(`   Platform:  ${platform}`);
     console.log(`   Output:    ${path.resolve(options.output)}`);
     console.log(`   Map:       ${mapName}`);
     console.log();
 
     try {
-      await generate({
-        prototypePath: resolvedPath,
-        outputDir: path.resolve(options.output),
-        port: parseInt(options.port, 10),
-        viewport: {
-          width: parseInt(options.width, 10),
-          height: parseInt(options.height, 10),
-        },
-        screenshots: options.screenshots,
-        basePath: options.basePath,
-        exclude: options.exclude,
-        from: options.from,
-        startUrl: options.startUrl,
-        name: mapName,
-        title: mapTitle,
-        exportPdf: Boolean(options.exportPdf),
-        pdfMode,
-      });
+      if (platform === "ios") {
+        await generateNative({
+          prototypePath: resolvedPath,
+          outputDir: path.resolve(options.output),
+          name: mapName,
+          title: mapTitle,
+          screenshots: options.screenshots,
+        });
+      } else {
+        await generate({
+          prototypePath: resolvedPath,
+          outputDir: path.resolve(options.output),
+          port: parseInt(options.port, 10),
+          viewport: {
+            width: parseInt(options.width, 10),
+            height: parseInt(options.height, 10),
+          },
+          screenshots: options.screenshots,
+          basePath: options.basePath,
+          exclude: options.exclude,
+          from: options.from,
+          startUrl: options.startUrl,
+          name: mapName,
+          title: mapTitle,
+          exportPdf: Boolean(options.exportPdf),
+          pdfMode,
+        });
+      }
 
       const viewerPath = path.resolve(
         options.output,

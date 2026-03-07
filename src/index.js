@@ -13,6 +13,10 @@ const { buildViewer } = require("./build-viewer");
 const { buildMermaid } = require("./build-mermaid");
 const { exportPdf } = require("./export-pdf");
 const { buildIndex } = require("./build-index");
+const { scanSwiftFiles } = require("./swift-scanner");
+const { parseSwiftFile } = require("./swift-parser");
+const { buildSwiftGraph } = require("./swift-graph-builder");
+const { crawlAndScreenshotIos } = require("./swift-crawler");
 
 async function generate(options) {
   const {
@@ -138,4 +142,72 @@ async function generate(options) {
   }
 }
 
-module.exports = { generate };
+async function generateNative(options) {
+  const { prototypePath, outputDir, name, title, screenshots } = options;
+
+  const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
+
+  // Step 1: Scan for Swift source files
+  console.log("1️⃣  Scanning Swift files...");
+  const swiftFiles = scanSwiftFiles(prototypePath);
+  console.log(`   Found ${swiftFiles.length} Swift files`);
+
+  // Step 2: Parse each file for navigation patterns
+  console.log("2️⃣  Parsing views for navigation...");
+  const parsedViews = [];
+  for (const file of swiftFiles) {
+    const parsed = parseSwiftFile(file, prototypePath);
+    if (parsed) parsedViews.push(parsed);
+  }
+  console.log(`   Parsed ${parsedViews.length} SwiftUI views`);
+
+  // Step 3: Build the graph
+  console.log("3️⃣  Building flow graph...");
+  let graph = buildSwiftGraph(parsedViews);
+  console.log(`   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+
+  // Step 4: Capture screenshots via XCUITest (if enabled)
+  if (screenshots) {
+    console.log("4️⃣  Capturing screenshots via XCUITest...");
+    graph = await crawlAndScreenshotIos(graph, { prototypePath, outputDir: mapOutputDir });
+    console.log(`   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`);
+  } else {
+    console.log("4️⃣  Skipping screenshots (--no-screenshots)");
+  }
+
+  // Step 5: Build the viewer
+  console.log("5️⃣  Building interactive viewer...");
+  await buildViewer(graph, mapOutputDir, screenshots, null, {
+    name,
+    rootOutputDir: name ? outputDir : null,
+  });
+  console.log("   Viewer built");
+
+  // Step 6: Generate Mermaid sitemap
+  buildMermaid(graph, mapOutputDir);
+  console.log("   Mermaid sitemap written");
+
+  // Step 7: Write map metadata and rebuild collection index (multi-map mode)
+  if (name) {
+    const meta = {
+      name,
+      title: title || path.basename(prototypePath),
+      updatedAt: new Date().toISOString(),
+      platform: "ios",
+      nodeCount: graph.nodes.length,
+      edgeCount: graph.edges.length,
+      hasScreenshots: Boolean(screenshots),
+    };
+    fs.mkdirSync(mapOutputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mapOutputDir, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+
+    console.log("7️⃣  Building collection index...");
+    buildIndex(outputDir);
+    console.log("   Collection index built");
+  }
+}
+
+module.exports = { generate, generateNative };
