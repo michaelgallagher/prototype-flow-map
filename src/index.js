@@ -17,6 +17,7 @@ const { scanSwiftFiles } = require("./swift-scanner");
 const { parseSwiftFile } = require("./swift-parser");
 const { buildSwiftGraph } = require("./swift-graph-builder");
 const { crawlAndScreenshotIos } = require("./swift-crawler");
+const { loadConfig, applyExclusions } = require("./flow-map-config");
 
 async function generate(options) {
   const {
@@ -163,13 +164,18 @@ async function generateNative(options) {
 
   // Step 3: Build the graph
   console.log("3️⃣  Building flow graph...");
+  const config = loadConfig(prototypePath);
   let graph = buildSwiftGraph(parsedViews);
+  graph = applyExclusions(graph, config.exclude);
   console.log(`   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+  if (config.exclude.length > 0) {
+    console.log(`   Excluded: ${config.exclude.join(", ")}`);
+  }
 
   // Step 4: Capture screenshots via XCUITest (if enabled)
   if (screenshots) {
     console.log("4️⃣  Capturing screenshots via XCUITest...");
-    graph = await crawlAndScreenshotIos(graph, { prototypePath, outputDir: mapOutputDir });
+    graph = await crawlAndScreenshotIos(graph, { prototypePath, outputDir: mapOutputDir, overrides: config.overrides });
     console.log(`   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`);
   } else {
     console.log("4️⃣  Skipping screenshots (--no-screenshots)");

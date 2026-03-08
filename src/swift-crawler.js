@@ -19,7 +19,7 @@ const { generateXCUITest, sanitizeFilename } = require("./xctest-generator");
  * @returns The graph with node.screenshot paths set where captures succeeded.
  */
 async function crawlAndScreenshotIos(graph, options) {
-  const { prototypePath, outputDir } = options;
+  const { prototypePath, outputDir, overrides } = options;
 
   const developerDir = findDeveloperDir();
   const screenshotsOutputDir = path.join(outputDir, "screenshots");
@@ -48,7 +48,7 @@ async function crawlAndScreenshotIos(graph, options) {
   console.log(`   Simulator: ${simulator.name} (${simulator.udid})`);
 
   // 5. Generate the XCUITest content
-  const testContent = generateXCUITest(graph, tempDir);
+  const testContent = generateXCUITest(graph, tempDir, overrides || {});
   if (!testContent) {
     console.log("   No navigable screens found — skipping screenshots");
     return graph;
@@ -57,6 +57,12 @@ async function crawlAndScreenshotIos(graph, options) {
   // Count generated test methods as a progress indicator
   const methodCount = (testContent.match(/func testCapture_/g) || []).length;
   console.log(`   Generated ${methodCount} screenshot tests`);
+
+  // Write generated test content to a log file for debugging
+  const debugLogPath = path.join(outputDir, "generated-xcuitest.swift");
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(debugLogPath, testContent, "utf-8");
+  console.log(`   Generated test written to: ${path.relative(process.cwd(), debugLogPath)}`);
 
   // 6. Back up the existing UITest file, write the generated one
   const originalContent = fs.readFileSync(uitestFile, "utf-8");
@@ -96,6 +102,15 @@ async function crawlAndScreenshotIos(graph, options) {
       .filter(Boolean)
       .join("\n")
       .trim();
+
+    // Always surface flow-map diagnostic lines (tap failures, captures)
+    const diagLines = xcodebuildOutput
+      .split("\n")
+      .filter((l) => l.includes("[flow-map]"));
+    if (diagLines.length > 0) {
+      console.log("   Tap diagnostics:");
+      diagLines.forEach((l) => console.log(`     ${l.trim()}`));
+    }
 
     if (result.error) {
       // Process-level error (e.g. timeout, ENOENT)

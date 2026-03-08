@@ -46,8 +46,49 @@ const WEB_VIEW_NAMES = new Set(["WebView", "SafariView", "CustomWebView", "WKWeb
  *   navigationDestinations: [{ target, label }]
  * }
  */
+// Strip Swift line comments and block comments from source.
+// Preserves string literals so URLs and labels inside strings are not removed.
+// Handles nested block comments (Swift allows them).
+function stripSwiftComments(src) {
+  let out = "";
+  let i = 0;
+  const len = src.length;
+
+  while (i < len) {
+    // String literal — pass through verbatim (don't strip comments inside strings)
+    if (src[i] === '"') {
+      out += src[i++];
+      while (i < len) {
+        if (src[i] === "\\") { out += src[i++]; out += src[i++]; continue; }
+        if (src[i] === '"') { out += src[i++]; break; }
+        out += src[i++];
+      }
+      continue;
+    }
+    // Line comment
+    if (src[i] === "/" && src[i + 1] === "/") {
+      while (i < len && src[i] !== "\n") i++;
+      continue;
+    }
+    // Block comment (Swift allows nesting)
+    if (src[i] === "/" && src[i + 1] === "*") {
+      i += 2;
+      let depth = 1;
+      while (i < len && depth > 0) {
+        if (src[i] === "/" && src[i + 1] === "*") { depth++; i += 2; }
+        else if (src[i] === "*" && src[i + 1] === "/") { depth--; i += 2; }
+        else i++;
+      }
+      continue;
+    }
+    out += src[i++];
+  }
+  return out;
+}
+
 function parseSwiftFile(filePath, projectPath) {
-  const content = fs.readFileSync(filePath, "utf-8");
+  const raw = fs.readFileSync(filePath, "utf-8");
+  const content = stripSwiftComments(raw);
   const relativePath = path.relative(projectPath, filePath);
 
   // Must contain a SwiftUI View struct
@@ -209,8 +250,11 @@ function extractPushLinks(content, result) {
     if (!closure) continue;
     const target = findFirstDestinationView(closure.content);
     if (target) {
-      // capitalise the enum case name as a label
-      const label = hubCase.charAt(0).toUpperCase() + hubCase.slice(1);
+      // Convert camelCase enum name to sentence case: "testResults" → "Test results"
+      const label = hubCase
+        .replace(/([A-Z])/g, " $1")
+        .toLowerCase()
+        .replace(/^./, (c) => c.toUpperCase());
       result.pushLinks.push({ target, label });
     }
   }
@@ -241,20 +285,66 @@ function extractPushLinks(content, result) {
 
 /**
  * Return the button label that triggers a boolean state var (isPresented binding).
- * Searches for Button("Label") { stateVar = true } or stateVar.toggle() patterns.
+ * Searches for various button patterns that set stateVar = true or stateVar.toggle().
+ * Handles: Button("Label"), NHSButton(title: "Label"), ButtonLink(title: "Label"),
+ * and ButtonLink(action:) with Text("Label") inside trailing closure.
  */
 function findTriggerLabel(content, stateVarName) {
   if (!stateVarName) return null;
-  const assignRe = new RegExp(
-    `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*\\b${stateVarName}\\s*=\\s*true`
-  );
-  const m1 = content.match(assignRe);
-  if (m1) return m1[1];
-  const toggleRe = new RegExp(
-    `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*\\b${stateVarName}\\.toggle\\(\\)`
-  );
-  const m2 = content.match(toggleRe);
-  return m2 ? m2[1] : null;
+  const escaped = stateVarName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Pattern 1: Button("Label") { stateVar = true }
+  for (const action of [`${escaped}\\s*=\\s*true`, `${escaped}\\.toggle\\(\\)`]) {
+    const re = new RegExp(
+      `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*?\\b${action}`
+    );
+    const m = content.match(re);
+    if (m) return m[1];
+  }
+
+  // Pattern 2: NHSButton(title: "Label", ..., action: { stateVar = true })
+  // Also handles trailing closure: NHSButton(title: "Label", style: .x) { stateVar = true }
+  for (const action of [`${escaped}\\s*=\\s*true`, `${escaped}\\.toggle\\(\\)`]) {
+    // Inline action: parameter
+    const re1 = new RegExp(
+      `NHSButton\\s*\\([^)]*?title\\s*:\\s*"([^"]+)"[^)]*\\baction\\s*:\\s*\\{[^}]*?\\b${action}`
+    );
+    const m1 = content.match(re1);
+    if (m1) return m1[1];
+    // Trailing closure
+    const re2 = new RegExp(
+      `NHSButton\\s*\\([^)]*?title\\s*:\\s*"([^"]+)"[^)]*\\)\\s*\\{[^}]*?\\b${action}`
+    );
+    const m2 = content.match(re2);
+    if (m2) return m2[1];
+  }
+
+  // Pattern 3: ButtonLink(title: "Label") { stateVar = true }
+  for (const action of [`${escaped}\\s*=\\s*true`, `${escaped}\\.toggle\\(\\)`]) {
+    const re = new RegExp(
+      `ButtonLink\\s*\\(\\s*title\\s*:\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*?\\b${action}`
+    );
+    const m = content.match(re);
+    if (m) return m[1];
+  }
+
+  // Pattern 4: ButtonLink(action: { stateVar = true }) { ... Text("Label") ... }
+  // The label is in the trailing closure's Text().
+  for (const action of [`${escaped}\\s*=\\s*true`, `${escaped}\\.toggle\\(\\)`]) {
+    const re = new RegExp(
+      `ButtonLink\\s*\\(\\s*action\\s*:\\s*\\{[^}]*?\\b${action}[^}]*\\}\\s*\\)`
+    );
+    const m = content.match(re);
+    if (m) {
+      const trailingClosure = findNextClosure(content, m.index + m[0].length);
+      if (trailingClosure) {
+        const textMatch = trailingClosure.content.match(/\bText\s*\(\s*"([^"]+)"\s*\)/);
+        if (textMatch) return textMatch[1];
+      }
+    }
+  }
+
+  return null;
 }
 
 /**

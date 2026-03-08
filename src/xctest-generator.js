@@ -12,6 +12,8 @@
  *    differ from the enum case name stored on the edge.
  */
 
+const { toLabel } = require("./swift-parser");
+
 const NAVIGABLE_EDGE_TYPES = new Set(["link", "tab"]);
 const MODAL_EDGE_TYPES = new Set(["sheet", "full-screen"]);
 
@@ -24,23 +26,57 @@ function sanitizeFilename(id) {
 }
 
 /**
+ * Extract the first significant keyword from a PascalCase view name.
+ * "AppointmentDetailView" → "Appointment"
+ * "PrescriptionOrderStep1View" → "Prescription"
+ * Skips generic suffixes like View, Page, Screen, Detail, etc.
+ */
+function extractKeyword(viewName) {
+  const words = viewName
+    .replace(/(?:View|Page|Screen|Controller)$/, "")
+    .split(/(?=[A-Z])/)
+    .filter(Boolean);
+  const generic = new Set(["Detail", "Order", "Step", "Start", "List", "Item", "Modal"]);
+  for (const word of words) {
+    if (!generic.has(word) && word.length > 2) return word;
+  }
+  return words[0] || null;
+}
+
+/**
  * Generate the full Swift test file content.
  *
  * @param {object} graph - { nodes, edges }
  * @param {string} screenshotsDir - absolute path on the Mac host where PNGs are written
+ * @param {object} overrides - map of viewName → { steps: string[] } from config
  * @returns {string} Swift source code
  */
-function generateXCUITest(graph, screenshotsDir) {
+function generateXCUITest(graph, screenshotsDir, overrides = {}) {
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
 
-  // Find root nodes: screen nodes with no incoming link/tab edges
+  // Find root nodes: screen nodes that are true navigation roots (like MainTabView).
+  // A true root has no incoming edges of any type AND has outgoing navigable edges.
+  // Screens reachable only via modal edges (sheet/full-screen) are NOT roots —
+  // they are handled by collectModalScreens() which navigates to the parent first.
   const hasIncoming = new Set(
     graph.edges
       .filter((e) => NAVIGABLE_EDGE_TYPES.has(e.type))
       .map((e) => e.target),
   );
+  const hasModalIncoming = new Set(
+    graph.edges
+      .filter((e) => MODAL_EDGE_TYPES.has(e.type))
+      .map((e) => e.target),
+  );
   const rootIds = graph.nodes
-    .filter((n) => n.type === "screen" && !hasIncoming.has(n.id))
+    .filter((n) => {
+      if (n.type !== "screen") return false;
+      if (hasIncoming.has(n.id)) return false; // has navigable incoming — not a root
+      if (hasModalIncoming.has(n.id)) return false; // reachable via modal — handled by collectModalScreens
+      // No incoming navigable or modal edges. True root if it has outgoing navigable edges.
+      const outgoing = graph.edges.filter((e) => e.source === n.id && NAVIGABLE_EDGE_TYPES.has(e.type));
+      return outgoing.length > 0;
+    })
     .map((n) => n.id);
 
   if (rootIds.length === 0) return null;
@@ -58,21 +94,38 @@ function generateXCUITest(graph, screenshotsDir) {
   // BFS to compute edge-paths from roots to every reachable node
   const edgePaths = bfsEdgePaths(graph, rootIds);
 
-  // Generate one test method per reachable screen node
+  // Pre-compute tab index for each tab target (order in TabView = accessibility index)
+  const tabIndexMap = new Map();
+  let tabIdx = 0;
+  for (const edge of graph.edges) {
+    if (edge.type === "tab") tabIndexMap.set(edge.target, tabIdx++);
+  }
+
+  // Track which screens have config overrides — they get custom test methods
+  const overrideNodeIds = new Set(Object.keys(overrides));
+
+  // Generate one test method per reachable screen node (skip overrides)
   const methods = [];
   for (const [nodeId, edgePath] of edgePaths) {
     const node = nodeMap.get(nodeId);
     if (!node || node.type !== "screen") continue;
+    if (overrideNodeIds.has(nodeId)) continue; // handled below
 
-    const taps = buildTaps(edgePath, nodeMap, defaultTabTarget);
+    const taps = buildTaps(edgePath, nodeMap, defaultTabTarget, tabIndexMap);
     methods.push(generateMethod(nodeId, taps, screenshotsDir));
   }
 
-  // Generate modal test methods for sheet/fullScreenCover/web-view screens
+  // Generate modal test methods for sheet/fullScreenCover/web-view screens (skip overrides)
   const modalScreens = collectModalScreens(graph, edgePaths);
   for (const [nodeId, { parentEdgePath, triggerEdge }] of modalScreens) {
-    const parentTaps = buildTaps(parentEdgePath, nodeMap, defaultTabTarget);
+    if (overrideNodeIds.has(nodeId)) continue; // handled below
+    const parentTaps = buildTaps(parentEdgePath, nodeMap, defaultTabTarget, tabIndexMap);
     methods.push(generateModalMethod(nodeId, parentTaps, triggerEdge, screenshotsDir));
+  }
+
+  // Generate override test methods — custom steps from config file
+  for (const [nodeId, override] of Object.entries(overrides)) {
+    methods.push(generateOverrideMethod(nodeId, override.steps, screenshotsDir, tabIndexMap));
   }
 
   if (methods.length === 0) return null;
@@ -93,12 +146,28 @@ function generateXCUITest(graph, screenshotsDir) {
 function collectModalScreens(graph, edgePaths) {
   const modalScreens = new Map();
 
-  for (const edge of graph.edges) {
-    if (!MODAL_EDGE_TYPES.has(edge.type)) continue;
-    if (!edgePaths.has(edge.source)) continue; // source not reachable via BFS
-    if (edgePaths.has(edge.target)) continue;  // already covered by regular BFS
-    if (modalScreens.has(edge.target)) continue; // already captured via another path
+  // Two passes: first collect edges with real trigger labels (from source code),
+  // then fill in remaining with fallback-label edges. This ensures we prefer
+  // edges where the parser found the actual button text over auto-generated labels.
+  const candidateEdges = graph.edges.filter(
+    (e) => MODAL_EDGE_TYPES.has(e.type) && edgePaths.has(e.source) && !edgePaths.has(e.target)
+  );
 
+  // Pass 1: edges with real trigger labels (label doesn't match auto-generated toLabel)
+  for (const edge of candidateEdges) {
+    if (modalScreens.has(edge.target)) continue;
+    const fallbackLabel = toLabel(edge.target);
+    if (edge.label && edge.label !== fallbackLabel) {
+      modalScreens.set(edge.target, {
+        parentEdgePath: edgePaths.get(edge.source),
+        triggerEdge: edge,
+      });
+    }
+  }
+
+  // Pass 2: remaining edges (fallback labels)
+  for (const edge of candidateEdges) {
+    if (modalScreens.has(edge.target)) continue;
     modalScreens.set(edge.target, {
       parentEdgePath: edgePaths.get(edge.source),
       triggerEdge: edge,
@@ -150,14 +219,15 @@ function bfsEdgePaths(graph, startIds) {
  * Each tap has { kind: "tab"|"element", candidates: [string] }
  * where candidates are tried in order until one is found in the UI.
  */
-function buildTaps(edgePath, nodeMap, defaultTabTarget) {
+function buildTaps(edgePath, nodeMap, defaultTabTarget, tabIndexMap = new Map()) {
   const taps = [];
 
   for (const edge of edgePath) {
     if (edge.type === "tab") {
       // Skip tapping the default tab — the app already starts there.
       if (edge.target === defaultTabTarget) continue;
-      taps.push({ kind: "tab", candidates: [edge.label].filter(Boolean) });
+      const tabIndex = tabIndexMap.get(edge.target) ?? -1;
+      taps.push({ kind: "tab", candidates: [edge.label].filter(Boolean), tabIndex });
     } else if (edge.type === "link") {
       // Candidate labels to try in the UI, in preference order:
       //  1. The destination node's display label (from navigationTitle) — matches
@@ -188,23 +258,30 @@ function generateMethod(nodeId, taps, screenshotsDir) {
 
   const tapLines = taps.map((tap) => {
     if (tap.kind === "tab") {
-      const label = swiftEscape(tap.candidates[0]);
-      return `        tapTab("${label}", in: app)`;
+      const label = swiftEscape(tap.candidates[0] || "");
+      const idx = tap.tabIndex ?? -1;
+      return `        guard tapTab("${label}", index: ${idx}, in: app) else { print("⚠️ [flow-map] tapTab failed: ${label}"); return }`;
     }
     // Build a Swift array literal of candidate strings
     const candidatesLiteral = tap.candidates
       .map((c) => `"${swiftEscape(c)}"`)
       .join(", ");
-    return `        tapElement(matching: [${candidatesLiteral}], in: app)`;
+    // For the print message, escape the inner quotes so they're valid inside a Swift string
+    const candidatesPrint = tap.candidates
+      .map((c) => `\\"${swiftEscape(c)}\\"`)
+      .join(", ");
+    return `        guard tapElement(matching: [${candidatesLiteral}], in: app) else { print("⚠️ [flow-map] tapElement failed: [${candidatesPrint}]"); return }`;
   });
 
   return `
     func testCapture_${safeName}() {
+        print("📸 [flow-map] Capturing: ${safeName}")
         let app = XCUIApplication()
         app.launch()
 ${tapLines.join("\n")}
         Thread.sleep(forTimeInterval: 2.0)
         writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
+        print("✅ [flow-map] Captured: ${safeName}")
     }`;
 }
 
@@ -220,23 +297,132 @@ function generateModalMethod(nodeId, parentTaps, triggerEdge, screenshotsDir) {
 
   const lines = parentTaps.map((tap) => {
     if (tap.kind === "tab") {
-      return `        tapTab("${swiftEscape(tap.candidates[0])}", in: app)`;
+      const label = swiftEscape(tap.candidates[0] || "");
+      const idx = tap.tabIndex ?? -1;
+      return `        guard tapTab("${label}", index: ${idx}, in: app) else { print("⚠️ [flow-map] tapTab failed: ${label}"); return }`;
     }
     const lit = tap.candidates.map((c) => `"${swiftEscape(c)}"`).join(", ");
-    return `        tapElement(matching: [${lit}], in: app)`;
+    const litPrint = tap.candidates.map((c) => `\\"${swiftEscape(c)}\\"`).join(", ");
+    return `        guard tapElement(matching: [${lit}], in: app) else { print("⚠️ [flow-map] tapElement failed: [${litPrint}]"); return }`;
   });
 
   if (triggerEdge.label) {
-    lines.push(`        tapElement(matching: ["${swiftEscape(triggerEdge.label)}"], in: app)`);
+    const trigLit = swiftEscape(triggerEdge.label);
+    const fallbackLabel = toLabel(triggerEdge.target);
+    const isFallback = triggerEdge.label === fallbackLabel;
+    if (isFallback) {
+      // Auto-generated label — use guard so a wrong screenshot is never taken
+      lines.push(`        guard tapElement(matching: ["${trigLit}"], in: app) else { print("⚠️ [flow-map] tapElement failed (auto-label): [\\"${trigLit}\\"]"); return }`);
+    } else {
+      lines.push(`        guard tapElement(matching: ["${trigLit}"], in: app) else { print("⚠️ [flow-map] tapElement failed: [\\"${trigLit}\\"]"); return }`);
+    }
   }
 
   return `
     func testCapture_modal_${safeName}() {
+        print("📸 [flow-map] Capturing modal: ${safeName}")
         let app = XCUIApplication()
         app.launch()
 ${lines.join("\n")}
         Thread.sleep(forTimeInterval: ${waitTime})
         writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
+        print("✅ [flow-map] Captured modal: ${safeName}")
+    }`;
+}
+
+/**
+ * Generate a test method from config override steps.
+ * Steps are strings like:
+ *   "tap:Label"              → tapElement(matching: ["Label"])
+ *   "tapTab:Label:index"     → tapTab("Label", index: N)
+ *   "tapContaining:text"     → tap button whose label CONTAINS text
+ *   "tapCell:index"          → tap cell at index N
+ *   "swipeLeft:firstCell"    → swipe left on first cell (e.g. to reveal delete)
+ *   "wait:seconds"           → Thread.sleep
+ */
+function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
+  const safeName = sanitizeFilename(nodeId);
+  const escapedDir = swiftEscape(screenshotsDir);
+  const escapedName = swiftEscape(safeName);
+
+  const lines = steps.map((step) => {
+    const colonIdx = step.indexOf(":");
+    const command = colonIdx >= 0 ? step.slice(0, colonIdx) : step;
+    const args = colonIdx >= 0 ? step.slice(colonIdx + 1) : "";
+
+    switch (command) {
+      case "tap": {
+        const label = swiftEscape(args);
+        return `        guard tapElement(matching: ["${label}"], in: app) else { print("⚠️ [flow-map] override tap failed: ${label}"); return }`;
+      }
+      case "tapTab": {
+        const parts = args.split(":");
+        const label = swiftEscape(parts[0]);
+        const idx = parseInt(parts[1], 10) || 0;
+        return `        guard tapTab("${label}", index: ${idx}, in: app) else { print("⚠️ [flow-map] override tapTab failed: ${label}"); return }`;
+      }
+      case "tapContaining": {
+        const text = swiftEscape(args);
+        return [
+          `        do {`,
+          `            let pred = NSPredicate(format: "label CONTAINS[c] %@", "${text}")`,
+          `            let btn = app.buttons.matching(pred).firstMatch`,
+          `            guard btn.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapContaining failed: ${text}"); return }`,
+          `            btn.tap()`,
+          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `        }`,
+        ].join("\n");
+      }
+      case "tapCell": {
+        const idx = parseInt(args, 10) || 0;
+        return [
+          `        do {`,
+          `            let cell = app.cells.element(boundBy: ${idx})`,
+          `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapCell failed: index ${idx}"); return }`,
+          `            cell.tap()`,
+          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `        }`,
+        ].join("\n");
+      }
+      case "swipeLeft": {
+        if (args === "firstCell") {
+          return [
+            `        do {`,
+            `            let cell = app.cells.firstMatch`,
+            `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override swipeLeft failed"); return }`,
+            `            cell.swipeLeft()`,
+            `            Thread.sleep(forTimeInterval: 1.0)`,
+            `        }`,
+          ].join("\n");
+        }
+        const idx = parseInt(args, 10) || 0;
+        return [
+          `        do {`,
+          `            let cell = app.cells.element(boundBy: ${idx})`,
+          `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override swipeLeft failed: index ${idx}"); return }`,
+          `            cell.swipeLeft()`,
+          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `        }`,
+        ].join("\n");
+      }
+      case "wait": {
+        const seconds = parseFloat(args) || 2.0;
+        return `        Thread.sleep(forTimeInterval: ${seconds})`;
+      }
+      default:
+        return `        // Unknown override step: ${swiftEscape(step)}`;
+    }
+  });
+
+  return `
+    func testCapture_override_${safeName}() {
+        print("📸 [flow-map] Capturing (override): ${safeName}")
+        let app = XCUIApplication()
+        app.launch()
+${lines.join("\n")}
+        Thread.sleep(forTimeInterval: 2.0)
+        writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
+        print("✅ [flow-map] Captured (override): ${safeName}")
     }`;
 }
 
@@ -256,22 +442,34 @@ final class FlowMapCapture: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Tap a tab bar button by label.
-    func tapTab(_ label: String, in app: XCUIApplication) {
-        // Exact match
-        let exact = app.tabBars.buttons[label]
-        if exact.waitForExistence(timeout: 3) {
-            exact.tap()
-            Thread.sleep(forTimeInterval: 1.0)
-            return
-        }
-        // Contains fallback (handles icon+text accessibility labels)
+    /// Tap a tab bar button by label and/or index. Returns false if the tab was not found.
+    /// Uses index-based tapping as the primary strategy (immune to label mismatches),
+    /// with label-based fallbacks for robustness.
+    @discardableResult
+    func tapTab(_ label: String, index: Int, in app: XCUIApplication) -> Bool {
+        // Wait for the splash screen to clear by waiting for the tab bar to settle.
+        // Use a known home-screen element as the "ready" signal instead of just the tab bar,
+        // since the tab bar element may exist in the hierarchy before the splash dismisses.
+        Thread.sleep(forTimeInterval: 2.5) // cover the 2s splash + buffer
         let pred = NSPredicate(format: "label CONTAINS[c] %@", label)
-        let fuzzy = app.tabBars.buttons.matching(pred).firstMatch
-        if fuzzy.waitForExistence(timeout: 1) {
-            fuzzy.tap()
-            Thread.sleep(forTimeInterval: 1.0)
+        // 1. Index-based tap — reliable regardless of label text or badge counts
+        if index >= 0 {
+            let tabBar = app.tabBars.firstMatch
+            if tabBar.exists {
+                let btn = tabBar.buttons.element(boundBy: index)
+                if btn.exists { btn.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+            }
         }
+        // 2. Exact label match within tab bar
+        let exact = app.tabBars.buttons[label]
+        if exact.exists { exact.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        // 3. Contains match within tab bar
+        let fuzzy = app.tabBars.buttons.matching(pred).firstMatch
+        if fuzzy.exists { fuzzy.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        // 4. Search all buttons (SwiftUI may not expose tab items under tabBars)
+        let anyBtn = app.buttons.matching(pred).firstMatch
+        if anyBtn.exists { anyBtn.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        return false
     }
 
     /// Find any tappable element matching one of the candidate labels and tap it.
@@ -280,21 +478,29 @@ final class FlowMapCapture: XCTestCase {
     @discardableResult
     func tapElement(matching candidates: [String], in app: XCUIApplication) -> Bool {
         for candidate in candidates {
-            // 1. Button — most common for navigation links
+            // 1. Button — exact label match (most common for navigation links)
             let btn = app.buttons[candidate]
             if btn.waitForExistence(timeout: 3) {
                 btn.tap()
                 Thread.sleep(forTimeInterval: 1.0)
                 return true
             }
-            // 2. List / table cell
+            // 2. Button — CONTAINS match (for buttons whose label includes subtitle text)
+            let containsPred = NSPredicate(format: "label CONTAINS[c] %@", candidate)
+            let fuzzyBtn = app.buttons.matching(containsPred).firstMatch
+            if fuzzyBtn.waitForExistence(timeout: 1) {
+                fuzzyBtn.tap()
+                Thread.sleep(forTimeInterval: 1.0)
+                return true
+            }
+            // 3. List / table cell
             let cell = app.cells[candidate]
             if cell.waitForExistence(timeout: 1) {
                 cell.tap()
                 Thread.sleep(forTimeInterval: 1.0)
                 return true
             }
-            // 3. Accessibility identifier
+            // 4. Accessibility identifier
             let identPred = NSPredicate(format: "identifier ==[c] %@", candidate)
             let identEl = app.descendants(matching: .any).matching(identPred).firstMatch
             if identEl.waitForExistence(timeout: 1) {
