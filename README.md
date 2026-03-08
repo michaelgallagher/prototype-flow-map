@@ -73,6 +73,7 @@ The order of the flags doesn't matter.
 | `--title` | prototype folder name | Human-readable map title shown in index |
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
 | `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas default) or `snapshot` (A3 fit-to-screen) |
+| `--platform` | auto-detected | Project platform: `web` or `ios` |
 | `--no-open` | `false` | Don't automatically open the viewer in a browser
 
 ## Output
@@ -100,7 +101,89 @@ Each time you run the tool it will also produce a subfolder for the specific map
 
 Open `index.html` in a browser to explore the flow map. You can deploy the entire folder to GitHub Pages, Netlify, or any static host to share with your team.
 
+## iOS / SwiftUI projects
+
+The tool also supports native iOS prototypes built with SwiftUI. It auto-detects iOS projects (by looking for `.xcodeproj` / `.xcworkspace` files) or you can force it with `--platform ios`.
+
+```bash
+npx prototype-flow-map /path/to/your/ios-prototype --platform ios
+```
+
+It parses your Swift source files for navigation patterns (`NavigationLink`, `NavigationStack`, `TabView`, `.sheet()`, `.fullScreenCover()`, custom `RowLink` / `HubRowLink` components) and builds a graph of all screens. Screenshots are captured by generating a temporary XCUITest that launches the app in the simulator, navigates to each screen, and takes a screenshot.
+
+### Requirements for iOS
+
+- Xcode installed (with iOS Simulator)
+- The project must have a UI Testing Bundle target (e.g. `MyAppUITests`)
+- At least one `.swift` file in the UITest target (the tool temporarily replaces it)
+
+### Config file (`.flow-map.json`)
+
+For screens the auto-detection can't handle — data-dependent UI, custom button components, item-based sheets — you can place a `.flow-map.json` file in the prototype root. The tool picks it up automatically.
+
+```json
+{
+  "exclude": [
+    "SomeEmbeddedComponent",
+    "AnotherNonScreen"
+  ],
+  "overrides": {
+    "AppointmentDetailView": {
+      "steps": [
+        "tap:Appointments",
+        "tap:Manage GP appointments",
+        "tapContaining:Appointment on"
+      ]
+    },
+    "RemovedMessagesView": {
+      "steps": [
+        "tapTab:Messages:1",
+        "swipeLeft:firstCell",
+        "tap:Remove",
+        "wait:1.0",
+        "tap:Removed messages"
+      ]
+    }
+  }
+}
+```
+
+#### `exclude`
+
+An array of view names to remove from the graph entirely. Use this for embedded components that the parser picks up as screens but aren't actually navigable destinations (e.g. section views, helper components).
+
+#### `overrides`
+
+A map of view name to custom test steps. When a screen has an override, the tool skips auto-detection for that screen and generates a test using your steps instead. Each step is a string in the format `command:arguments`.
+
+| Step | Example | Description |
+|---|---|---|
+| `tap:Label` | `tap:Appointments` | Tap a button, cell, or element matching this label |
+| `tapTab:Label:index` | `tapTab:Messages:1` | Tap a tab bar button by label and index (index is zero-based) |
+| `tapContaining:text` | `tapContaining:Appointment on` | Tap the first button whose accessibility label contains this text |
+| `tapCell:index` | `tapCell:0` | Tap a list cell by index (zero-based) |
+| `swipeLeft:firstCell` | `swipeLeft:firstCell` | Swipe left on the first cell (to reveal swipe actions) |
+| `swipeLeft:index` | `swipeLeft:2` | Swipe left on a cell at a specific index |
+| `wait:seconds` | `wait:1.5` | Wait for a number of seconds |
+
+Steps run in order after the app launches. If any `tap` or `tapTab` step fails to find its target, the test aborts and no screenshot is taken (preventing wrong screenshots).
+
+#### When to use overrides
+
+- **Item-based sheets** — where the trigger is a dynamic element (e.g. tapping an appointment card). Use `tapContaining` with a keyword from the element's accessibility label.
+- **Data-dependent screens** — where a button only appears after some user action (e.g. swipe-deleting a message to reveal "Removed messages"). Script the prerequisite actions as steps.
+- **Custom button components** — where the parser can't extract the trigger label. Provide the button text directly in a `tap` step.
+
+#### When to use excludes
+
+- **Embedded sub-views** — components like `UrgentMedicalHelpSection` that conform to `View` but are never navigation destinations.
+- **Unreachable screens** — views whose navigation link is commented out or removed but the view file still exists.
+
+The config file name can be either `.flow-map.json` or `flow-map.config.json`.
+
 ## How it works
+
+### Web prototypes
 
 1. **Scans** `app/views/` for all `.html` template files
 2. **Parses** each template for `href=`, `action=`, `location.href`, `{% set backLinkURL %}`, and `{% if %}` conditional blocks
@@ -108,6 +191,16 @@ Open `index.html` in a browser to explore the flow map. You can deploy the entir
 4. **Builds a directed graph** of pages (nodes) and navigation paths (edges)
 5. **Starts the prototype**, crawls every page with Playwright, and takes screenshots
 6. **Generates a static HTML viewer** with the graph and screenshots embedded
+
+### iOS prototypes
+
+1. **Scans** for all `.swift` files in the project
+2. **Parses** each file for SwiftUI navigation patterns (`NavigationLink`, `TabView`, `.sheet()`, `.fullScreenCover()`, `RowLink`, `HubRowLink`)
+3. **Builds a directed graph** of screens and navigation edges
+4. **Applies config** — removes excluded nodes, prepares override test steps
+5. **Generates a temporary XCUITest** that navigates to each screen and takes a screenshot
+6. **Runs `xcodebuild test`** in the iOS Simulator, collects the PNG files
+7. **Generates a static HTML viewer** with the graph and screenshots embedded
 
 ## Viewer controls
 
