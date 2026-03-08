@@ -74,15 +74,15 @@ function buildSwiftGraph(parsedViews) {
     }
 
     // Sheets
-    for (const { target } of view.sheets) {
-      addEdge(edges, source, target, { type: "sheet", label: "sheet" });
+    for (const { target, triggerLabel } of view.sheets) {
+      addEdge(edges, source, target, { type: "sheet", label: triggerLabel || toLabel(target) });
     }
 
     // Full-screen covers
-    for (const { target } of view.fullScreenCovers) {
+    for (const { target, triggerLabel } of view.fullScreenCovers) {
       addEdge(edges, source, target, {
         type: "full-screen",
-        label: "full screen",
+        label: triggerLabel || toLabel(target),
       });
     }
 

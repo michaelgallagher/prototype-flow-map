@@ -13,6 +13,15 @@
  */
 
 const NAVIGABLE_EDGE_TYPES = new Set(["link", "tab"]);
+const MODAL_EDGE_TYPES = new Set(["sheet", "full-screen"]);
+
+/**
+ * Sanitize a node ID for use as a filesystem filename / Swift identifier.
+ * Replaces all non-alphanumeric characters with `_` and truncates to 200 chars.
+ */
+function sanitizeFilename(id) {
+  return String(id).replace(/[^a-zA-Z0-9]/g, "_").slice(0, 200);
+}
 
 /**
  * Generate the full Swift test file content.
@@ -59,9 +68,44 @@ function generateXCUITest(graph, screenshotsDir) {
     methods.push(generateMethod(nodeId, taps, screenshotsDir));
   }
 
+  // Generate modal test methods for sheet/fullScreenCover/web-view screens
+  const modalScreens = collectModalScreens(graph, edgePaths);
+  for (const [nodeId, { parentEdgePath, triggerEdge }] of modalScreens) {
+    const parentTaps = buildTaps(parentEdgePath, nodeMap, defaultTabTarget);
+    methods.push(generateModalMethod(nodeId, parentTaps, triggerEdge, screenshotsDir));
+  }
+
   if (methods.length === 0) return null;
 
   return generateTestFile(methods, screenshotsDir);
+}
+
+// ---------------------------------------------------------------------------
+// Modal screen collection
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect screens reachable only via modal edges (sheet, full-screen, web-view).
+ * Returns Map<nodeId, { parentEdgePath, triggerEdge }> where parentEdgePath is
+ * the BFS path to the source screen and triggerEdge is the modal-opening edge.
+ * Skips safari edges and nodes already reachable via regular BFS.
+ */
+function collectModalScreens(graph, edgePaths) {
+  const modalScreens = new Map();
+
+  for (const edge of graph.edges) {
+    if (!MODAL_EDGE_TYPES.has(edge.type)) continue;
+    if (!edgePaths.has(edge.source)) continue; // source not reachable via BFS
+    if (edgePaths.has(edge.target)) continue;  // already covered by regular BFS
+    if (modalScreens.has(edge.target)) continue; // already captured via another path
+
+    modalScreens.set(edge.target, {
+      parentEdgePath: edgePaths.get(edge.source),
+      triggerEdge: edge,
+    });
+  }
+
+  return modalScreens;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,9 +182,9 @@ function buildTaps(edgePath, nodeMap, defaultTabTarget) {
 // ---------------------------------------------------------------------------
 
 function generateMethod(nodeId, taps, screenshotsDir) {
-  const safeName = nodeId.replace(/[^a-zA-Z0-9]/g, "_");
+  const safeName = sanitizeFilename(nodeId);
   const escapedDir = swiftEscape(screenshotsDir);
-  const escapedId = swiftEscape(nodeId);
+  const escapedName = swiftEscape(safeName);
 
   const tapLines = taps.map((tap) => {
     if (tap.kind === "tab") {
@@ -159,8 +203,40 @@ function generateMethod(nodeId, taps, screenshotsDir) {
         let app = XCUIApplication()
         app.launch()
 ${tapLines.join("\n")}
-        Thread.sleep(forTimeInterval: 0.5)
-        writeScreenshot(name: "${escapedId}", to: "${escapedDir}")
+        Thread.sleep(forTimeInterval: 2.0)
+        writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
+    }`;
+}
+
+/**
+ * Generate a test method that navigates to a parent screen, taps the modal
+ * trigger, waits for the animation, then captures the modal screen.
+ */
+function generateModalMethod(nodeId, parentTaps, triggerEdge, screenshotsDir) {
+  const safeName = sanitizeFilename(nodeId);
+  const escapedDir = swiftEscape(screenshotsDir);
+  const escapedName = swiftEscape(safeName);
+  const waitTime = triggerEdge.type === "web-view" ? "4.0" : "2.0";
+
+  const lines = parentTaps.map((tap) => {
+    if (tap.kind === "tab") {
+      return `        tapTab("${swiftEscape(tap.candidates[0])}", in: app)`;
+    }
+    const lit = tap.candidates.map((c) => `"${swiftEscape(c)}"`).join(", ");
+    return `        tapElement(matching: [${lit}], in: app)`;
+  });
+
+  if (triggerEdge.label) {
+    lines.push(`        tapElement(matching: ["${swiftEscape(triggerEdge.label)}"], in: app)`);
+  }
+
+  return `
+    func testCapture_modal_${safeName}() {
+        let app = XCUIApplication()
+        app.launch()
+${lines.join("\n")}
+        Thread.sleep(forTimeInterval: ${waitTime})
+        writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
     }`;
 }
 
@@ -182,24 +258,71 @@ final class FlowMapCapture: XCTestCase {
 
     /// Tap a tab bar button by label.
     func tapTab(_ label: String, in app: XCUIApplication) {
-        let btn = app.tabBars.buttons[label]
-        if btn.waitForExistence(timeout: 3) { btn.tap() }
-        Thread.sleep(forTimeInterval: 0.4)
+        // Exact match
+        let exact = app.tabBars.buttons[label]
+        if exact.waitForExistence(timeout: 3) {
+            exact.tap()
+            Thread.sleep(forTimeInterval: 1.0)
+            return
+        }
+        // Contains fallback (handles icon+text accessibility labels)
+        let pred = NSPredicate(format: "label CONTAINS[c] %@", label)
+        let fuzzy = app.tabBars.buttons.matching(pred).firstMatch
+        if fuzzy.waitForExistence(timeout: 1) {
+            fuzzy.tap()
+            Thread.sleep(forTimeInterval: 1.0)
+        }
     }
 
-    /// Find any element matching one of the candidate labels and tap it.
-    /// Tries candidates in order, stopping at the first found.
-    func tapElement(matching candidates: [String], in app: XCUIApplication) {
+    /// Find any tappable element matching one of the candidate labels and tap it.
+    /// Prioritises interactive elements (buttons, cells) over static text to avoid
+    /// accidentally tapping section headers or navigation titles.
+    @discardableResult
+    func tapElement(matching candidates: [String], in app: XCUIApplication) -> Bool {
         for candidate in candidates {
-            let pred = NSPredicate(format: "label ==[c] %@", candidate)
-            let el = app.descendants(matching: .any).matching(pred).firstMatch
-            if el.waitForExistence(timeout: 3) {
-                el.tap()
-                Thread.sleep(forTimeInterval: 0.4)
-                return
+            // 1. Button — most common for navigation links
+            let btn = app.buttons[candidate]
+            if btn.waitForExistence(timeout: 3) {
+                btn.tap()
+                Thread.sleep(forTimeInterval: 1.0)
+                return true
             }
+            // 2. List / table cell
+            let cell = app.cells[candidate]
+            if cell.waitForExistence(timeout: 1) {
+                cell.tap()
+                Thread.sleep(forTimeInterval: 1.0)
+                return true
+            }
+            // 3. Accessibility identifier
+            let identPred = NSPredicate(format: "identifier ==[c] %@", candidate)
+            let identEl = app.descendants(matching: .any).matching(identPred).firstMatch
+            if identEl.waitForExistence(timeout: 1) {
+                identEl.tap()
+                Thread.sleep(forTimeInterval: 1.0)
+                return true
+            }
+            // 4. Scroll and retry buttons/cells (up to 5 swipes, then restore)
+            var swiped = 0
+            for _ in 0..<5 {
+                app.swipeUp()
+                swiped += 1
+                if btn.waitForExistence(timeout: 1) {
+                    btn.tap()
+                    Thread.sleep(forTimeInterval: 1.0)
+                    return true
+                }
+                if cell.waitForExistence(timeout: 1) {
+                    cell.tap()
+                    Thread.sleep(forTimeInterval: 1.0)
+                    return true
+                }
+            }
+            // Restore scroll position so subsequent taps/screenshots aren't affected
+            for _ in 0..<swiped { app.swipeDown() }
         }
         // No candidate found — leave the screen as-is and continue.
+        return false
     }
 
     /// Write the current screen as a PNG to the given directory.
@@ -223,4 +346,4 @@ function swiftEscape(s) {
     .replace(/\n/g, "\\n");
 }
 
-module.exports = { generateXCUITest };
+module.exports = { generateXCUITest, sanitizeFilename };

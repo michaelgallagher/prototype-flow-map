@@ -240,17 +240,50 @@ function extractPushLinks(content, result) {
 }
 
 /**
+ * Return the button label that triggers a boolean state var (isPresented binding).
+ * Searches for Button("Label") { stateVar = true } or stateVar.toggle() patterns.
+ */
+function findTriggerLabel(content, stateVarName) {
+  if (!stateVarName) return null;
+  const assignRe = new RegExp(
+    `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*\\b${stateVarName}\\s*=\\s*true`
+  );
+  const m1 = content.match(assignRe);
+  if (m1) return m1[1];
+  const toggleRe = new RegExp(
+    `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*\\b${stateVarName}\\.toggle\\(\\)`
+  );
+  const m2 = content.match(toggleRe);
+  return m2 ? m2[1] : null;
+}
+
+/**
+ * Return the button label that sets an item binding to a specific enum case.
+ * Searches for Button("Label") { itemVar = .caseName } patterns.
+ */
+function findItemTriggerLabel(content, itemVar, caseName) {
+  if (!itemVar || !caseName) return null;
+  const re = new RegExp(
+    `Button\\s*\\(\\s*"([^"]+)"[^)]*\\)[^{]*\\{[^}]*\\b${itemVar}\\s*=\\s*\\.${caseName}`
+  );
+  const m = content.match(re);
+  return m ? m[1] : null;
+}
+
+/**
  * Extract modal sheet presentations:
  *   .sheet(isPresented: $var) { ... }
  *   .sheet(item: $var) { item in ... }
  */
 function extractSheets(content, result) {
-  const sheetRe = /\.sheet\s*\(\s*(?:isPresented|item)\s*:[^)]*\)/g;
+  const sheetRe = /\.sheet\s*\(\s*(isPresented|item)\s*:\s*\$(\w+)[^)]*\)/g;
   let match;
   while ((match = sheetRe.exec(content)) !== null) {
+    const isItem = match[1] === "item";
+    const stateVar = match[2];
     const closure = findNextClosure(content, match.index + match[0].length);
     if (!closure) continue;
-    extractPresentedContent(closure.content, result, "sheet");
+    extractPresentedContent(closure.content, result, "sheet", content, stateVar, isItem);
   }
 }
 
@@ -260,12 +293,14 @@ function extractSheets(content, result) {
  *   .fullScreenCover(item: $var) { item in ... }
  */
 function extractFullScreenCovers(content, result) {
-  const fscRe = /\.fullScreenCover\s*\(\s*(?:isPresented|item)\s*:[^)]*\)/g;
+  const fscRe = /\.fullScreenCover\s*\(\s*(isPresented|item)\s*:\s*\$(\w+)[^)]*\)/g;
   let match;
   while ((match = fscRe.exec(content)) !== null) {
+    const isItem = match[1] === "item";
+    const stateVar = match[2];
     const closure = findNextClosure(content, match.index + match[0].length);
     if (!closure) continue;
-    extractPresentedContent(closure.content, result, "full-screen");
+    extractPresentedContent(closure.content, result, "full-screen", content, stateVar, isItem);
   }
 }
 
@@ -273,7 +308,7 @@ function extractFullScreenCovers(content, result) {
  * Shared logic for sheet / fullScreenCover closure content.
  * Checks for web views first, then looks for native destinations.
  */
-function extractPresentedContent(closureContent, result, edgeType) {
+function extractPresentedContent(closureContent, result, edgeType, fullContent, stateVar, isItem) {
   // WebView with a literal URL string
   const webViewMatch = closureContent.match(
     /\bWebView\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/
@@ -292,14 +327,30 @@ function extractPresentedContent(closureContent, result, edgeType) {
     return;
   }
 
-  // For switch-based items (e.g. activeCover switch), find all destination views
-  // If there are case branches, include them all
+  // For switch-based items, extract (caseName, target) pairs with per-case trigger labels
   const hasSwitchCases = /\bcase\s+\./.test(closureContent);
   if (hasSwitchCases) {
-    const targets = findAllDestinationViews(closureContent);
-    for (const target of targets) {
-      if (edgeType === "sheet") result.sheets.push({ target });
-      else result.fullScreenCovers.push({ target });
+    const caseRe = /\bcase\s+\.(\w+)\s*:\s*\n?\s*([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+    let caseMatch;
+    const seen = new Set();
+    while ((caseMatch = caseRe.exec(closureContent)) !== null) {
+      const caseName = caseMatch[1];
+      const target = caseMatch[2];
+      if (seen.has(target)) continue;
+      seen.add(target);
+      const triggerLabel = isItem && fullContent
+        ? findItemTriggerLabel(fullContent, stateVar, caseName)
+        : null;
+      if (edgeType === "sheet") result.sheets.push({ target, triggerLabel });
+      else result.fullScreenCovers.push({ target, triggerLabel });
+    }
+    // Fallback if case pattern didn't match (e.g. multi-line cases)
+    if (seen.size === 0) {
+      const targets = findAllDestinationViews(closureContent);
+      for (const target of targets) {
+        if (edgeType === "sheet") result.sheets.push({ target, triggerLabel: null });
+        else result.fullScreenCovers.push({ target, triggerLabel: null });
+      }
     }
     return;
   }
@@ -307,8 +358,11 @@ function extractPresentedContent(closureContent, result, edgeType) {
   // Otherwise find the first non-container destination view
   const target = findFirstDestinationView(closureContent);
   if (target) {
-    if (edgeType === "sheet") result.sheets.push({ target });
-    else result.fullScreenCovers.push({ target });
+    const triggerLabel = fullContent && !isItem
+      ? findTriggerLabel(fullContent, stateVar)
+      : null;
+    if (edgeType === "sheet") result.sheets.push({ target, triggerLabel });
+    else result.fullScreenCovers.push({ target, triggerLabel });
   }
 }
 
@@ -372,8 +426,8 @@ function extractTabChildren(content, result) {
     const tiClosure = findNextClosure(tabContent, tiMatch.index + tiMatch[0].length - 1);
     if (!tiClosure) continue;
 
-    // Find Label("...") inside the tabItem closure
-    const labelMatch = tiClosure.content.match(/\bLabel\s*\(\s*"([^"]+)"/);
+    // Find Label("...") or Text("...") inside the tabItem closure
+    const labelMatch = tiClosure.content.match(/\b(?:Label|Text)\s*\(\s*"([^"]+)"/);
     if (!labelMatch) continue;
     const label = labelMatch[1];
 

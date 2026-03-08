@@ -2,7 +2,7 @@ const { execSync, spawnSync } = require("child_process");
 const { globSync } = require("glob");
 const path = require("path");
 const fs = require("fs");
-const { generateXCUITest } = require("./xctest-generator");
+const { generateXCUITest, sanitizeFilename } = require("./xctest-generator");
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -115,9 +115,10 @@ async function crawlAndScreenshotIos(graph, options) {
   let captured = 0;
 
   for (const node of graph.nodes) {
-    const srcPath = path.join(tempDir, `${node.id}.png`);
+    const fileId = sanitizeFilename(node.id);
+    const srcPath = path.join(tempDir, `${fileId}.png`);
     if (fs.existsSync(srcPath)) {
-      const destFilename = `${node.id}.png`;
+      const destFilename = `${fileId}.png`;
       fs.copyFileSync(srcPath, path.join(screenshotsOutputDir, destFilename));
       node.screenshot = `screenshots/${destFilename}`;
       captured++;
