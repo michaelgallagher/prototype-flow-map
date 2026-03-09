@@ -26,6 +26,7 @@ async function generate(options) {
     port,
     viewport,
     screenshots,
+    runtimeCrawl = false,
     basePath,
     exclude,
     from,
@@ -40,12 +41,12 @@ async function generate(options) {
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
 
   // Step 1: Scan for all template files
-  console.log("1\uFE0F\u20E3  Scanning templates...");
+  console.log("1️⃣  Scanning templates...");
   const templateFiles = scanTemplates(prototypePath);
   console.log(`   Found ${templateFiles.length} templates`);
 
   // Step 2: Parse each template for links, forms, conditionals
-  console.log("2\uFE0F\u20E3  Parsing templates for routes and conditions...");
+  console.log("2️⃣  Parsing templates for routes and conditions...");
   const templateData = [];
   for (const file of templateFiles) {
     const parsed = parseTemplate(file, prototypePath);
@@ -54,13 +55,13 @@ async function generate(options) {
   console.log(`   Parsed ${templateData.length} page templates`);
 
   // Step 3: Parse explicit route handlers
-  console.log("3\uFE0F\u20E3  Parsing Express route handlers...");
+  console.log("3️⃣  Parsing Express route handlers...");
   const explicitRoutes = parseRoutes(prototypePath);
   console.log(`   Found ${explicitRoutes.length} explicit route handlers`);
 
   // Step 4: Build the graph from static analysis
-  console.log("4\uFE0F\u20E3  Building flow graph...");
-  let graph = buildGraph(templateData, explicitRoutes, basePath);
+  console.log("4️⃣  Building flow graph...");
+  let graph = buildGraph(templateData, explicitRoutes, basePath, exclude, []);
   if (exclude) {
     graph = filterByExclusion(graph, exclude);
   }
@@ -80,25 +81,89 @@ async function generate(options) {
 
   // Step 5: Crawl and screenshot (if enabled)
   if (screenshots) {
-    console.log(
-      "5\uFE0F\u20E3  Crawling prototype and capturing screenshots...",
-    );
+    console.log("5️⃣  Crawling prototype and capturing screenshots...");
     graph = await crawlAndScreenshot(graph, {
       prototypePath,
       port,
       viewport,
       outputDir: mapOutputDir,
       startUrl,
+      runtimeCrawl,
     });
+
+    if (
+      runtimeCrawl &&
+      Array.isArray(graph.runtimeEdges) &&
+      graph.runtimeEdges.length > 0
+    ) {
+      const runtimeEdges = graph.runtimeEdges;
+      const crawlStats = graph.crawlStats;
+      const nodeMetadata = new Map(
+        graph.nodes.map((node) => [
+          node.urlPath,
+          {
+            screenshot: node.screenshot,
+            actualTitle: node.actualTitle,
+            isStartNode: node.isStartNode,
+            startOrder: node.startOrder,
+          },
+        ]),
+      );
+
+      graph = buildGraph(
+        templateData,
+        explicitRoutes,
+        basePath,
+        exclude,
+        runtimeEdges,
+      );
+
+      graph.runtimeEdges = runtimeEdges;
+      graph.crawlStats = crawlStats;
+
+      graph.nodes.forEach((node) => {
+        const existing = nodeMetadata.get(node.urlPath);
+        if (!existing) return;
+        if (existing.screenshot) node.screenshot = existing.screenshot;
+        if (existing.actualTitle) node.actualTitle = existing.actualTitle;
+        if (existing.isStartNode) node.isStartNode = existing.isStartNode;
+        if (existing.startOrder !== undefined) {
+          node.startOrder = existing.startOrder;
+        }
+      });
+
+      if (exclude) {
+        graph = filterByExclusion(graph, exclude);
+      }
+      if (from) {
+        graph = filterByReachability(graph, from);
+      }
+
+      if (graph.crawlStats) {
+        graph.crawlStats.runtimeEdgesMerged = graph.runtimeEdges.length;
+      }
+    }
+
     console.log(
       `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
     );
+
+    if (runtimeCrawl && graph.crawlStats) {
+      console.log(
+        `   Runtime crawl: ${graph.crawlStats.pagesVisited || 0} pages visited, ` +
+          `${graph.crawlStats.runtimeLinksExtracted || 0} links extracted, ` +
+          `${graph.crawlStats.runtimeEdgesDiscovered || 0} runtime edges discovered`,
+      );
+      console.log(
+        `   Updated graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
+      );
+    }
   } else {
-    console.log("5\uFE0F\u20E3  Skipping screenshots (--no-screenshots)");
+    console.log("5️⃣  Skipping screenshots (--no-screenshots)");
   }
 
   // Step 6: Build the viewer
-  console.log("6\uFE0F\u20E3  Building interactive viewer...");
+  console.log("6️⃣  Building interactive viewer...");
   await buildViewer(graph, mapOutputDir, screenshots, viewport, {
     name,
     rootOutputDir: name ? outputDir : null,
@@ -130,6 +195,7 @@ async function generate(options) {
       nodeCount: graph.nodes.length,
       edgeCount: graph.edges.length,
       hasScreenshots: screenshots,
+      runtimeCrawl,
     };
     fs.mkdirSync(mapOutputDir, { recursive: true });
     fs.writeFileSync(
@@ -137,7 +203,7 @@ async function generate(options) {
       JSON.stringify(meta, null, 2),
     );
 
-    console.log("7\uFE0F\u20E3  Building collection index...");
+    console.log("7️⃣  Building collection index...");
     buildIndex(outputDir);
     console.log("   Collection index built");
   }
@@ -167,7 +233,9 @@ async function generateNative(options) {
   const config = loadConfig(prototypePath);
   let graph = buildSwiftGraph(parsedViews);
   graph = applyExclusions(graph, config.exclude);
-  console.log(`   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`);
+  console.log(
+    `   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
+  );
   if (config.exclude.length > 0) {
     console.log(`   Excluded: ${config.exclude.join(", ")}`);
   }
@@ -175,8 +243,14 @@ async function generateNative(options) {
   // Step 4: Capture screenshots via XCUITest (if enabled)
   if (screenshots) {
     console.log("4️⃣  Capturing screenshots via XCUITest...");
-    graph = await crawlAndScreenshotIos(graph, { prototypePath, outputDir: mapOutputDir, overrides: config.overrides });
-    console.log(`   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`);
+    graph = await crawlAndScreenshotIos(graph, {
+      prototypePath,
+      outputDir: mapOutputDir,
+      overrides: config.overrides,
+    });
+    console.log(
+      `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
+    );
   } else {
     console.log("4️⃣  Skipping screenshots (--no-screenshots)");
   }

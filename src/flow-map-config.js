@@ -8,18 +8,26 @@ const CONFIG_FILENAMES = [".flow-map.json", "flow-map.config.json"];
  * Looks for .flow-map.json or flow-map.config.json.
  * Returns a validated config object, or an empty default if no file found.
  *
- * Config shape:
+ * Web config shape:
  * {
- *   exclude: ["ViewNameA", "ViewNameB"],         // nodes to remove from the graph
+ *   runtimeCrawl: true,
+ *   runtimeCrawlOptions: {
+ *     enabled: true
+ *   }
+ * }
+ *
+ * iOS config shape:
+ * {
+ *   exclude: ["ViewNameA", "ViewNameB"],
  *   overrides: {
  *     "ViewName": {
  *       steps: [
- *         "tap:Label text",             // tap element with this label
- *         "tapTab:Label:index",         // tap a tab bar button
- *         "tapContaining:partial text", // tap button whose label CONTAINS text
- *         "tapCell:0",                  // tap cell at index
- *         "swipeLeft:firstCell",        // swipe-left on first cell
- *         "wait:2.0"                    // sleep for N seconds
+ *         "tap:Label text",
+ *         "tapTab:Label:index",
+ *         "tapContaining:partial text",
+ *         "tapCell:0",
+ *         "swipeLeft:firstCell",
+ *         "wait:2.0"
  *       ]
  *     }
  *   }
@@ -44,7 +52,14 @@ function loadConfig(prototypePath) {
 }
 
 function defaultConfig() {
-  return { exclude: [], overrides: {} };
+  return {
+    exclude: [],
+    overrides: {},
+    runtimeCrawl: false,
+    runtimeCrawlOptions: {
+      enabled: false,
+    },
+  };
 }
 
 function validateConfig(raw) {
@@ -61,6 +76,22 @@ function validateConfig(raw) {
           steps: override.steps.filter((s) => typeof s === "string"),
         };
       }
+    }
+  }
+
+  if (typeof raw.runtimeCrawl === "boolean") {
+    config.runtimeCrawl = raw.runtimeCrawl;
+    config.runtimeCrawlOptions.enabled = raw.runtimeCrawl;
+  }
+
+  if (
+    raw.runtimeCrawlOptions &&
+    typeof raw.runtimeCrawlOptions === "object" &&
+    !Array.isArray(raw.runtimeCrawlOptions)
+  ) {
+    if (typeof raw.runtimeCrawlOptions.enabled === "boolean") {
+      config.runtimeCrawlOptions.enabled = raw.runtimeCrawlOptions.enabled;
+      config.runtimeCrawl = raw.runtimeCrawlOptions.enabled;
     }
   }
 

@@ -41,6 +41,11 @@ program
     "Skip screenshot capture (faster, template analysis only)",
   )
   .option(
+    "--runtime-crawl",
+    "Supplement static analysis with runtime DOM link extraction during crawl",
+    false,
+  )
+  .option(
     "--base-path <path>",
     "Only map pages under this path (e.g. /pages)",
     "",
@@ -93,9 +98,7 @@ program
 
     const pdfMode = String(options.pdfMode || "canvas").toLowerCase();
     if (!new Set(["canvas", "snapshot"]).has(pdfMode)) {
-      console.error(
-        `\n❌ Error: --pdf-mode must be "canvas" or "snapshot"\n`,
-      );
+      console.error(`\n❌ Error: --pdf-mode must be "canvas" or "snapshot"\n`);
       process.exit(1);
     }
 
@@ -135,6 +138,7 @@ program
             height: parseInt(options.height, 10),
           },
           screenshots: options.screenshots,
+          runtimeCrawl: Boolean(options.runtimeCrawl),
           basePath: options.basePath,
           exclude: options.exclude,
           from: options.from,

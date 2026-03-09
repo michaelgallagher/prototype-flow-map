@@ -54,12 +54,68 @@ function matchesExclude(urlPath, exclude) {
 }
 
 /**
+ * Minimal Phase 1 URL normalization for runtime/static edge keying.
+ * Conservative by design:
+ * - strips fragments
+ * - collapses duplicate slashes
+ * - normalizes trailing slash (except root)
+ * - sorts query params if present
+ *
+ * This intentionally does NOT canonicalize IDs or drop query params yet.
+ */
+function normalizeUrlPath(urlPath) {
+  if (!urlPath) return "/";
+
+  let normalized = String(urlPath).trim();
+
+  // If an absolute URL slips through, normalize to pathname/search/hash first
+  try {
+    if (/^https?:\/\//i.test(normalized)) {
+      const absolute = new URL(normalized);
+      normalized = `${absolute.pathname}${absolute.search}${absolute.hash}`;
+    }
+  } catch {
+    // keep original string if URL parsing fails
+  }
+
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(normalized, "http://runtime-local");
+  } catch {
+    return normalized;
+  }
+
+  let pathname = parsed.pathname.replace(/\/{2,}/g, "/");
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    pathname = pathname.replace(/\/+$/, "");
+  }
+  if (!pathname) pathname = "/";
+
+  const params = Array.from(parsed.searchParams.entries()).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  const sortedSearch = new URLSearchParams(params).toString();
+
+  return `${pathname}${sortedSearch ? `?${sortedSearch}` : ""}`;
+}
+
+/**
  * Build a directed graph from parsed template data and route handlers.
  *
  * Nodes = pages (screens)
  * Edges = navigation links between pages
  */
-function buildGraph(templateData, explicitRoutes, basePath, exclude) {
+function buildGraph(
+  templateData,
+  explicitRoutes,
+  basePath,
+  exclude,
+  runtimeEdges = [],
+) {
   // We intentionally do NOT filter nodes by `exclude` at build time any more.
   // The graph is built in full so that filterByExclusion can later perform a
   // proper subtree-aware prune (removing excluded roots AND any nodes that are
@@ -88,10 +144,11 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
       continue;
     }
 
+    const normalizedUrlPath = normalizeUrlPath(tpl.urlPath);
     const node = {
-      id: tpl.urlPath,
-      label: tpl.pageTitle || tpl.urlPath.split("/").pop() || "Home",
-      urlPath: tpl.urlPath,
+      id: normalizedUrlPath,
+      label: tpl.pageTitle || normalizedUrlPath.split("/").pop() || "Home",
+      urlPath: normalizedUrlPath,
       hub: tpl.hub || null,
       filePath: tpl.relativePath,
       screenshot: null,
@@ -99,7 +156,7 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
     };
 
     nodes.push(node);
-    nodeMap.set(tpl.urlPath, node);
+    nodeMap.set(normalizedUrlPath, node);
   }
 
   // Step 2: Create edges from links, forms, conditionals, and JS redirects
@@ -108,26 +165,30 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
       continue;
     }
 
+    const source = normalizeUrlPath(tpl.urlPath);
+
     // Regular links
     for (const link of tpl.links) {
-      addEdge(edges, tpl.urlPath, link.target, {
+      addEdge(edges, source, normalizeUrlPath(link.target), {
         type: "link",
         label: link.label || "",
+        provenance: "static",
       });
     }
 
     // Form actions
     for (const form of tpl.formActions) {
       const target = resolveFormTarget(
-        form.target,
+        normalizeUrlPath(form.target),
         form.method,
         explicitPostHandlers,
         hasCatchAllPost,
       );
-      addEdge(edges, tpl.urlPath, target, {
+      addEdge(edges, source, target, {
         type: "form",
         label: form.label || "Submit",
         method: form.method,
+        provenance: "static",
       });
     }
 
@@ -136,26 +197,28 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
       const target =
         cond.type === "form"
           ? resolveFormTarget(
-              cond.target,
+              normalizeUrlPath(cond.target),
               cond.method || "POST",
               explicitPostHandlers,
               hasCatchAllPost,
             )
-          : cond.target;
+          : normalizeUrlPath(cond.target);
 
-      addEdge(edges, tpl.urlPath, target, {
+      addEdge(edges, source, target, {
         type: "conditional",
         label: cond.label || "",
         condition: cond.condition,
         method: cond.method,
+        provenance: "static",
       });
     }
 
     // JS redirects
     for (const redirect of tpl.jsRedirects) {
-      addEdge(edges, tpl.urlPath, redirect.target, {
+      addEdge(edges, source, normalizeUrlPath(redirect.target), {
         type: "redirect",
         label: redirect.label || "Redirect",
+        provenance: "static",
       });
     }
 
@@ -166,23 +229,56 @@ function buildGraph(templateData, explicitRoutes, basePath, exclude) {
   // Step 3: Add edges from explicit route handlers
   for (const route of explicitRoutes) {
     if (route.isCatchAll) continue;
+    const source = normalizeUrlPath(route.path);
+
     for (const redirect of route.redirects) {
-      addEdge(edges, route.path, redirect, {
+      addEdge(edges, source, normalizeUrlPath(redirect), {
         type: "redirect",
         label: `${route.method} handler → redirect`,
         method: route.method,
+        provenance: "static",
       });
     }
     for (const render of route.renders) {
-      addEdge(edges, route.path, render, {
+      addEdge(edges, source, normalizeUrlPath(render), {
         type: "render",
         label: `${route.method} handler → render`,
         method: route.method,
+        provenance: "static",
       });
     }
   }
 
-  // Deduplicate edges
+  // Step 4: Merge runtime-discovered edges
+  for (const runtimeEdge of runtimeEdges) {
+    if (!runtimeEdge || !runtimeEdge.from || !runtimeEdge.to) continue;
+
+    const source = normalizeUrlPath(runtimeEdge.from);
+    const target = normalizeUrlPath(runtimeEdge.to);
+
+    if (
+      !matchesBasePaths(source, basePath) ||
+      !matchesBasePaths(target, basePath)
+    ) {
+      continue;
+    }
+
+    addEdge(edges, source, target, {
+      type: runtimeEdge.kind === "form" ? "form" : "link",
+      label: runtimeEdge.label || "",
+      method: runtimeEdge.method,
+      provenance: "runtime",
+      sourceKind: runtimeEdge.kind || "anchor",
+    });
+  }
+
+  // Ensure runtime-only nodes are represented
+  for (const edge of edges) {
+    ensureNode(nodeMap, nodes, edge.source);
+    ensureNode(nodeMap, nodes, edge.target);
+  }
+
+  // Deduplicate edges with provenance-aware merge
   const uniqueEdges = deduplicateEdges(edges);
 
   return { nodes, edges: uniqueEdges };
@@ -215,6 +311,9 @@ function resolveFormTarget(
 }
 
 function addEdge(edges, source, target, metadata) {
+  source = normalizeUrlPath(source);
+  target = normalizeUrlPath(target);
+
   // Don't add self-loops unless they're meaningful
   if (source === target && metadata.type !== "conditional") return;
 
@@ -226,13 +325,80 @@ function addEdge(edges, source, target, metadata) {
 }
 
 function deduplicateEdges(edges) {
-  const seen = new Set();
-  return edges.filter((edge) => {
-    const key = `${edge.source}|${edge.target}|${edge.type}|${edge.condition || ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const merged = new Map();
+
+  for (const edge of edges) {
+    const key = edgeKey(edge);
+    const existing = merged.get(key);
+
+    if (!existing) {
+      merged.set(key, { ...edge });
+      continue;
+    }
+
+    existing.provenance = mergeProvenance(existing.provenance, edge.provenance);
+
+    if (!existing.label && edge.label) {
+      existing.label = edge.label;
+    }
+
+    if (!existing.method && edge.method) {
+      existing.method = edge.method;
+    }
+
+    if (!existing.condition && edge.condition) {
+      existing.condition = edge.condition;
+    }
+
+    if (!existing.sourceKind && edge.sourceKind) {
+      existing.sourceKind = edge.sourceKind;
+    }
+
+    // Preserve explicit signal for older viewer/debugging compatibility
+    existing.discoveredByCrawler =
+      Boolean(existing.discoveredByCrawler) || edge.provenance === "runtime";
+  }
+
+  return Array.from(merged.values());
+}
+
+function edgeKey(edge) {
+  return [
+    normalizeUrlPath(edge.source),
+    normalizeUrlPath(edge.target),
+    edge.type || "",
+    edge.method || "",
+    edge.condition || "",
+  ].join("|");
+}
+
+function mergeProvenance(a = "static", b = "static") {
+  if (a === b) return a;
+  if (a === "both" || b === "both") return "both";
+  return "both";
+}
+
+function ensureNode(nodeMap, nodes, urlPath) {
+  const normalized = normalizeUrlPath(urlPath);
+  if (nodeMap.has(normalized)) return;
+
+  const label =
+    normalized === "/"
+      ? "Home"
+      : normalized.split("/").filter(Boolean).pop() || "Home";
+
+  const node = {
+    id: normalized,
+    label,
+    urlPath: normalized,
+    hub: null,
+    filePath: null,
+    screenshot: null,
+    type: "page",
+  };
+
+  nodeMap.set(normalized, node);
+  nodes.push(node);
 }
 
 /**
@@ -318,139 +484,82 @@ function filterByExclusion(graph, exclude) {
 
   // A node in the subtree is removable only if ALL of its incoming forward
   // edges originate from within the subtree itself (i.e. no outside entry point).
-  // Exclude roots are always removed regardless of incoming edges.
-  const toRemove = new Set();
+  const removable = new Set();
 
-  for (const nodeId of subtree) {
-    if (excludeRootIds.has(nodeId)) {
-      toRemove.add(nodeId);
-      continue;
-    }
-    const incomers = reverseAdj[nodeId] || [];
-    const hasOutsideIncomer = incomers.some((src) => !subtree.has(src));
-    if (!hasOutsideIncomer) {
-      toRemove.add(nodeId);
-    }
-  }
+  let changed = true;
+  while (changed) {
+    changed = false;
 
-  const keptNodes = graph.nodes.filter((n) => !toRemove.has(n.id));
-  const keptEdges = graph.edges.filter(
-    (e) => !toRemove.has(e.source) && !toRemove.has(e.target),
-  );
+    for (const nodeId of subtree) {
+      if (removable.has(nodeId)) continue;
 
-  const removedCount = toRemove.size;
-  const rootList = [...excludeRootIds].join(", ");
-  console.log(`   Excluded ${removedCount} node(s) rooted at: ${rootList}`);
+      const incoming = reverseAdj[nodeId] || [];
 
-  return { nodes: keptNodes, edges: keptEdges };
-}
+      // Exclude roots are always removable by definition
+      if (excludeRootIds.has(nodeId)) {
+        removable.add(nodeId);
+        changed = true;
+        continue;
+      }
 
-function categoriseNode(tpl) {
-  if (tpl.urlPath === "/" || tpl.urlPath.endsWith("/index")) return "index";
-  if (tpl.extendsLayout === "layout-app-splash-screen.html") return "splash";
-  if (tpl.pageTitle && /confirm/i.test(tpl.pageTitle)) return "confirmation";
-  if (tpl.pageTitle && /error/i.test(tpl.pageTitle)) return "error";
-  if (tpl.pageTitle && /check/i.test(tpl.pageTitle)) return "check-answers";
-
-  // Has forms = question page
-  if (
-    tpl.formActions.length > 0 ||
-    tpl.conditionalLinks.some((l) => l.type === "form")
-  ) {
-    return "question";
-  }
-
-  return "content";
-}
-
-/**
- * Filter a graph to only nodes reachable from one or more starting pages,
- * following forward navigation edges (not back-links).
- * Accepts a comma-separated string of start pages.
- * When multiple start pages are given, synthetic "nav" edges connect them
- * so they appear related in the viewer.
- */
-function filterByReachability(graph, fromPages) {
-  if (!fromPages) return graph;
-
-  const startPageIds = [
-    ...new Set(
-      fromPages
-        .split(",")
-        .map((p) => p.trim())
-        .filter(Boolean),
-    ),
-  ];
-
-  if (startPageIds.length === 0) return graph;
-
-  // Resolve each start page to a graph node
-  const validStartNodes = [];
-  for (const pageId of startPageIds) {
-    const node = graph.nodes.find(
-      (n) => n.id === pageId || n.urlPath === pageId,
-    );
-    if (!node) {
-      console.warn(
-        `⚠️  Warning: --from page "${pageId}" not found in graph — skipping`,
+      const hasOutsideIncoming = incoming.some(
+        (src) => !subtree.has(src) || !removable.has(src),
       );
-    } else {
-      validStartNodes.push(node);
-    }
-  }
 
-  if (validStartNodes.length === 0) {
-    console.warn(
-      `⚠️  Warning: none of the --from pages were found in graph — showing full graph`,
-    );
-    return graph;
-  }
-
-  // Build adjacency list and BFS from all valid start nodes
-  const adj = buildAdjacency(graph);
-  const reachable = collectReachable(
-    validStartNodes.map((n) => n.id),
-    adj,
-  );
-
-  // Filter nodes and edges to reachable set
-  const filteredNodes = graph.nodes.filter((n) => reachable.has(n.id));
-  const filteredEdges = graph.edges.filter(
-    (e) => reachable.has(e.source) && reachable.has(e.target),
-  );
-
-  // Mark start nodes and preserve --from order for the viewer
-  const startNodeOrder = new Map(validStartNodes.map((n, i) => [n.id, i]));
-  filteredNodes.forEach((n) => {
-    if (startNodeOrder.has(n.id)) {
-      n.isStartNode = true;
-      n.startOrder = startNodeOrder.get(n.id);
-    }
-  });
-
-  // Add synthetic "nav" edges between start pages (all-to-all, bidirectional)
-  if (validStartNodes.length > 1) {
-    for (let i = 0; i < validStartNodes.length; i++) {
-      for (let j = i + 1; j < validStartNodes.length; j++) {
-        const a = validStartNodes[i].id;
-        const b = validStartNodes[j].id;
-        filteredEdges.push({
-          source: a,
-          target: b,
-          type: "nav",
-          label: "Global nav",
-        });
-        filteredEdges.push({
-          source: b,
-          target: a,
-          type: "nav",
-          label: "Global nav",
-        });
+      if (!hasOutsideIncoming) {
+        removable.add(nodeId);
+        changed = true;
       }
     }
   }
 
+  const filteredNodes = graph.nodes.filter((n) => !removable.has(n.id));
+  const keptNodeIds = new Set(filteredNodes.map((n) => n.id));
+  const filteredEdges = graph.edges.filter(
+    (e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target),
+  );
+
   return { nodes: filteredNodes, edges: filteredEdges };
 }
 
-module.exports = { buildGraph, filterByExclusion, filterByReachability };
+/**
+ * Keep only nodes reachable from the given comma-separated starting pages.
+ */
+function filterByReachability(graph, from) {
+  if (!from) return graph;
+
+  const startIds = from
+    .split(",")
+    .map((p) => normalizeUrlPath(p.trim()))
+    .filter(Boolean);
+
+  if (startIds.length === 0) return graph;
+
+  const adj = buildAdjacency(graph);
+  const reachable = collectReachable(startIds, adj);
+
+  const filteredNodes = graph.nodes.filter((n) => reachable.has(n.id));
+  const keptNodeIds = new Set(filteredNodes.map((n) => n.id));
+  const filteredEdges = graph.edges.filter(
+    (e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target),
+  );
+
+  return { nodes: filteredNodes, edges: filteredEdges };
+}
+
+function categoriseNode(tpl) {
+  const path = tpl.urlPath || "";
+
+  if (path === "/" || path === "/index") return "start";
+  if (tpl.hub) return "hub";
+  if (tpl.formActions && tpl.formActions.length > 0) return "form";
+  if (tpl.links && tpl.links.length > 3) return "hub";
+  return "page";
+}
+
+module.exports = {
+  buildGraph,
+  filterByExclusion,
+  filterByReachability,
+  normalizeUrlPath,
+};
