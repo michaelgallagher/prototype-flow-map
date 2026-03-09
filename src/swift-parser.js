@@ -152,6 +152,24 @@ function extractClosureAt(source, pos) {
   return null;
 }
 
+/**
+ * Find the matching `)` for a `(` at `pos`, handling nested parens and braces.
+ * Returns the index of the closing `)`, or -1 if not found.
+ */
+function findMatchingParen(source, pos) {
+  let parenDepth = 0;
+  let braceDepth = 0;
+  for (let i = pos; i < source.length; i++) {
+    if (source[i] === "(") parenDepth++;
+    else if (source[i] === ")") {
+      parenDepth--;
+      if (parenDepth === 0) return i;
+    } else if (source[i] === "{") braceDepth++;
+    else if (source[i] === "}") braceDepth--;
+  }
+  return -1;
+}
+
 // ---------------------------------------------------------------------------
 // View name extraction
 // ---------------------------------------------------------------------------
@@ -161,7 +179,7 @@ function extractClosureAt(source, pos) {
  * not a container/wrapper and not a web view type.
  */
 function findFirstDestinationView(content) {
-  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller|Sheet))\s*\(/g;
   let match;
   while ((match = regex.exec(content)) !== null) {
     const name = match[1];
@@ -176,7 +194,7 @@ function findFirstDestinationView(content) {
  * Find all distinct non-container, non-web view instantiations in a string.
  */
 function findAllDestinationViews(content) {
-  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+  const regex = /\b([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller|Sheet))\s*\(/g;
   const seen = new Set();
   let match;
   while ((match = regex.exec(content)) !== null) {
@@ -257,6 +275,27 @@ function extractPushLinks(content, result) {
         .replace(/^./, (c) => c.toUpperCase());
       result.pushLinks.push({ target, label });
     }
+  }
+
+  // NHSNavigationButton(title: "...", ...) { DestView() }
+  // The destination view is in the trailing closure after the closing paren.
+  const nhsNavBtnRe = /\bNHSNavigationButton\s*\(/g;
+  while ((match = nhsNavBtnRe.exec(content)) !== null) {
+    // Extract title from the parameters
+    const paramStart = match.index + match[0].length - 1; // the '('
+    const titleMatch = content.slice(paramStart).match(/title\s*:\s*"([^"]+)"/);
+    const label = titleMatch ? titleMatch[1] : null;
+
+    // Find the balanced closing ')' (handles nested closures like onTap: { ... })
+    const closeParenIdx = findMatchingParen(content, paramStart);
+    if (closeParenIdx === -1) continue;
+
+    // The trailing closure is the next '{...}' after ')'
+    const trailingClosure = findNextClosure(content, closeParenIdx + 1);
+    if (!trailingClosure) continue;
+
+    const target = findFirstDestinationView(trailingClosure.content);
+    if (target) result.pushLinks.push({ target, label });
   }
 
   // NavigationLink { ViewName() } label: { ... }
@@ -420,7 +459,7 @@ function extractPresentedContent(closureContent, result, edgeType, fullContent, 
   // For switch-based items, extract (caseName, target) pairs with per-case trigger labels
   const hasSwitchCases = /\bcase\s+\./.test(closureContent);
   if (hasSwitchCases) {
-    const caseRe = /\bcase\s+\.(\w+)\s*:\s*\n?\s*([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller))\s*\(/g;
+    const caseRe = /\bcase\s+\.(\w+)\s*:\s*\n?\s*([A-Z][A-Za-z0-9]*(?:View|Page|Screen|Controller|Sheet))\s*\(/g;
     let caseMatch;
     const seen = new Set();
     while ((caseMatch = caseRe.exec(closureContent)) !== null) {

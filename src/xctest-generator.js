@@ -123,6 +123,27 @@ function generateXCUITest(graph, screenshotsDir, overrides = {}) {
     methods.push(generateModalMethod(nodeId, parentTaps, triggerEdge, screenshotsDir));
   }
 
+  // Generate test methods for screens reachable via link edges FROM modal screens.
+  // These are multi-step flows inside modals (e.g. prescription steps inside a fullScreenCover).
+  // BFS from each modal screen using link edges to find children not yet covered.
+  const coveredNodes = new Set([...edgePaths.keys(), ...modalScreens.keys(), ...overrideNodeIds]);
+  for (const [modalNodeId, { parentEdgePath, triggerEdge }] of modalScreens) {
+    const modalChildPaths = bfsEdgePaths(graph, [modalNodeId]);
+    for (const [childId, childEdgePath] of modalChildPaths) {
+      if (childId === modalNodeId) continue; // skip the modal root itself
+      if (coveredNodes.has(childId)) continue;
+      if (overrideNodeIds.has(childId)) continue;
+      const childNode = nodeMap.get(childId);
+      if (!childNode || childNode.type !== "screen") continue;
+
+      coveredNodes.add(childId);
+      // Build taps: parent path to modal source + modal trigger + link path within modal
+      const parentTaps = buildTaps(parentEdgePath, nodeMap, defaultTabTarget, tabIndexMap);
+      const childTaps = buildTaps(childEdgePath, nodeMap, null, tabIndexMap); // no default tab inside modal
+      methods.push(generateModalChildMethod(childId, parentTaps, triggerEdge, childTaps, screenshotsDir));
+    }
+  }
+
   // Generate override test methods — custom steps from config file
   for (const [nodeId, override] of Object.entries(overrides)) {
     methods.push(generateOverrideMethod(nodeId, override.steps, screenshotsDir, tabIndexMap));
@@ -331,6 +352,61 @@ ${lines.join("\n")}
 }
 
 /**
+ * Generate a test method for a screen reachable via link edges INSIDE a modal.
+ * Navigates to the modal parent, opens the modal, then follows link edges within it.
+ */
+function generateModalChildMethod(nodeId, parentTaps, triggerEdge, childTaps, screenshotsDir) {
+  const safeName = sanitizeFilename(nodeId);
+  const escapedDir = swiftEscape(screenshotsDir);
+  const escapedName = swiftEscape(safeName);
+
+  const lines = [];
+
+  // Navigate to the modal's parent screen
+  for (const tap of parentTaps) {
+    if (tap.kind === "tab") {
+      const label = swiftEscape(tap.candidates[0] || "");
+      const idx = tap.tabIndex ?? -1;
+      lines.push(`        guard tapTab("${label}", index: ${idx}, in: app) else { print("⚠️ [flow-map] tapTab failed: ${label}"); return }`);
+    } else {
+      const lit = tap.candidates.map((c) => `"${swiftEscape(c)}"`).join(", ");
+      const litPrint = tap.candidates.map((c) => `\\"${swiftEscape(c)}\\"`).join(", ");
+      lines.push(`        guard tapElement(matching: [${lit}], in: app) else { print("⚠️ [flow-map] tapElement failed: [${litPrint}]"); return }`);
+    }
+  }
+
+  // Open the modal
+  if (triggerEdge.label) {
+    const trigLit = swiftEscape(triggerEdge.label);
+    lines.push(`        guard tapElement(matching: ["${trigLit}"], in: app) else { print("⚠️ [flow-map] tapElement failed: [\\"${trigLit}\\"]"); return }`);
+  }
+
+  // Navigate within the modal via link edges
+  for (const tap of childTaps) {
+    if (tap.kind === "tab") {
+      const label = swiftEscape(tap.candidates[0] || "");
+      const idx = tap.tabIndex ?? -1;
+      lines.push(`        guard tapTab("${label}", index: ${idx}, in: app) else { print("⚠️ [flow-map] tapTab failed: ${label}"); return }`);
+    } else {
+      const lit = tap.candidates.map((c) => `"${swiftEscape(c)}"`).join(", ");
+      const litPrint = tap.candidates.map((c) => `\\"${swiftEscape(c)}\\"`).join(", ");
+      lines.push(`        guard tapElement(matching: [${lit}], in: app) else { print("⚠️ [flow-map] tapElement failed: [${litPrint}]"); return }`);
+    }
+  }
+
+  return `
+    func testCapture_modalChild_${safeName}() {
+        print("📸 [flow-map] Capturing modal child: ${safeName}")
+        let app = XCUIApplication()
+        app.launch()
+${lines.join("\n")}
+        Thread.sleep(forTimeInterval: 2.0)
+        writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
+        print("✅ [flow-map] Captured modal child: ${safeName}")
+    }`;
+}
+
+/**
  * Generate a test method from config override steps.
  * Steps are strings like:
  *   "tap:Label"              → tapElement(matching: ["Label"])
@@ -401,6 +477,17 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
           `            let cell = app.cells.element(boundBy: ${idx})`,
           `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override swipeLeft failed: index ${idx}"); return }`,
           `            cell.swipeLeft()`,
+          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `        }`,
+        ].join("\n");
+      }
+      case "tapSwitch": {
+        const idx = parseInt(args, 10) || 0;
+        return [
+          `        do {`,
+          `            let sw = app.switches.element(boundBy: ${idx})`,
+          `            guard sw.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapSwitch failed: index ${idx}"); return }`,
+          `            sw.tap()`,
           `            Thread.sleep(forTimeInterval: 1.0)`,
           `        }`,
         ].join("\n");

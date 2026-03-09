@@ -162,6 +162,7 @@ A map of view name to custom test steps. When a screen has an override, the tool
 | `tapTab:Label:index` | `tapTab:Messages:1` | Tap a tab bar button by label and index (index is zero-based) |
 | `tapContaining:text` | `tapContaining:Appointment on` | Tap the first button whose accessibility label contains this text |
 | `tapCell:index` | `tapCell:0` | Tap a list cell by index (zero-based) |
+| `tapSwitch:index` | `tapSwitch:0` | Tap a toggle/switch by index (zero-based) — useful for checkboxes and selection toggles |
 | `swipeLeft:firstCell` | `swipeLeft:firstCell` | Swipe left on the first cell (to reveal swipe actions) |
 | `swipeLeft:index` | `swipeLeft:2` | Swipe left on a cell at a specific index |
 | `wait:seconds` | `wait:1.5` | Wait for a number of seconds |
@@ -214,7 +215,7 @@ The config file name can be either `.flow-map.json` or `flow-map.config.json`.
 `
 ## To do
 
-- Add an interface for exluding areas or pages
+- Make the iOS screenshot capture faster (each test relaunches the app; scroll-retry is aggressive)
 - Make it possible to add your own images into the flow?
 - Make the command line prompt easier to use (multiple steps)
   - The sequence:

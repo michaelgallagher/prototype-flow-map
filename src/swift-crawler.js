@@ -93,7 +93,7 @@ async function crawlAndScreenshotIos(graph, options) {
       ],
       {
         env: xcodebuildEnv,
-        timeout: 600_000, // 10 minutes
+        timeout: 1_200_000, // 20 minutes
         encoding: "utf-8",
       },
     );
