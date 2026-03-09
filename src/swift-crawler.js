@@ -24,6 +24,9 @@ async function crawlAndScreenshotIos(graph, options) {
   const developerDir = findDeveloperDir();
   const screenshotsOutputDir = path.join(outputDir, "screenshots");
   const tempDir = `/tmp/flow-map-ios-${Date.now()}`;
+  // Stable DerivedData path per project — enables incremental builds across runs
+  const projectSlug = path.basename(prototypePath).replace(/[^a-zA-Z0-9_-]/g, "-");
+  const derivedDataPath = `/tmp/flow-map-derived-data-${projectSlug}`;
 
   // 1. Locate the Xcode project
   const xcodeProject = findXcodeProject(prototypePath);
@@ -75,7 +78,6 @@ async function crawlAndScreenshotIos(graph, options) {
 
     // 7. Run xcodebuild test
     console.log("   Building and running tests (this may take a few minutes)...");
-    const derivedDataPath = path.join(tempDir, "DerivedData");
     const result = spawnSync(
       "xcodebuild",
       [

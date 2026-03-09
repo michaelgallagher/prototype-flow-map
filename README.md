@@ -215,7 +215,6 @@ The config file name can be either `.flow-map.json` or `flow-map.config.json`.
 `
 ## To do
 
-- Make the iOS screenshot capture faster (each test relaunches the app; scroll-retry is aggressive)
 - Make it possible to add your own images into the flow?
 - Make the command line prompt easier to use (multiple steps)
   - The sequence:

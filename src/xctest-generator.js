@@ -251,15 +251,15 @@ function buildTaps(edgePath, nodeMap, defaultTabTarget, tabIndexMap = new Map())
       taps.push({ kind: "tab", candidates: [edge.label].filter(Boolean), tabIndex });
     } else if (edge.type === "link") {
       // Candidate labels to try in the UI, in preference order:
-      //  1. The destination node's display label (from navigationTitle) — matches
-      //     HubRowLink buttons whose text comes from hubType.title.
-      //  2. The edge label (RowLink title) — the actual button text for RowLinks.
+      //  1. The edge label (RowLink title / button text) — the actual tappable text.
+      //  2. The destination node's display label (from navigationTitle) — fallback
+      //     for HubRowLink buttons whose text comes from hubType.title.
       // Deduplication removes redundant candidates.
       const destNode = nodeMap.get(edge.target);
       const destLabel = destNode?.label ?? null;
       const edgeLabel = edge.label || null;
 
-      const candidates = [...new Set([destLabel, edgeLabel].filter(Boolean))];
+      const candidates = [...new Set([edgeLabel, destLabel].filter(Boolean))];
       if (candidates.length === 0) continue;
       taps.push({ kind: "element", candidates });
     }
@@ -445,7 +445,7 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
           `            let btn = app.buttons.matching(pred).firstMatch`,
           `            guard btn.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapContaining failed: ${text}"); return }`,
           `            btn.tap()`,
-          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `            Thread.sleep(forTimeInterval: 0.5)`,
           `        }`,
         ].join("\n");
       }
@@ -456,7 +456,7 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
           `            let cell = app.cells.element(boundBy: ${idx})`,
           `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapCell failed: index ${idx}"); return }`,
           `            cell.tap()`,
-          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `            Thread.sleep(forTimeInterval: 0.5)`,
           `        }`,
         ].join("\n");
       }
@@ -467,7 +467,7 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
             `            let cell = app.cells.firstMatch`,
             `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override swipeLeft failed"); return }`,
             `            cell.swipeLeft()`,
-            `            Thread.sleep(forTimeInterval: 1.0)`,
+            `            Thread.sleep(forTimeInterval: 0.5)`,
             `        }`,
           ].join("\n");
         }
@@ -477,7 +477,7 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
           `            let cell = app.cells.element(boundBy: ${idx})`,
           `            guard cell.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override swipeLeft failed: index ${idx}"); return }`,
           `            cell.swipeLeft()`,
-          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `            Thread.sleep(forTimeInterval: 0.5)`,
           `        }`,
         ].join("\n");
       }
@@ -488,7 +488,7 @@ function generateOverrideMethod(nodeId, steps, screenshotsDir, tabIndexMap) {
           `            let sw = app.switches.element(boundBy: ${idx})`,
           `            guard sw.waitForExistence(timeout: 3) else { print("⚠️ [flow-map] override tapSwitch failed: index ${idx}"); return }`,
           `            sw.tap()`,
-          `            Thread.sleep(forTimeInterval: 1.0)`,
+          `            Thread.sleep(forTimeInterval: 0.5)`,
           `        }`,
         ].join("\n");
       }
@@ -544,18 +544,18 @@ final class FlowMapCapture: XCTestCase {
             let tabBar = app.tabBars.firstMatch
             if tabBar.exists {
                 let btn = tabBar.buttons.element(boundBy: index)
-                if btn.exists { btn.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+                if btn.exists { btn.tap(); Thread.sleep(forTimeInterval: 0.5); return true }
             }
         }
         // 2. Exact label match within tab bar
         let exact = app.tabBars.buttons[label]
-        if exact.exists { exact.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        if exact.exists { exact.tap(); Thread.sleep(forTimeInterval: 0.5); return true }
         // 3. Contains match within tab bar
         let fuzzy = app.tabBars.buttons.matching(pred).firstMatch
-        if fuzzy.exists { fuzzy.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        if fuzzy.exists { fuzzy.tap(); Thread.sleep(forTimeInterval: 0.5); return true }
         // 4. Search all buttons (SwiftUI may not expose tab items under tabBars)
         let anyBtn = app.buttons.matching(pred).firstMatch
-        if anyBtn.exists { anyBtn.tap(); Thread.sleep(forTimeInterval: 1.0); return true }
+        if anyBtn.exists { anyBtn.tap(); Thread.sleep(forTimeInterval: 0.5); return true }
         return false
     }
 
@@ -564,55 +564,58 @@ final class FlowMapCapture: XCTestCase {
     /// accidentally tapping section headers or navigation titles.
     @discardableResult
     func tapElement(matching candidates: [String], in app: XCUIApplication) -> Bool {
-        for candidate in candidates {
+        for (index, candidate) in candidates.enumerated() {
+            let isLast = index == candidates.count - 1
             // 1. Button — exact label match (most common for navigation links)
             let btn = app.buttons[candidate]
             if btn.waitForExistence(timeout: 3) {
                 btn.tap()
-                Thread.sleep(forTimeInterval: 1.0)
+                Thread.sleep(forTimeInterval: 0.5)
                 return true
             }
             // 2. Button — CONTAINS match (for buttons whose label includes subtitle text)
             let containsPred = NSPredicate(format: "label CONTAINS[c] %@", candidate)
             let fuzzyBtn = app.buttons.matching(containsPred).firstMatch
-            if fuzzyBtn.waitForExistence(timeout: 1) {
+            if fuzzyBtn.waitForExistence(timeout: 0.5) {
                 fuzzyBtn.tap()
-                Thread.sleep(forTimeInterval: 1.0)
+                Thread.sleep(forTimeInterval: 0.5)
                 return true
             }
             // 3. List / table cell
             let cell = app.cells[candidate]
-            if cell.waitForExistence(timeout: 1) {
+            if cell.waitForExistence(timeout: 0.5) {
                 cell.tap()
-                Thread.sleep(forTimeInterval: 1.0)
+                Thread.sleep(forTimeInterval: 0.5)
                 return true
             }
             // 4. Accessibility identifier
             let identPred = NSPredicate(format: "identifier ==[c] %@", candidate)
             let identEl = app.descendants(matching: .any).matching(identPred).firstMatch
-            if identEl.waitForExistence(timeout: 1) {
+            if identEl.waitForExistence(timeout: 0.5) {
                 identEl.tap()
-                Thread.sleep(forTimeInterval: 1.0)
+                Thread.sleep(forTimeInterval: 0.5)
                 return true
             }
-            // 4. Scroll and retry buttons/cells (up to 5 swipes, then restore)
-            var swiped = 0
-            for _ in 0..<5 {
-                app.swipeUp()
-                swiped += 1
-                if btn.waitForExistence(timeout: 1) {
-                    btn.tap()
-                    Thread.sleep(forTimeInterval: 1.0)
-                    return true
+            // 5. Scroll and retry — only for the last candidate to avoid wasting time
+            if isLast {
+                var swiped = 0
+                for _ in 0..<2 {
+                    app.swipeUp()
+                    swiped += 1
+                    if btn.waitForExistence(timeout: 0.5) {
+                        btn.tap()
+                        Thread.sleep(forTimeInterval: 0.5)
+                        return true
+                    }
+                    if cell.waitForExistence(timeout: 0.5) {
+                        cell.tap()
+                        Thread.sleep(forTimeInterval: 0.5)
+                        return true
+                    }
                 }
-                if cell.waitForExistence(timeout: 1) {
-                    cell.tap()
-                    Thread.sleep(forTimeInterval: 1.0)
-                    return true
-                }
+                // Restore scroll position so subsequent taps/screenshots aren't affected
+                for _ in 0..<swiped { app.swipeDown() }
             }
-            // Restore scroll position so subsequent taps/screenshots aren't affected
-            for _ in 0..<swiped { app.swipeDown() }
         }
         // No candidate found — leave the screen as-is and continue.
         return false
