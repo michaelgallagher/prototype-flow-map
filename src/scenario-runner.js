@@ -609,6 +609,25 @@ async function visitPage(page, urlPath, options) {
 
   crawlStats.pagesVisited++;
 
+  // Dismiss modals, overlays, and notification banners before screenshotting
+  try {
+    await page.evaluate(() => {
+      // Remove modal overlays and dialogs
+      document.querySelectorAll(
+        '.app-modal__overlay, .app-modal--open, [role="dialog"], .modal-backdrop, .modal.show, .overlay'
+      ).forEach((el) => el.remove());
+      document.body.classList.remove("app-modal-open");
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.width = "";
+
+      // Remove notification/flash banners that may overlay content
+      document.querySelectorAll(
+        '.app-reading-opinion-banner, .nhsuk-notification-banner, .flash-message'
+      ).forEach((el) => el.remove());
+    });
+  } catch { /* ignore */ }
+
   // Reposition fixed elements for full-page screenshot
   try {
     await page.evaluate(() => {
@@ -641,6 +660,12 @@ async function visitPage(page, urlPath, options) {
     }
   }
 
+  // Measure actual page dimensions for dynamic node sizing
+  const pageDims = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: document.body.scrollHeight,
+  }));
+
   // Screenshot
   const filename = urlToFilename(urlPath);
   const screenshotPath = path.join(screenshotsDir, filename);
@@ -662,6 +687,7 @@ async function visitPage(page, urlPath, options) {
     type: "page",
     actualTitle: title,
     scenario: scenario.name,
+    screenshotAspectRatio: pageDims.height / pageDims.width,
   };
 
   return { node, links: extraction.links };

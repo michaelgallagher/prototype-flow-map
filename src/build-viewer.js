@@ -591,18 +591,21 @@ function generateViewerJs() {
   const LABEL_AREA = 32;
   const IMG_PAD = 3;
 
-  // Returns { w, h } for a node, varying by thumbnailMode
-  function getNodeDims() {
+  // Returns { w, h } for a node, varying by thumbnailMode.
+  // When a node has a screenshotAspectRatio, use it for dynamic height.
+  function getNodeDims(node) {
     const w = NODE_WIDTH;
     if (!hasScreenshots || hideScreenshots) {
       return { w, h: 56 };
     }
-    // Full-page mode: height matches the screenshot's true aspect ratio
-    // Thumbnail mode: fixed 90px crop
     const imgW = w - IMG_PAD * 2;
-    const imgH = thumbnailMode
-      ? Math.round(90)
-      : Math.round(imgW * VIEWPORT_HEIGHT / VIEWPORT_WIDTH);
+    if (thumbnailMode) {
+      return { w, h: 90 + LABEL_AREA + IMG_PAD };
+    }
+    const ratio = (node && node.screenshotAspectRatio)
+      ? node.screenshotAspectRatio
+      : VIEWPORT_HEIGHT / VIEWPORT_WIDTH;
+    const imgH = Math.round(imgW * ratio);
     return { w, h: imgH + LABEL_AREA + IMG_PAD };
   }
 
@@ -629,7 +632,7 @@ function generateViewerJs() {
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
 
     filteredNodes.forEach(node => {
-      const { w, h } = getNodeDims();
+      const { w, h } = getNodeDims(node);
       g.setNode(node.id, { width: w, height: h, ...node });
     });
 

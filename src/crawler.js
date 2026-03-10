@@ -173,6 +173,22 @@ async function crawlAndScreenshot(graph, options) {
             continue;
           }
 
+          // Dismiss modals, overlays, and notification banners
+          try {
+            await page.evaluate(() => {
+              document.querySelectorAll(
+                '.app-modal__overlay, .app-modal--open, [role="dialog"], .modal-backdrop, .modal.show, .overlay'
+              ).forEach((el) => el.remove());
+              document.body.classList.remove("app-modal-open");
+              document.body.style.position = "";
+              document.body.style.top = "";
+              document.body.style.width = "";
+              document.querySelectorAll(
+                '.app-reading-opinion-banner, .nhsuk-notification-banner, .flash-message'
+              ).forEach((el) => el.remove());
+            });
+          } catch { /* ignore */ }
+
           try {
             await page.evaluate(() => {
               const viewportH = window.innerHeight;
@@ -216,6 +232,11 @@ async function crawlAndScreenshot(graph, options) {
             throw evalErr;
           }
 
+          const pageDims = await page.evaluate(() => ({
+            width: window.innerWidth,
+            height: document.body.scrollHeight,
+          }));
+
           const filename = urlToFilename(requestedPath);
           const screenshotPath = path.join(screenshotsDir, filename);
 
@@ -226,6 +247,7 @@ async function crawlAndScreenshot(graph, options) {
 
           node.screenshot = `screenshots/${filename}`;
           node.actualTitle = await page.title();
+          node.screenshotAspectRatio = pageDims.height / pageDims.width;
 
           if (runtimeCrawl) {
             const extraction = await extractRuntimeLinks(
