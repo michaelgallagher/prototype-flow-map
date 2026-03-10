@@ -66,7 +66,11 @@ async function runScenarios(scenarios, options) {
 
 /**
  * Run a single scenario in its own browser context.
- * Executes setup steps, then BFS-crawls from startUrl.
+ * Two modes:
+ * - Visit-driven: map steps contain `visit` steps — the script defines exactly
+ *   which pages to map, in order. Edges are built from the links each page
+ *   actually contains, but only to other visited pages.
+ * - BFS-crawl: no `visit` steps — crawls from startUrl following links in scope.
  */
 async function runSingleScenario(scenario, options) {
   const { browser, baseUrl, viewport, mapOutputDir, resolvedSteps, config } = options;
@@ -107,38 +111,55 @@ async function runSingleScenario(scenario, options) {
       }
     }
 
-    // After setup, navigate to startUrl if we haven't already landed there
-    const currentPath = canonicalizePath(new URL(page.url()).pathname);
-    if (currentPath !== canonicalizePath(scenario.startUrl)) {
-      await page.goto(`${baseUrl}${scenario.startUrl}`, {
-        waitUntil: "domcontentloaded",
-        timeout: 15000,
+    // Check if this is a visit-driven scenario
+    const hasVisitSteps = mapSteps.some((s) => s.type === "visit");
+
+    if (hasVisitSteps) {
+      // Visit-driven mode: follow the script exactly
+      await visitDrivenMap({
+        page,
+        baseUrl,
+        scenario,
+        mapSteps,
+        nodes,
+        edges,
+        edgeKeys,
+        crawlStats,
+        screenshotsDir: scenarioScreenshotsDir,
       });
-      await Promise.race([
-        page.waitForLoadState("networkidle"),
-        page.waitForTimeout(3000),
-      ]);
-    }
+    } else {
+      // BFS-crawl mode: navigate to startUrl, then crawl
+      const currentPath = canonicalizePath(new URL(page.url()).pathname);
+      if (currentPath !== canonicalizePath(scenario.startUrl)) {
+        await page.goto(`${baseUrl}${scenario.startUrl}`, {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
+        });
+        await Promise.race([
+          page.waitForLoadState("networkidle"),
+          page.waitForTimeout(3000),
+        ]);
+      }
 
-    // Execute any post-beginMap steps before crawling
-    for (const step of mapSteps) {
-      if (step.type === "endMap") break;
-      await executeStep(page, step, baseUrl);
-    }
+      // Execute any post-beginMap non-visit steps before crawling
+      for (const step of mapSteps) {
+        if (step.type === "endMap") break;
+        await executeStep(page, step, baseUrl);
+      }
 
-    // BFS crawl from the current page
-    await bfsCrawl({
-      page,
-      context,
-      baseUrl,
-      scenario,
-      nodes,
-      edges,
-      edgeKeys,
-      crawlStats,
-      screenshotsDir: scenarioScreenshotsDir,
-      config,
-    });
+      await bfsCrawl({
+        page,
+        context,
+        baseUrl,
+        scenario,
+        nodes,
+        edges,
+        edgeKeys,
+        crawlStats,
+        screenshotsDir: scenarioScreenshotsDir,
+        config,
+      });
+    }
 
     await page.close();
   } finally {
@@ -153,6 +174,103 @@ async function runSingleScenario(scenario, options) {
     },
     crawlStats,
   };
+}
+
+/**
+ * Visit-driven mapping: follow the script's visit steps exactly.
+ *
+ * 1. Collect all visit URLs to know the full set of pages to map.
+ * 2. Visit each in order, taking a screenshot on first visit.
+ * 3. On each page, extract links from the DOM.
+ * 4. Create edges only between pages that are both in the visit set.
+ *
+ * This produces a graph that reflects the user's actual journey with
+ * cross-links between sibling pages (e.g. tab navigation).
+ */
+async function visitDrivenMap(options) {
+  const {
+    page,
+    baseUrl,
+    scenario,
+    mapSteps,
+    nodes,
+    edges,
+    edgeKeys,
+    crawlStats,
+    screenshotsDir,
+  } = options;
+
+  // Collect all visit URLs (the full set of pages to include in the map)
+  const visitUrls = mapSteps
+    .filter((s) => s.type === "visit")
+    .map((s) => canonicalizePath(s.url));
+  const visitSet = new Set(visitUrls);
+
+  // Track links extracted from each page (for building cross-edges)
+  const pageLinks = new Map();
+
+  for (const step of mapSteps) {
+    if (step.type === "endMap") break;
+
+    if (step.type === "visit") {
+      const urlPath = canonicalizePath(step.url);
+
+      // Navigate to the page
+      try {
+        await page.goto(`${baseUrl}${step.url}`, {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
+        });
+        await Promise.race([
+          page.waitForLoadState("networkidle"),
+          page.waitForTimeout(3000),
+        ]);
+      } catch (err) {
+        console.warn(`   Could not visit ${urlPath}: ${err.message}`);
+        continue;
+      }
+
+      // Only screenshot and extract links on first visit
+      if (!nodes.has(urlPath)) {
+        const result = await visitPage(page, urlPath, {
+          baseUrl,
+          scenario,
+          screenshotsDir,
+          crawlStats,
+        });
+
+        if (result) {
+          nodes.set(urlPath, result.node);
+          pageLinks.set(urlPath, result.links);
+        }
+      }
+    } else {
+      // Execute non-visit steps (click, fill, etc.) inline
+      try {
+        await executeStep(page, step, baseUrl);
+      } catch (err) {
+        console.warn(`   Step failed: ${describeStep(step)} — ${err.message}`);
+      }
+    }
+  }
+
+  // Build edges: for each visited page, check which of its DOM links
+  // point to other visited pages
+  for (const [sourcePath, links] of pageLinks) {
+    for (const link of links) {
+      // Canonicalize the link target and check if it's in our visit set
+      const target = canonicalizePath(link.target);
+      if (!target || target === sourcePath) continue;
+      if (!visitSet.has(target)) continue;
+
+      addEdge(edges, edgeKeys, sourcePath, {
+        ...link,
+        target,
+      });
+    }
+  }
+
+  crawlStats.runtimeEdgesDiscovered = edges.length;
 }
 
 /**
@@ -271,6 +389,8 @@ function describeStep(step) {
       return `beginMap`;
     case "endMap":
       return `endMap`;
+    case "visit":
+      return `visit ${step.url}`;
     default:
       return step.type;
   }
@@ -325,15 +445,14 @@ async function bfsCrawl(options) {
   const visited = new Set();
 
   // Track how many concrete URLs we've visited per canonical pattern.
-  // e.g. /participants/:id → 3 means we've visited 3 different participant pages.
-  // This prevents the BFS from exhaustively visiting every entity instance.
-  const MAX_PER_CANONICAL = 3;
+  // For an experience map we only need one instance of each pattern —
+  // every clinic or patient has identical screens, just different content.
+  const MAX_PER_CANONICAL = 1;
   const canonicalVisitCounts = new Map();
 
   function shouldVisitUrl(url) {
     if (visited.has(url)) return false;
     const canonical = canonicalizePath(url);
-    // If the canonical form equals the raw URL, it's not parameterized — always visit
     if (canonical === url) return true;
     const count = canonicalVisitCounts.get(canonical) || 0;
     return count < MAX_PER_CANONICAL;
@@ -425,6 +544,7 @@ async function bfsCrawl(options) {
             });
             if (result) {
               nodes.set(landedPath, result.node);
+
               for (const link of result.links) {
                 if (isDefinitelyGlobalNav(link)) continue;
                 if (
@@ -454,6 +574,7 @@ async function bfsCrawl(options) {
 
       if (result) {
         nodes.set(url, result.node);
+
         for (const link of result.links) {
           if (isDefinitelyGlobalNav(link)) continue;
           if (

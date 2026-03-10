@@ -72,12 +72,19 @@ const GLOBAL_NAV_SOURCE_HINTS = [
 
 const LAYOUT_CONTAINER_HINTS = [
   "header",
-  "nav",
   "footer",
   ".nhsuk-header",
   ".nhsuk-footer",
   ".nhsuk-header__navigation",
   ".nhsuk-footer__list",
+];
+
+// Selectors for global nav containers. Links inside <nav> are only treated as
+// global nav if the <nav> is NOT inside <main> — this preserves in-page tab
+// navigation (e.g. Today | Upcoming | Completed | All) which NHS prototypes
+// render as <nav> elements inside the main content area.
+const GLOBAL_NAV_CONTAINER_HINTS = [
+  "nav",
   "[role='navigation']",
 ];
 
@@ -317,13 +324,28 @@ async function crawlAndScreenshot(graph, options) {
 }
 
 async function extractRuntimeLinks(page, currentPath, baseUrl) {
-  const rawLinks = await page.evaluate((layoutHints) => {
+  const rawLinks = await page.evaluate(({ layoutHints, globalNavHints }) => {
     function isLikelyLayoutLink(element) {
       if (!(element instanceof Element)) return false;
 
+      // Direct layout containers (header, footer, NHS-specific)
       for (const selector of layoutHints) {
         try {
           if (element.closest(selector)) return true;
+        } catch {
+          // ignore invalid selector edge cases
+        }
+      }
+
+      // Nav containers — only count as layout if NOT inside <main>.
+      // This preserves in-page tab navigation (e.g. clinic tabs) which
+      // NHS prototypes render as <nav> elements inside the main content.
+      for (const selector of globalNavHints) {
+        try {
+          const navAncestor = element.closest(selector);
+          if (navAncestor && !navAncestor.closest('main, [role="main"], .nhsuk-main-wrapper, #main-content')) {
+            return true;
+          }
         } catch {
           // ignore invalid selector edge cases
         }
@@ -362,7 +384,7 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
     });
 
     return links;
-  }, LAYOUT_CONTAINER_HINTS);
+  }, { layoutHints: LAYOUT_CONTAINER_HINTS, globalNavHints: GLOBAL_NAV_CONTAINER_HINTS });
 
   const accepted = [];
   let filteredCount = 0;
@@ -562,8 +584,8 @@ function normalizeTemplateLikeSegments(urlPath) {
         return ":date";
       }
 
-      // Short alphanumeric strings with at least one digit — likely generated IDs
-      // e.g. w48zu3om, rkge1msh, 5gpn41oi, bc724e9f
+      // Short alphanumeric strings that look like generated IDs.
+      // Mixed alpha+digit (e.g. w48zu3om, bc724e9f) — always an ID
       if (/^[a-z0-9]{6,12}$/i.test(decoded) && /\d/.test(decoded) && /[a-z]/i.test(decoded)) {
         return ":id";
       }
