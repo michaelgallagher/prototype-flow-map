@@ -146,23 +146,139 @@ function buildRouteLookup(explicitRoutes) {
 }
 
 /**
+ * Common dynamic routing patterns in GOV.UK/NHS prototype kit projects.
+ *
+ * These map parameterised URL prefixes to template directory prefixes.
+ * For example, a URL like /clinics/abc123/events/def456/appointment
+ * is served by the template at events/appointment.html via a catch-all
+ * route like /clinics/:clinicId/events/:eventId/*subPaths.
+ *
+ * Each entry: { urlPattern: RegExp, templatePrefix: string }
+ * The regex captures the "sub-path" portion after the parameterised prefix.
+ */
+const DYNAMIC_ROUTE_PATTERNS = [
+  // /clinics/:id/events/:id/<subPath> → /events/<subPath>
+  {
+    pattern: /^\/clinics\/[^/]+\/events\/[^/]+\/(.+)$/,
+    templatePrefix: "/events",
+  },
+  // /clinics/today|upcoming|completed|all → /clinics (index template)
+  {
+    pattern: /^\/clinics\/(today|upcoming|completed|all)$/,
+    templatePrefix: null,
+    fixedTemplate: "/clinics",
+  },
+  // /clinics/:id → /clinics/show (but not /clinics/today, /clinics/upcoming, etc.)
+  {
+    pattern: /^\/clinics\/(?!today$|upcoming$|completed$|all$|show$|reading$)[^/]+$/,
+    templatePrefix: null,
+    fixedTemplate: "/clinics/show",
+  },
+  // /clinics/:id/:filter → /clinics/show
+  {
+    pattern: /^\/clinics\/(?!today|upcoming|completed|all|show|reading)[^/]+\/(remaining|scheduled|checked-in|in-progress|complete|all)$/,
+    templatePrefix: null,
+    fixedTemplate: "/clinics/show",
+  },
+  // /participants/:id → /participants/show
+  {
+    pattern: /^\/participants\/[^/]+$/,
+    templatePrefix: null,
+    fixedTemplate: "/participants/show",
+  },
+  // /participants/:id/<subPath> → /participants/<subPath>
+  {
+    pattern: /^\/participants\/[^/]+\/(.+)$/,
+    templatePrefix: "/participants",
+  },
+  // /reading/clinics/<filter> → /reading/clinics
+  {
+    pattern: /^\/reading\/clinics\/(mine|all)$/,
+    templatePrefix: null,
+    fixedTemplate: "/reading/clinics",
+  },
+  // /reading/history/<filter> → /reading/history
+  {
+    pattern: /^\/reading\/history\/(mine|all)$/,
+    templatePrefix: null,
+    fixedTemplate: "/reading/history",
+  },
+  // /reading/priors/<filter> → /reading/priors
+  {
+    pattern: /^\/reading\/priors\/(not-requested|requested|resolved)$/,
+    templatePrefix: null,
+    fixedTemplate: "/reading/priors",
+  },
+  // /reading/batch/:id → /reading/batch
+  {
+    pattern: /^\/reading\/batch\/[^/]+$/,
+    templatePrefix: null,
+    fixedTemplate: "/reading/batch",
+  },
+  // /reading/batch/:id/:view → /reading/batch (same template, different tab)
+  {
+    pattern: /^\/reading\/batch\/[^/]+\/(your-reads|all-reads|unread)$/,
+    templatePrefix: null,
+    fixedTemplate: "/reading/batch",
+  },
+  // /reading/batch/:id/events/:id/<step> → /reading/workflow/<step>
+  {
+    pattern: /^\/reading\/batch\/[^/]+\/events\/[^/]+\/(.+)$/,
+    templatePrefix: "/reading/workflow",
+  },
+  // /reports/screening/<filter> → /reports/screening (index template)
+  {
+    pattern: /^\/reports\/screening\/(by-clinic|by-day|by-week|by-month)$/,
+    templatePrefix: null,
+    fixedTemplate: "/reports/screening",
+  },
+  // /reports/:id → /reports/clinic (specific clinic report)
+  {
+    pattern: /^\/reports\/(?!screening$|clinic$)[^/]+$/,
+    templatePrefix: null,
+    fixedTemplate: "/reports/clinic",
+  },
+];
+
+/**
  * Find the template that best matches a runtime URL path.
- * Tries exact match first, then canonical form, then path-pattern matching.
+ *
+ * Matching strategy (in order of preference):
+ * 1. Exact match on normalized URL path
+ * 2. Canonical match (with ID collapsing)
+ * 3. Dynamic route pattern matching (e.g. /clinics/:id/events/:id/X → /events/X)
+ * 4. Segment-level pattern matching against template paths with :param segments
  */
 function findTemplate(urlPath, templateLookup) {
-  // Exact match
+  // 1. Exact match
   if (templateLookup.has(urlPath)) {
     return templateLookup.get(urlPath);
   }
 
-  // Canonical match (e.g. runtime /clinics/abc123 → template /clinics/:id)
+  // 2. Canonical match (e.g. runtime /clinics/abc123 → template /clinics/:id)
   const canonical = canonicalizePath(urlPath);
   if (canonical && templateLookup.has(canonical)) {
     return templateLookup.get(canonical);
   }
 
-  // Pattern match: replace concrete segments with Express-style params
-  // e.g. /participants/abc123/details → try /participants/:participantId/details
+  // 3. Dynamic route pattern matching
+  for (const route of DYNAMIC_ROUTE_PATTERNS) {
+    const match = route.pattern.exec(urlPath);
+    if (!match) continue;
+
+    if (route.fixedTemplate) {
+      const tpl = templateLookup.get(route.fixedTemplate);
+      if (tpl) return tpl;
+    }
+
+    if (route.templatePrefix && match[1]) {
+      const templatePath = `${route.templatePrefix}/${match[1]}`;
+      const tpl = templateLookup.get(templatePath);
+      if (tpl) return tpl;
+    }
+  }
+
+  // 4. Segment-level pattern matching against template paths with :param segments
   const segments = urlPath.split("/");
   for (const [tplPath, tpl] of templateLookup) {
     const tplSegments = tplPath.split("/");
@@ -170,9 +286,7 @@ function findTemplate(urlPath, templateLookup) {
 
     const matches = tplSegments.every((tplSeg, i) => {
       if (tplSeg === segments[i]) return true;
-      // Template uses :param style
       if (tplSeg.startsWith(":")) return true;
-      // Template uses {{expression}} style
       if (tplSeg.includes("{{")) return true;
       return false;
     });

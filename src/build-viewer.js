@@ -62,18 +62,24 @@ function generateViewerHtml(
   const backLink = name
     ? '<a href="../../index.html" class="back-to-index">&larr; All maps</a>'
     : "";
+
+  // Detect scenario metadata from graph nodes
+  const scenarioName = graph.nodes.length > 0 ? graph.nodes[0].scenario || "" : "";
+  const hasProvenance = graph.edges.some(e => e.provenance);
+  const hasGlobalNav = graph.edges.some(e => e.isGlobalNav);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Prototype Flow Map</title>
+  <title>${scenarioName ? escapeHtmlForAttr(scenarioName) + " — " : ""}Prototype Flow Map</title>
   <link rel="stylesheet" href="${assetPrefix}styles.css">
 </head>
 <body>
   <div id="toolbar">
     ${backLink}
-    <h1>Prototype Flow Map</h1>
+    <h1>${scenarioName ? `<span class="scenario-name">${escapeHtmlForAttr(scenarioName)}</span>` : "Prototype Flow Map"}</h1>
     <div class="toolbar-controls">
       <span id="node-count"></span>
       <button onclick="zoomIn()">Zoom +</button>
@@ -82,6 +88,13 @@ function generateViewerHtml(
       <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
       <button id="toggle-screenshots" onclick="toggleScreenshots()" style="display:none">Hide screenshots</button>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
+      ${hasGlobalNav ? '<label><input type="checkbox" id="toggle-global-nav"> Global nav</label>' : ""}
+      ${hasProvenance ? `<select id="provenance-filter">
+        <option value="">All edges</option>
+        <option value="runtime">Runtime only</option>
+        <option value="static">Static only</option>
+        <option value="both">Both sources</option>
+      </select>` : ""}
       <select id="hub-filter">
         <option value="">All hubs</option>
       </select>
@@ -103,6 +116,10 @@ function generateViewerHtml(
     <div class="legend-item"><span class="legend-swatch" style="background:#d47a6b;height:2px"></span> Full-screen cover</div>
     <div class="legend-item"><span class="legend-swatch" style="height:1.5px;border-top:1.5px dashed #5aaf6a;background:none"></span> Web view</div>
     <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #8f8f40;background:none"></span> Safari / external</div>
+    ${hasProvenance ? `<h3 style="margin-top:8px">Provenance</h3>
+    <div class="legend-item"><span class="legend-swatch legend-swatch--solid"></span> Runtime</div>
+    <div class="legend-item"><span class="legend-swatch legend-swatch--dashed"></span> Static only</div>
+    <div class="legend-item"><span class="legend-swatch legend-swatch--both"></span> Both sources</div>` : ""}
   </div>
   <div id="detail-panel" class="hidden">
     <button id="close-panel" onclick="closePanel()">✕</button>
@@ -118,6 +135,14 @@ function generateViewerHtml(
   <script src="${assetPrefix}viewer.js"></script>
 </body>
 </html>`;
+}
+
+function escapeHtmlForAttr(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function generateViewerCss() {
@@ -417,6 +442,30 @@ body {
   font-size: 11px;
 }
 
+.edge-provenance-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.edge-provenance--runtime {
+  background: #1a3a2a;
+  color: #5aaf6a;
+}
+
+.edge-provenance--static {
+  background: #2a1a3a;
+  color: #aa55cc;
+}
+
+.edge-provenance--both {
+  background: #1a2a3a;
+  color: #6b9fd4;
+}
+
 /* Legend */
 #legend {
   position: fixed;
@@ -447,6 +496,37 @@ body {
   height: 3px;
   border-radius: 1px;
 }
+
+.legend-swatch--solid {
+  background: #6b9fd4;
+  height: 2px;
+}
+
+.legend-swatch--dashed {
+  height: 1px;
+  border-top: 2px dashed #aa55cc;
+  background: none;
+}
+
+.legend-swatch--both {
+  background: linear-gradient(90deg, #6b9fd4 50%, #aa55cc 50%);
+  height: 2px;
+}
+
+.scenario-name {
+  color: #53d8fb;
+  font-size: 15px;
+}
+
+/* Provenance-based edge opacity modifiers */
+.edge-path--static-provenance {
+  stroke-dasharray: 4,3 !important;
+  opacity: 0.5 !important;
+}
+
+.edge-path--global-nav-edge {
+  opacity: 0.3 !important;
+}
 `;
 }
 
@@ -469,6 +549,8 @@ function generateViewerJs() {
   let hideScreenshots = false;
   let hubFilter = '';
   let searchTerm = '';
+  let showGlobalNav = false;
+  let provenanceFilter = '';
 
   // Persist view mode preference
   const viewModeKey = 'flowmap-viewmode-' + location.pathname;
@@ -560,6 +642,10 @@ function generateViewerJs() {
     const incomingToStartEdges = [];
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
+      // Global nav filter: hide global nav edges unless toggled on
+      if (e.isGlobalNav && !showGlobalNav) return false;
+      // Provenance filter
+      if (provenanceFilter && e.provenance && e.provenance !== provenanceFilter) return false;
       if (e.type === 'nav') { navEdges.push(e); return false; }
       // Exclude incoming edges to start nodes from dagre so they stay at top rank.
       // Applies for any number of start nodes — even a single --from page can be
@@ -736,6 +822,9 @@ function generateViewerJs() {
 
     // Add nav edges and incoming-to-start edges as straight lines.
     [...navEdges, ...incomingToStartEdges].forEach(edge => {
+      // Apply global nav and provenance filters to these too
+      if (edge.isGlobalNav && !showGlobalNav) return;
+      if (provenanceFilter && edge.provenance && edge.provenance !== provenanceFilter) return;
       layoutEdges.push({
         ...edge,
         points: computeStraightEdge(edge.source, edge.target),
@@ -796,7 +885,9 @@ function generateViewerJs() {
       const d = buildOrthogonalPath(points);
 
       const edgeType = edge.type || 'link';
-      const cssClass = 'edge-path edge-path--' + edgeType;
+      let cssClass = 'edge-path edge-path--' + edgeType;
+      if (edge.provenance === 'static') cssClass += ' edge-path--static-provenance';
+      if (edge.isGlobalNav) cssClass += ' edge-path--global-nav-edge';
       const arrowType = edgeType;
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -1002,6 +1093,8 @@ function generateViewerJs() {
     html += '<dt>Type</dt><dd>' + escapeHtml(node.type || '–') + '</dd>';
     if (node.hub) html += '<dt>Hub</dt><dd>' + escapeHtml(node.hub) + '</dd>';
     if (node.isStartNode) html += '<dt>Role</dt><dd>Start page (--from)</dd>';
+    if (node.scenario) html += '<dt>Scenario</dt><dd>' + escapeHtml(node.scenario) + '</dd>';
+    if (node.staticEnriched) html += '<dt>Enriched</dt><dd>Static analysis</dd>';
     html += '</dl>';
 
     // Outgoing edges
@@ -1013,6 +1106,8 @@ function generateViewerJs() {
         html += '<li>';
         html += '<span class="link-target">' + escapeHtml(e.target) + '</span>';
         html += ' <span style="color:#666">(' + e.type + ')</span>';
+        if (e.provenance) html += ' <span class="edge-provenance-badge edge-provenance--' + e.provenance + '">' + e.provenance + '</span>';
+        if (e.isGlobalNav) html += ' <span class="edge-provenance-badge" style="background:#1a3a4a;color:#53d8fb">nav</span>';
         if (e.label) html += ' — ' + escapeHtml(e.label);
         if (e.condition) html += '<br><span class="link-condition">if ' + escapeHtml(e.condition) + '</span>';
         html += '</li>';
@@ -1029,6 +1124,8 @@ function generateViewerJs() {
         html += '<li>';
         html += '<span class="link-target">' + escapeHtml(e.source) + '</span>';
         html += ' <span style="color:#666">(' + e.type + ')</span>';
+        if (e.provenance) html += ' <span class="edge-provenance-badge edge-provenance--' + e.provenance + '">' + e.provenance + '</span>';
+        if (e.isGlobalNav) html += ' <span class="edge-provenance-badge" style="background:#1a3a4a;color:#53d8fb">nav</span>';
         if (e.condition) html += '<br><span class="link-condition">if ' + escapeHtml(e.condition) + '</span>';
         html += '</li>';
       });
@@ -1139,6 +1236,24 @@ function generateViewerJs() {
     hubFilter = e.target.value;
     render();
   });
+
+  // Global nav toggle
+  const globalNavToggle = document.getElementById('toggle-global-nav');
+  if (globalNavToggle) {
+    globalNavToggle.addEventListener('change', (e) => {
+      showGlobalNav = e.target.checked;
+      render();
+    });
+  }
+
+  // Provenance filter
+  const provenanceSelect = document.getElementById('provenance-filter');
+  if (provenanceSelect) {
+    provenanceSelect.addEventListener('change', (e) => {
+      provenanceFilter = e.target.value;
+      render();
+    });
+  }
 
   let searchTimeout;
   document.getElementById('search').addEventListener('input', (e) => {

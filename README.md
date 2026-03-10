@@ -8,18 +8,19 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 
 ## Features
 
+- **Scenario-first mapping** — define realistic user journeys and map what users actually experience, not every possible route
 - **Auto-discovers all pages** from Nunjucks templates (mirrors the prototype kit's auto-routing)
 - **Extracts navigation** from `href` links, `<form action>` attributes, and JS redirects
 - **Detects conditional branches** (`{% if data['...'] %}` blocks wrapping different links)
 - **Parses Express route handlers** for explicit redirects and renders
 - **Screenshots every page** using Playwright (headless Chromium)
-- **Interactive web viewer** — pan, zoom, click nodes for detail, filter by hub, search
+- **Interactive web viewer** — pan, zoom, click nodes for detail, filter by provenance, toggle global nav, search
 - **Shareable output** — a static HTML site you can open locally or deploy anywhere
 - **PDF export** — optional `map.pdf`, with full-canvas layout as default
 
 ## Prerequisites
 
-- Node.js 20+ 
+- Node.js 20+
 - The prototype you want to map must be installable and runnable via `node app.js`
 
 ## Install
@@ -30,76 +31,254 @@ npm install
 npx playwright install chromium
 ```
 
-## Usage
+## Mapping modes
 
-The most basic way to use the tool is like so:
+The tool has three mapping modes:
+
+| Mode | Purpose | Best for |
+|---|---|---|
+| `scenario` | Map realistic user journeys with setup steps and scoped crawling | Prototypes with seed data, stateful flows, or complex routing |
+| `static` | Broad static analysis of all templates and routes | Simple prototypes without seed data |
+| `audit` | Static analysis plus runtime crawl of every discoverable page | Debugging and coverage checks |
+
+### Scenario mode (recommended for most prototypes)
+
+Many prototypes use seed data — without the right user, site, or entity ID in the session, pages render as broken or empty screens. Scenario mode solves this by letting you define realistic user journeys with setup steps that establish the right state before crawling.
+
+Instead of visiting every technically reachable URL, scenario mode:
+1. Runs setup steps (login, select a user, navigate to a section)
+2. Begins crawling from a meaningful start point
+3. Only follows links within a defined scope
+4. Captures screenshots of pages that are valid in context
+
+The result is an experience map, not a route inventory.
+
+#### Quick start with scenarios
 
 ```bash
-# Point it at any prototype project
-npx prototype-flow-map /path/to/your/prototype
+# Run a single scenario
+npx prototype-flow-map /path/to/prototype --scenario clinic-workflow
+
+# Run a named set of scenarios
+npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
+
+# List available scenarios
+npx prototype-flow-map /path/to/prototype --list-scenarios
 ```
 
-That will get you a map of *everything* in your prototype. Depending on how things are set up, that may or may not be a good idea. 
+#### Writing a scenario config
 
-There are lots of options you can use to tune the output, the most useful of which is `--from`, which lets you scope the output to a specific start point. The tool will crawl from that point onward (i.e. down the tree). You can give this flag multiple values if you want, which is useful because the default behaviour won't capture sideways links from `{% include %}` partials right now (it makes it very hard to limit the scope of the crawler). If you give the tool multiple `--from` points, it will look for ways that they connect them via the `{% include %} partials. This is something of a workaround right now. 
+Create a `flow-map.config.yml` file in your prototype's root directory:
 
-An example of how this would work with the NHS App prototype would be to use a prompt like: 
+```yaml
+mode: scenario
+
+# Reusable setup sequences
+fragments:
+  setup.clinician:
+    - type: goto
+      url: /choose-user
+    - type: click
+      selector: "a[href='/dashboard?currentUserId=ae7537b3']"
+    - type: waitForUrl
+      url: /dashboard
+
+# Scenario definitions
+scenarios:
+  - name: clinic-workflow
+    description: Reception/clinic operational flow
+    startUrl: /clinics
+    scope:
+      includePrefixes: [/dashboard, /clinics, /events, /participants]
+      excludePrefixes: [/prototype-admin, /api, /assets]
+    limits:
+      maxPages: 120
+      maxDepth: 12
+    steps:
+      - use: setup.clinician
+      - type: beginMap
+
+  - name: reading-workflow
+    description: Image reading — batch creation, mammogram review, opinions
+    startUrl: /reading
+    scope:
+      includePrefixes: [/reading, /dashboard]
+      excludePrefixes: [/prototype-admin, /api, /assets, /clinics, /participants, /reports, /settings]
+    limits:
+      maxPages: 80
+      maxDepth: 12
+    steps:
+      - use: setup.clinician
+      - type: beginMap
+
+# Named groups of scenarios to run together
+scenarioSets:
+  core-user-journeys:
+    - clinic-workflow
+    - reading-workflow
+```
+
+#### Scenario step types
+
+Steps before `beginMap` are setup-only — they establish context but don't appear in the map. Steps after `beginMap` contribute to the mapped journey.
+
+| Step type | Fields | Description |
+|---|---|---|
+| `goto` | `url` | Navigate directly to a URL |
+| `click` | `selector` | Click an element by CSS selector |
+| `fill` | `selector`, `value` | Fill an input field |
+| `select` | `selector`, `value` | Choose an option in a select element |
+| `check` | `selector` | Check a checkbox or radio button |
+| `submit` | `selector` | Submit a form by selector |
+| `waitForUrl` | `url` | Wait for navigation to a URL (prefix match) |
+| `waitForSelector` | `selector` | Wait until a selector appears |
+| `wait` | `ms` | Wait a fixed number of milliseconds |
+| `beginMap` | — | Mark where the map starts (steps before this are setup-only) |
+| `endMap` | — | Optional stop marker |
+| `use` | fragment name | Include a reusable fragment (e.g. `use: setup.clinician`) |
+
+#### Fragments
+
+Fragments let you share common setup sequences across scenarios. Define them under the `fragments` key and reference them with `use`:
+
+```yaml
+fragments:
+  setup.admin:
+    - type: goto
+      url: /choose-user
+    - type: click
+      selector: "a[href='/dashboard?currentUserId=e1945412']"
+    - type: waitForUrl
+      url: /dashboard
+
+scenarios:
+  - name: reporting
+    steps:
+      - use: setup.admin
+      - type: beginMap
+```
+
+#### Scenario sets
+
+Group scenarios together so you can run them all with one command:
+
+```yaml
+scenarioSets:
+  core-user-journeys:
+    - clinic-workflow
+    - reading-workflow
+    - reporting
+```
 
 ```bash
-# Point it at any prototype project
-npx prototype-flow-map /path/to/your/prototype --from "/pages/home-p9,/pages/messages-p9,/pages/profile-p9"
+npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
 ```
 
-That will get you a map of the three main tabs. Please note that the tool will arrange them in the order you list them, running from left to right on the output map. 
+Each scenario produces its own map with screenshots, viewer, and metadata.
 
-If you want to save your map, you might also want to give it a name. This has two optional parts: `--name` and `--title`. The name flag determines what the folder is called (inside `flow-map-output/maps/`) and the title flag sets the visible name in the site index. If you don't provide either of these flags, the default behaviour is to use the prototype folder name. (*Given that this is all very manual right now, if you give your map a name or title, you should probably keep using the same one, otherwise it will create an entirely new folder instead of writing over the current one.)
+#### Scope and limits
 
-The order of the flags doesn't matter. 
+Each scenario controls what gets crawled:
+
+- **`scope.includePrefixes`** — only follow links matching these path prefixes
+- **`scope.excludePrefixes`** — never follow links matching these prefixes
+- **`limits.maxPages`** — hard cap on pages visited
+- **`limits.maxDepth`** — maximum link depth from the start page
+
+#### Canonical deduplication
+
+The tool automatically deduplicates parameterised routes. URLs like `/participants/abc123` and `/participants/def456` are recognised as the same canonical pattern (`/participants/:id`), and the crawler visits at most 3 instances per pattern. This prevents the map from exploding when there are hundreds of entity pages.
+
+#### Static enrichment
+
+Runtime graphs are enriched with metadata from static template analysis:
+- Page titles (from `{% set pageHeading %}` or `<title>`)
+- File paths (which template serves each route)
+- Node types (form, hub, page, start)
+- Conditional branch labels
+
+The runtime graph is always the primary source of truth — static data only supplements.
+
+### Static mode
+
+The original mapping mode. Analyses templates and route handlers without running the prototype server (unless screenshots are enabled).
+
+```bash
+# Basic static analysis
+npx prototype-flow-map /path/to/prototype
+
+# Scope to specific start points
+npx prototype-flow-map /path/to/prototype --from "/pages/home-p9,/pages/messages-p9"
+```
+
+The `--from` flag sets the start point for the graph. You can give multiple comma-separated paths, and the tool will arrange them left to right in the output. This is useful for tab-based prototypes where you want to show multiple entry points together.
+
+### Audit mode
+
+Forces a runtime crawl on top of static analysis — visits every discoverable page from the start URL. Useful for debugging and coverage checks, but the output tends to be noisy for prototypes with seed data.
+
+```bash
+npx prototype-flow-map /path/to/prototype --mode audit
+```
 
 ## Options
 
 | Option | Default | Description |
 |---|---|---|
-| `--output, -o` | `./flow-map-output` | Output directory for the generated flow map |
-| `--port, -p` | `4321` | Port to start the prototype server on |
+| `-o, --output` | `./flow-map-output` | Output directory |
+| `-p, --port` | `4321` | Port to start the prototype server on |
 | `--width` | `375` | Screenshot viewport width (pixels) |
 | `--height` | `812` | Screenshot viewport height (pixels) |
-| `--no-screenshots` | `false` | Skip screenshotting (much faster) |
-| `--base-path` | `""` | Only include pages under this path (e.g. `/pages`) |
-| `--start-url` | `/` | URL to begin crawling from |
-| `--from` | `""` | Sets the start point for the graph; allows for multiple inputs, which will be merged into a single map |
-| `--exclude` | "" | Removes pages and their children |
-| `--name` | prototype folder slug | Map folder slug (must be lowercase alphanumeric + hyphens) |
+| `--no-screenshots` | — | Skip screenshotting (much faster) |
+| `--mode` | `static` | Mapping mode: `static`, `scenario`, or `audit` |
+| `--scenario` | — | Run a single named scenario (implies `--mode scenario`) |
+| `--scenario-set` | — | Run a named set of scenarios (implies `--mode scenario`) |
+| `--list-scenarios` | — | List available scenarios from the config file and exit |
+| `--from` | — | Only show pages reachable from these paths (comma-separated) |
+| `--base-path` | — | Only include pages under this path prefix |
+| `--exclude` | — | Exclude pages matching these paths (comma-separated, supports globs) |
+| `--start-url` | `/` | URL to begin crawling from (static/audit modes) |
+| `--runtime-crawl` | `false` | Add runtime DOM link extraction to static mode |
+| `--name` | prototype folder slug | Map folder slug (lowercase alphanumeric + hyphens) |
 | `--title` | prototype folder name | Human-readable map title shown in index |
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
-| `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas default) or `snapshot` (A3 fit-to-screen) |
+| `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas) or `snapshot` (A3 fit-to-screen) |
 | `--platform` | auto-detected | Project platform: `web` or `ios` |
-| `--no-open` | `false` | Don't automatically open the viewer in a browser
+| `--no-open` | — | Don't automatically open the viewer in a browser |
 
 ## Output
 
-The tool generates a folder (default `./flow-map-output/`) containing the index: 
+The tool generates a folder (default `./flow-map-output/`) containing:
 
 ```
-  index.html           # The table of contents (open this)
-  style.css            # Styles for the viewer and maps
-  viewer.js            # JavaScript for the interactive viewer
-  maps/                # Subfolders for each generated map
+index.html           # Collection index (lists all maps)
+styles.css           # Shared styles
+viewer.js            # Shared viewer JavaScript
+maps/                # Subfolders for each generated map
+  <map-name>/
+    index.html       # Interactive viewer (open this)
+    graph-data.json  # Raw graph data (nodes + edges with provenance)
+    sitemap.mmd      # Mermaid text-based graph definition
+    meta.json        # Map metadata
+    map.pdf          # PDF export (if --export-pdf)
+    screenshots/     # PNG screenshot of every page
 ```
 
-Each time you run the tool it will also produce a subfolder for the specific map you are generating, which will contain:
+## Viewer controls
 
-```
-  index.html           # Interactive viewer (open this)
-  map.pdf              # Optional PDF export (full-canvas by default)
-  graph-data.json      # Raw graph data (nodes + edges)
-  sitemap.mmd          # Mermaid text-based graph definition
-  meta.json            # Graph metadata (number of nodes, name, etc.)
-  map.pdf              # A PDF of the map, if you've chosen to generate one
-  screenshots/         # PNG screenshot of every page
-```
-
-Open `index.html` in a browser to explore the flow map. You can deploy the entire folder to GitHub Pages, Netlify, or any static host to share with your team.
+- **Pan**: Click and drag the background
+- **Zoom**: Scroll wheel, or use the + / − buttons
+- **Fit to screen**: Reset the view to fit all nodes
+- **Click a node**: Opens a detail panel with screenshot, metadata, incoming/outgoing edges, and provenance badges
+- **Search**: Type to filter pages by name or URL path
+- **Filter by hub**: Use the dropdown to show only pages in a specific section
+- **Toggle labels**: Show/hide edge labels and conditions
+- **Toggle global nav**: Show/hide global navigation edges (hidden by default in scenario mode to reduce clutter)
+- **Provenance filter**: Filter edges by source — runtime only, static only, or both
+- **Show/hide screenshots**: Toggle between screenshot view and compact node view
+- **Thumbnail mode**: Switch between full-page screenshots and compact thumbnails
+- **Drag nodes**: Click and drag any node to reposition it (positions are saved in your browser)
+- **Hide nodes**: Click a node, then use the "Hide this page" button to remove it from view
 
 ## iOS / SwiftUI projects
 
@@ -134,15 +313,6 @@ For screens the auto-detection can't handle — data-dependent UI, custom button
         "tap:Manage GP appointments",
         "tapContaining:Appointment on"
       ]
-    },
-    "RemovedMessagesView": {
-      "steps": [
-        "tapTab:Messages:1",
-        "swipeLeft:firstCell",
-        "tap:Remove",
-        "wait:1.0",
-        "tap:Removed messages"
-      ]
     }
   }
 }
@@ -150,41 +320,26 @@ For screens the auto-detection can't handle — data-dependent UI, custom button
 
 #### `exclude`
 
-An array of view names to remove from the graph entirely. Use this for embedded components that the parser picks up as screens but aren't actually navigable destinations (e.g. section views, helper components).
+An array of view names to remove from the graph entirely. Use this for embedded components that the parser picks up as screens but aren't actually navigable destinations.
 
 #### `overrides`
 
-A map of view name to custom test steps. When a screen has an override, the tool skips auto-detection for that screen and generates a test using your steps instead. Each step is a string in the format `command:arguments`.
+A map of view name to custom test steps. Each step is a string in the format `command:arguments`.
 
 | Step | Example | Description |
 |---|---|---|
-| `tap:Label` | `tap:Appointments` | Tap a button, cell, or element matching this label |
-| `tapTab:Label:index` | `tapTab:Messages:1` | Tap a tab bar button by label and index (index is zero-based) |
-| `tapContaining:text` | `tapContaining:Appointment on` | Tap the first button whose accessibility label contains this text |
+| `tap:Label` | `tap:Appointments` | Tap a button or element matching this label |
+| `tapTab:Label:index` | `tapTab:Messages:1` | Tap a tab bar button by label and index (zero-based) |
+| `tapContaining:text` | `tapContaining:Appointment on` | Tap the first element whose label contains this text |
 | `tapCell:index` | `tapCell:0` | Tap a list cell by index (zero-based) |
-| `tapSwitch:index` | `tapSwitch:0` | Tap a toggle/switch by index (zero-based) — useful for checkboxes and selection toggles |
-| `swipeLeft:firstCell` | `swipeLeft:firstCell` | Swipe left on the first cell (to reveal swipe actions) |
+| `tapSwitch:index` | `tapSwitch:0` | Tap a toggle/switch by index |
+| `swipeLeft:firstCell` | `swipeLeft:firstCell` | Swipe left on the first cell |
 | `swipeLeft:index` | `swipeLeft:2` | Swipe left on a cell at a specific index |
 | `wait:seconds` | `wait:1.5` | Wait for a number of seconds |
 
-Steps run in order after the app launches. If any `tap` or `tapTab` step fails to find its target, the test aborts and no screenshot is taken (preventing wrong screenshots).
-
-#### When to use overrides
-
-- **Item-based sheets** — where the trigger is a dynamic element (e.g. tapping an appointment card). Use `tapContaining` with a keyword from the element's accessibility label.
-- **Data-dependent screens** — where a button only appears after some user action (e.g. swipe-deleting a message to reveal "Removed messages"). Script the prerequisite actions as steps.
-- **Custom button components** — where the parser can't extract the trigger label. Provide the button text directly in a `tap` step.
-
-#### When to use excludes
-
-- **Embedded sub-views** — components like `UrgentMedicalHelpSection` that conform to `View` but are never navigation destinations.
-- **Unreachable screens** — views whose navigation link is commented out or removed but the view file still exists.
-
-The config file name can be either `.flow-map.json` or `flow-map.config.json`.
-
 ## How it works
 
-### Web prototypes
+### Web prototypes (static mode)
 
 1. **Scans** `app/views/` for all `.html` template files
 2. **Parses** each template for `href=`, `action=`, `location.href`, `{% set backLinkURL %}`, and `{% if %}` conditional blocks
@@ -193,38 +348,25 @@ The config file name can be either `.flow-map.json` or `flow-map.config.json`.
 5. **Starts the prototype**, crawls every page with Playwright, and takes screenshots
 6. **Generates a static HTML viewer** with the graph and screenshots embedded
 
+### Web prototypes (scenario mode)
+
+1. **Loads scenario config** from `flow-map.config.yml` in the prototype root
+2. **Runs static analysis** — scans templates and route handlers for enrichment metadata
+3. **Starts the prototype server** and launches a headless browser
+4. **For each scenario:**
+   - Creates a fresh browser context (isolated cookies/session)
+   - Executes setup steps (login, navigate, fill forms)
+   - BFS-crawls from the start URL, following links within scope
+   - Captures screenshots of each valid page
+   - Builds a runtime graph of nodes and edges
+5. **Enriches** the runtime graph with static analysis metadata (titles, file paths, node types)
+6. **Generates** a viewer, Mermaid sitemap, and metadata per scenario
+
 ### iOS prototypes
 
 1. **Scans** for all `.swift` files in the project
-2. **Parses** each file for SwiftUI navigation patterns (`NavigationLink`, `TabView`, `.sheet()`, `.fullScreenCover()`, `RowLink`, `HubRowLink`)
+2. **Parses** each file for SwiftUI navigation patterns
 3. **Builds a directed graph** of screens and navigation edges
-4. **Applies config** — removes excluded nodes, prepares override test steps
-5. **Generates a temporary XCUITest** that navigates to each screen and takes a screenshot
-6. **Runs `xcodebuild test`** in the iOS Simulator, collects the PNG files
-7. **Generates a static HTML viewer** with the graph and screenshots embedded
-
-## Viewer controls
-
-- **Pan**: Click and drag the background
-- **Zoom**: Scroll wheel, or use the + / − buttons
-- **Click a node**: Opens a detail panel with screenshot, metadata, and all incoming/outgoing links
-- **Filter by hub**: Use the dropdown to show only pages in a specific section
-- **Search**: Type to filter pages by name or URL path
-- **Toggle back links**: Show/hide the dashed "Back" link edges
-- **Toggle labels**: Show/hide edge labels and conditions
-`
-## To do
-
-- Make it possible to add your own images into the flow?
-- Make the command line prompt easier to use (multiple steps)
-  - The sequence:
-    - Path to the prototype
-    - Name
-    - Title
-    - Start points
-    - Screenshots option
-  - At each step, if you just press enter, it will use the default value
-- Make it an npm package and something that be installed into a prototype so it auto-runs on build?
-- Add a text-based visualisation of the site
-- Can this output a file for Mural?
-- Can the changes the user makes to the map positions be saved?
+4. **Generates a temporary XCUITest** that navigates to each screen and takes a screenshot
+5. **Runs `xcodebuild test`** in the iOS Simulator, collects the PNG files
+6. **Generates a static HTML viewer** with the graph and screenshots embedded
