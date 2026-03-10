@@ -640,9 +640,18 @@ function generateViewerJs() {
     const startNodes = filteredNodes.filter(n => n.isStartNode);
     const startNodeIds = new Set(startNodes.map(n => n.id));
 
+    // Build rank lookup for visit-driven layout
+    const nodeRank = {};
+    const hasRanks = filteredNodes.some(n => n.layoutRank !== undefined);
+    if (hasRanks) {
+      filteredNodes.forEach(n => { if (n.layoutRank !== undefined) nodeRank[n.id] = n.layoutRank; });
+    }
+
     // Separate nav edges and incoming-to-start edges from dagre-layoutable edges
     const navEdges = [];
     const incomingToStartEdges = [];
+    const lateralEdges = []; // within-rank edges (tab siblings) — rendered but not laid out
+    const backwardEdges = []; // higher rank → lower rank — rendered but not laid out
     const filteredEdges = graph.edges.filter(e => {
       if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return false;
       // Global nav filter: hide global nav edges unless toggled on
@@ -650,9 +659,20 @@ function generateViewerJs() {
       // Provenance filter
       if (provenanceFilter && e.provenance && e.provenance !== provenanceFilter) return false;
       if (e.type === 'nav') { navEdges.push(e); return false; }
+
+      // When layout ranks are available, only include forward edges in dagre
+      if (hasRanks && nodeRank[e.source] !== undefined && nodeRank[e.target] !== undefined) {
+        if (nodeRank[e.source] === nodeRank[e.target]) {
+          lateralEdges.push(e);
+          return false;
+        }
+        if (nodeRank[e.source] > nodeRank[e.target]) {
+          backwardEdges.push(e);
+          return false;
+        }
+      }
+
       // Exclude incoming edges to start nodes from dagre so they stay at top rank.
-      // Applies for any number of start nodes — even a single --from page can be
-      // pulled down the rank if something in the graph links back to it.
       if (startNodeIds.size >= 1 && startNodeIds.has(e.target) && !startNodeIds.has(e.source)) {
         incomingToStartEdges.push(e);
         return false;
@@ -665,8 +685,6 @@ function generateViewerJs() {
     });
 
     // Add virtual root to pin start nodes to the top rank.
-    // Used for any number of start nodes — a single --from page also needs this
-    // anchor so dagre doesn't assign it a lower rank due to back-edges or cycles.
     const virtualRootId = '__virtual_root__';
     if (startNodes.length >= 1) {
       g.setNode(virtualRootId, { width: 0, height: 0 });
@@ -682,6 +700,28 @@ function generateViewerJs() {
       if (id === virtualRootId) return;
       layoutNodes[id] = g.node(id);
     });
+
+    // Top-align nodes within each rank layer.
+    // Dagre centers nodes vertically, but with variable-height screenshots
+    // (desktop mode) it looks much better to align the tops of each row.
+    if (hasRanks) {
+      const rankBuckets = {};
+      Object.keys(layoutNodes).forEach(id => {
+        const r = nodeRank[id];
+        if (r === undefined) return;
+        if (!rankBuckets[r]) rankBuckets[r] = [];
+        rankBuckets[r].push(layoutNodes[id]);
+      });
+      Object.values(rankBuckets).forEach(nodesInRank => {
+        if (nodesInRank.length < 2) return;
+        // Find the minimum top edge (y - height/2) in this rank
+        const minTop = Math.min(...nodesInRank.map(n => n.y - n.height / 2));
+        // Shift each node so its top edge aligns with minTop
+        nodesInRank.forEach(n => {
+          n.y = minTop + n.height / 2;
+        });
+      });
+    }
 
     // Assign each node to its nearest start node's subgraph (multi-source BFS)
     const subgraphOf = {};
@@ -823,8 +863,8 @@ function generateViewerJs() {
       return { ...edge, points: computeStraightEdge(edge.source, edge.target) };
     });
 
-    // Add nav edges and incoming-to-start edges as straight lines.
-    [...navEdges, ...incomingToStartEdges].forEach(edge => {
+    // Add visual-only edges (nav, incoming-to-start, lateral, backward) as straight lines.
+    [...navEdges, ...incomingToStartEdges, ...lateralEdges, ...backwardEdges].forEach(edge => {
       // Apply global nav and provenance filters to these too
       if (edge.isGlobalNav && !showGlobalNav) return;
       if (provenanceFilter && edge.provenance && edge.provenance !== provenanceFilter) return;

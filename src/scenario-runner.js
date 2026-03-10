@@ -209,6 +209,9 @@ async function visitDrivenMap(options) {
   // Track links extracted from each page (for building cross-edges)
   const pageLinks = new Map();
 
+  // Track the unique visit order (first appearance only)
+  const visitOrder = [];
+
   for (const step of mapSteps) {
     if (step.type === "endMap") break;
 
@@ -232,6 +235,7 @@ async function visitDrivenMap(options) {
 
       // Only screenshot and extract links on first visit
       if (!nodes.has(urlPath)) {
+        visitOrder.push(urlPath);
         const result = await visitPage(page, urlPath, {
           baseUrl,
           scenario,
@@ -300,6 +304,60 @@ async function visitDrivenMap(options) {
         ...link,
         target,
       });
+    }
+  }
+
+  // Compute layout ranks: group tab siblings (mutual cross-links) into the
+  // same rank layer, then assign incrementing ranks following visit order.
+  // This produces a "layer cake" layout: sibling tabs side-by-side, with
+  // each journey step progressing downward.
+  const edgeLookup = new Set(edges.map((e) => `${e.source}→${e.target}`));
+  function areMutuallyLinked(a, b) {
+    if (!edgeLookup.has(`${a}→${b}`) || !edgeLookup.has(`${b}→${a}`)) return false;
+    // Only treat as siblings if they share a common URL parent.
+    // This avoids grouping /dashboard with /clinics/today just because
+    // they're mutually linked via breadcrumb "Home" links.
+    const parentA = a.substring(0, a.lastIndexOf("/")) || "/";
+    const parentB = b.substring(0, b.lastIndexOf("/")) || "/";
+    return parentA === parentB;
+  }
+
+  const assigned = new Set();
+  const rankGroups = []; // array of arrays — each sub-array is one rank layer
+
+  for (let i = 0; i < visitOrder.length; i++) {
+    const nodeId = visitOrder[i];
+    if (assigned.has(nodeId)) continue;
+
+    // Start a new group with this node
+    const group = [nodeId];
+    assigned.add(nodeId);
+
+    // Extend the group with consecutive nodes that are mutual siblings
+    // of ALL current group members
+    for (let j = i + 1; j < visitOrder.length; j++) {
+      const candidate = visitOrder[j];
+      if (assigned.has(candidate)) continue;
+      const isSiblingOfAll = group.every((g) => areMutuallyLinked(g, candidate));
+      if (isSiblingOfAll) {
+        group.push(candidate);
+        assigned.add(candidate);
+      } else {
+        break;
+      }
+    }
+
+    rankGroups.push(group);
+  }
+
+  // Stamp visitOrder and layoutRank onto nodes
+  for (let rank = 0; rank < rankGroups.length; rank++) {
+    for (const nodeId of rankGroups[rank]) {
+      const node = nodes.get(nodeId);
+      if (node) {
+        node.visitOrder = visitOrder.indexOf(nodeId);
+        node.layoutRank = rank;
+      }
     }
   }
 
