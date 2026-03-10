@@ -41,6 +41,7 @@ program
   .option("-p, --port <number>", "Port to start the prototype on", "4321")
   .option("--width <number>", "Screenshot viewport width", "375")
   .option("--height <number>", "Screenshot viewport height", "812")
+  .option("--desktop", "Use desktop viewport (1280x800) instead of mobile")
   .option(
     "--no-screenshots",
     "Skip screenshot capture (faster, template analysis only)",
@@ -195,10 +196,9 @@ program
           prototypePath: resolvedPath,
           outputDir: path.resolve(options.output),
           port: parseInt(options.port, 10),
-          viewport: {
-            width: parseInt(options.width, 10),
-            height: parseInt(options.height, 10),
-          },
+          viewport: options.desktop
+            ? { width: 1280, height: 800 }
+            : { width: parseInt(options.width, 10), height: parseInt(options.height, 10) },
           screenshots: options.screenshots,
           runtimeCrawl: Boolean(options.runtimeCrawl),
           basePath: options.basePath,
