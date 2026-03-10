@@ -254,14 +254,47 @@ async function visitDrivenMap(options) {
     }
   }
 
-  // Build edges: for each visited page, check which of its DOM links
-  // point to other visited pages
+  // Resolve redirects: collect link targets not in the visit set,
+  // probe them to discover where they redirect, and map aliases.
+  const redirectMap = new Map(); // e.g. /clinics → /clinics/today
+  const unknownTargets = new Set();
   for (const [sourcePath, links] of pageLinks) {
     for (const link of links) {
-      // Canonicalize the link target and check if it's in our visit set
       const target = canonicalizePath(link.target);
       if (!target || target === sourcePath) continue;
-      if (!visitSet.has(target)) continue;
+      if (!visitSet.has(target) && !unknownTargets.has(target)) {
+        unknownTargets.add(target);
+      }
+    }
+  }
+
+  for (const target of unknownTargets) {
+    try {
+      const response = await page.goto(`${baseUrl}${target}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 8000,
+      });
+      if (response && response.ok()) {
+        const landedPath = canonicalizePath(new URL(page.url()).pathname);
+        if (landedPath !== target && visitSet.has(landedPath)) {
+          redirectMap.set(target, landedPath);
+        }
+      }
+    } catch { /* ignore — just means we can't resolve this target */ }
+  }
+
+  // Build edges: for each visited page, check which of its DOM links
+  // point to other visited pages (directly or via redirect)
+  for (const [sourcePath, links] of pageLinks) {
+    for (const link of links) {
+      let target = canonicalizePath(link.target);
+      if (!target || target === sourcePath) continue;
+
+      // Resolve through redirect map if not a direct match
+      if (!visitSet.has(target)) {
+        target = redirectMap.get(target);
+        if (!target) continue;
+      }
 
       addEdge(edges, edgeKeys, sourcePath, {
         ...link,
@@ -718,10 +751,27 @@ function isInScope(urlPath, scenario) {
 
 /**
  * Add an edge, deduplicating by key.
+ * If a duplicate exists but the new link is non-global-nav, upgrade the
+ * existing edge — a main-content link is more intentional than a header link.
  */
 function addEdge(edges, edgeKeys, fromPath, link) {
   const key = `${fromPath}|${link.target}|${link.kind || "link"}|${(link.method || "GET").toUpperCase()}`;
-  if (edgeKeys.has(key)) return;
+
+  if (edgeKeys.has(key)) {
+    // Upgrade: if existing edge is global-nav but new one isn't, prefer non-global-nav
+    if (!link.isGlobalNav) {
+      const existing = edges.find(
+        (e) => e.source === fromPath && e.target === link.target &&
+          e.type === (link.kind === "form" ? "form" : "link"),
+      );
+      if (existing && existing.isGlobalNav) {
+        existing.isGlobalNav = false;
+        existing.label = link.text || existing.label;
+      }
+    }
+    return;
+  }
+
   edgeKeys.add(key);
 
   edges.push({
