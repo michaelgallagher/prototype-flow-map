@@ -12,6 +12,74 @@ const FORWARD_EDGE_TYPES = new Set([
   "render",
 ]);
 
+const DEFAULT_IGNORED_QUERY_PARAMS = new Set([
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_term",
+  "utm_content",
+  "gclid",
+  "fbclid",
+  "_",
+  "cacheBust",
+  "timestamp",
+  "ts",
+]);
+
+const ASSET_EXTENSIONS = new Set([
+  ".css",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".map",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".ico",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".pdf",
+  ".json",
+  ".xml",
+  ".txt",
+  ".mp4",
+  ".webm",
+  ".mp3",
+  ".wav",
+  ".zip",
+]);
+
+const INTERNAL_PATH_PREFIXES = [
+  "/assets/",
+  "/public/",
+  "/dist/",
+  "/build/",
+  "/scripts/",
+  "/styles/",
+  "/images/",
+  "/fonts/",
+  "/favicon",
+  "/api/",
+  "/prototype-admin/",
+  "/_includes/",
+  "/_templates/",
+];
+
+const DEFAULT_CANONICALIZATION_OPTIONS = {
+  collapseNumericSegments: true,
+  collapseUuidSegments: true,
+  collapseDateSegments: true,
+  collapseTemplateExpressions: true,
+  sortQueryParams: true,
+  dropIgnoredQueryParams: true,
+};
+
 /**
  * Check if a URL path matches any of the comma-separated base path patterns.
  * Supports prefixes and glob patterns (e.g. "/pages/gp,/pages/booking" or "/pages/gp-*").
@@ -54,28 +122,72 @@ function matchesExclude(urlPath, exclude) {
 }
 
 /**
- * Minimal Phase 1 URL normalization for runtime/static edge keying.
- * Conservative by design:
+ * Decide whether a path is a likely application route we should include in the graph.
+ * This is intentionally conservative: it blocks obvious assets/framework internals but
+ * allows normal-looking app paths through for later canonicalization.
+ */
+function isProbablyAppRoute(urlPath) {
+  if (!urlPath) return false;
+  if (typeof urlPath !== "string") return false;
+
+  const trimmed = urlPath.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("#")) return false;
+  if (/^(javascript:|mailto:|tel:|data:)/i.test(trimmed)) return false;
+
+  const normalized = normalizeUrlPath(trimmed, {
+    collapseNumericSegments: false,
+    collapseUuidSegments: false,
+    collapseDateSegments: false,
+    collapseTemplateExpressions: false,
+    sortQueryParams: false,
+    dropIgnoredQueryParams: false,
+  });
+
+  if (!normalized.startsWith("/")) return false;
+
+  if (INTERNAL_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return false;
+  }
+
+  const pathname = normalized.split("?")[0];
+
+  if (pathname === "/") return true;
+
+  const lowerPath = pathname.toLowerCase();
+  for (const ext of ASSET_EXTENSIONS) {
+    if (lowerPath.endsWith(ext)) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Phase 2 canonicalization:
  * - strips fragments
  * - collapses duplicate slashes
  * - normalizes trailing slash (except root)
- * - sorts query params if present
- *
- * This intentionally does NOT canonicalize IDs or drop query params yet.
+ * - sorts query params
+ * - drops common ignored query params
+ * - canonicalizes template expressions, numeric IDs, UUIDs, and date-like segments
  */
-function normalizeUrlPath(urlPath) {
+function normalizeUrlPath(urlPath, options = DEFAULT_CANONICALIZATION_OPTIONS) {
   if (!urlPath) return "/";
+
+  const opts = {
+    ...DEFAULT_CANONICALIZATION_OPTIONS,
+    ...options,
+  };
 
   let normalized = String(urlPath).trim();
 
-  // If an absolute URL slips through, normalize to pathname/search/hash first
   try {
     if (/^https?:\/\//i.test(normalized)) {
       const absolute = new URL(normalized);
       normalized = `${absolute.pathname}${absolute.search}${absolute.hash}`;
     }
   } catch {
-    // keep original string if URL parsing fails
+    // Keep original string if absolute URL parsing fails.
   }
 
   if (!normalized.startsWith("/")) {
@@ -95,12 +207,156 @@ function normalizeUrlPath(urlPath) {
   }
   if (!pathname) pathname = "/";
 
-  const params = Array.from(parsed.searchParams.entries()).sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  const sortedSearch = new URLSearchParams(params).toString();
+  const rawSegments = pathname.split("/");
+  const canonicalSegments = rawSegments.map((segment, index) => {
+    if (index === 0 || !segment) return segment;
+    return canonicalizePathSegment(segment, opts);
+  });
+
+  pathname = canonicalSegments.join("/") || "/";
+  if (!pathname.startsWith("/")) pathname = `/${pathname}`;
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    pathname = pathname.replace(/\/+$/, "");
+  }
+
+  let params = Array.from(parsed.searchParams.entries());
+
+  if (opts.dropIgnoredQueryParams) {
+    params = params.filter(
+      ([key]) => !DEFAULT_IGNORED_QUERY_PARAMS.has(String(key).trim()),
+    );
+  }
+
+  if (opts.sortQueryParams) {
+    params.sort(([a], [b]) => a.localeCompare(b));
+  }
+
+  const canonicalParams = params.map(([key, value]) => [
+    key,
+    canonicalizeQueryValue(value, opts),
+  ]);
+
+  const sortedSearch = new URLSearchParams(canonicalParams).toString();
 
   return `${pathname}${sortedSearch ? `?${sortedSearch}` : ""}`;
+}
+
+function canonicalizePathSegment(segment, options) {
+  const decoded = safeDecodeURIComponent(segment).trim();
+  if (!decoded) return segment;
+
+  if (
+    options.collapseTemplateExpressions &&
+    containsTemplateExpression(decoded)
+  ) {
+    return canonicalTemplateSegment(decoded);
+  }
+
+  if (options.collapseUuidSegments && isUuidLike(decoded)) {
+    return ":uuid";
+  }
+
+  if (options.collapseDateSegments && isDateLike(decoded)) {
+    return ":date";
+  }
+
+  if (options.collapseNumericSegments && isNumericId(decoded)) {
+    return ":id";
+  }
+
+  return decoded;
+}
+
+function canonicalizeQueryValue(value, options) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return trimmed;
+
+  if (
+    options.collapseTemplateExpressions &&
+    containsTemplateExpression(trimmed)
+  ) {
+    return ":param";
+  }
+
+  if (options.collapseUuidSegments && isUuidLike(trimmed)) {
+    return ":uuid";
+  }
+
+  if (options.collapseDateSegments && isDateLike(trimmed)) {
+    return ":date";
+  }
+
+  if (options.collapseNumericSegments && isNumericId(trimmed)) {
+    return ":id";
+  }
+
+  return trimmed;
+}
+
+function containsTemplateExpression(value) {
+  return /\{\{.*?\}\}|\{%.*?%\}/.test(value);
+}
+
+function canonicalTemplateSegment(value) {
+  const trimmed = value.trim();
+
+  const tokens = Array.from(trimmed.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)).map(
+    (match) => match[1].trim(),
+  );
+
+  if (tokens.length === 1) {
+    return `:${templateTokenToParamName(tokens[0])}`;
+  }
+
+  if (tokens.length > 1) {
+    return tokens
+      .map((token) => `:${templateTokenToParamName(token)}`)
+      .join("-");
+  }
+
+  return ":param";
+}
+
+function templateTokenToParamName(token) {
+  const cleaned = String(token || "")
+    .replace(/\bor\b.*$/i, "")
+    .replace(/\[[^\]]+\]/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .trim();
+
+  const parts = cleaned.split(/[.\s|/-]+/).filter(Boolean);
+  const last = parts[parts.length - 1] || "param";
+  const safe = last.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase();
+
+  if (!safe) return "param";
+  if (safe === "id") return "id";
+  return safe;
+}
+
+function isNumericId(value) {
+  return /^\d+$/.test(value);
+}
+
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+function isDateLike(value) {
+  return (
+    /^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    /^\d{2}-\d{2}-\d{4}$/.test(value) ||
+    /^\d{4}\/\d{2}\/\d{2}$/.test(value)
+  );
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -116,35 +372,26 @@ function buildGraph(
   exclude,
   runtimeEdges = [],
 ) {
-  // We intentionally do NOT filter nodes by `exclude` at build time any more.
-  // The graph is built in full so that filterByExclusion can later perform a
-  // proper subtree-aware prune (removing excluded roots AND any nodes that are
-  // only reachable through them). matchesExclude is still used below to skip
-  // creating nodes/edges for paths that match file-path prefixes, but the
-  // semantic "exclude this page and its children" logic lives in
-  // filterByExclusion, which is called in index.js after the graph is built.
   const nodes = [];
   const edges = [];
-  const nodeMap = new Map(); // urlPath -> node
+  const nodeMap = new Map();
 
-  // Track which POST routes have explicit handlers
   const explicitPostHandlers = new Map();
   for (const route of explicitRoutes) {
     if (route.method === "POST" && !route.isCatchAll) {
-      explicitPostHandlers.set(route.path, route);
+      explicitPostHandlers.set(normalizeUrlPath(route.path), route);
     }
   }
 
-  // Check if the catch-all POST→GET redirect exists
   const hasCatchAllPost = explicitRoutes.some((r) => r.isCatchAll);
 
-  // Step 1: Create nodes for each template
   for (const tpl of templateData) {
-    if (!matchesBasePaths(tpl.urlPath, basePath)) {
-      continue;
-    }
+    if (!isProbablyAppRoute(tpl.urlPath)) continue;
+    if (!matchesBasePaths(tpl.urlPath, basePath)) continue;
 
     const normalizedUrlPath = normalizeUrlPath(tpl.urlPath);
+    if (!isProbablyAppRoute(normalizedUrlPath)) continue;
+
     const node = {
       id: normalizedUrlPath,
       label: tpl.pageTitle || normalizedUrlPath.split("/").pop() || "Home",
@@ -153,37 +400,47 @@ function buildGraph(
       filePath: tpl.relativePath,
       screenshot: null,
       type: categoriseNode(tpl),
+      rawUrlPath: tpl.urlPath,
+      canonicalUrlPath: normalizedUrlPath,
     };
 
-    nodes.push(node);
-    nodeMap.set(normalizedUrlPath, node);
+    if (!nodeMap.has(normalizedUrlPath)) {
+      nodes.push(node);
+      nodeMap.set(normalizedUrlPath, node);
+    }
   }
 
-  // Step 2: Create edges from links, forms, conditionals, and JS redirects
   for (const tpl of templateData) {
-    if (!matchesBasePaths(tpl.urlPath, basePath)) {
-      continue;
-    }
+    if (!isProbablyAppRoute(tpl.urlPath)) continue;
+    if (!matchesBasePaths(tpl.urlPath, basePath)) continue;
 
     const source = normalizeUrlPath(tpl.urlPath);
+    if (!isProbablyAppRoute(source)) continue;
 
-    // Regular links
     for (const link of tpl.links) {
-      addEdge(edges, source, normalizeUrlPath(link.target), {
+      const target = normalizeUrlPath(link.target);
+      if (!isProbablyAppRoute(target)) continue;
+
+      addEdge(edges, source, target, {
         type: "link",
         label: link.label || "",
         provenance: "static",
       });
     }
 
-    // Form actions
     for (const form of tpl.formActions) {
+      const canonicalTarget = normalizeUrlPath(form.target);
+      if (!isProbablyAppRoute(canonicalTarget)) continue;
+
       const target = resolveFormTarget(
-        normalizeUrlPath(form.target),
+        canonicalTarget,
         form.method,
         explicitPostHandlers,
         hasCatchAllPost,
       );
+
+      if (!isProbablyAppRoute(target)) continue;
+
       addEdge(edges, source, target, {
         type: "form",
         label: form.label || "Submit",
@@ -192,9 +449,8 @@ function buildGraph(
       });
     }
 
-    // Conditional links and forms
     for (const cond of tpl.conditionalLinks) {
-      const target =
+      const rawTarget =
         cond.type === "form"
           ? resolveFormTarget(
               normalizeUrlPath(cond.target),
@@ -204,7 +460,9 @@ function buildGraph(
             )
           : normalizeUrlPath(cond.target);
 
-      addEdge(edges, source, target, {
+      if (!isProbablyAppRoute(rawTarget)) continue;
+
+      addEdge(edges, source, rawTarget, {
         type: "conditional",
         label: cond.label || "",
         condition: cond.condition,
@@ -213,34 +471,42 @@ function buildGraph(
       });
     }
 
-    // JS redirects
     for (const redirect of tpl.jsRedirects) {
-      addEdge(edges, source, normalizeUrlPath(redirect.target), {
+      const target = normalizeUrlPath(redirect.target);
+      if (!isProbablyAppRoute(target)) continue;
+
+      addEdge(edges, source, target, {
         type: "redirect",
         label: redirect.label || "Redirect",
         provenance: "static",
       });
     }
-
-    // Back links are intentionally omitted — the forward edge to a page
-    // already implies the user can navigate back.
   }
 
-  // Step 3: Add edges from explicit route handlers
   for (const route of explicitRoutes) {
     if (route.isCatchAll) continue;
+    if (!isProbablyAppRoute(route.path)) continue;
+
     const source = normalizeUrlPath(route.path);
+    if (!isProbablyAppRoute(source)) continue;
 
     for (const redirect of route.redirects) {
-      addEdge(edges, source, normalizeUrlPath(redirect), {
+      const target = normalizeUrlPath(redirect);
+      if (!isProbablyAppRoute(target)) continue;
+
+      addEdge(edges, source, target, {
         type: "redirect",
         label: `${route.method} handler → redirect`,
         method: route.method,
         provenance: "static",
       });
     }
+
     for (const render of route.renders) {
-      addEdge(edges, source, normalizeUrlPath(render), {
+      const target = normalizeUrlPath(render);
+      if (!isProbablyAppRoute(target)) continue;
+
+      addEdge(edges, source, target, {
         type: "render",
         label: `${route.method} handler → render`,
         method: route.method,
@@ -249,12 +515,15 @@ function buildGraph(
     }
   }
 
-  // Step 4: Merge runtime-discovered edges
   for (const runtimeEdge of runtimeEdges) {
     if (!runtimeEdge || !runtimeEdge.from || !runtimeEdge.to) continue;
+    if (!isProbablyAppRoute(runtimeEdge.from)) continue;
+    if (!isProbablyAppRoute(runtimeEdge.to)) continue;
 
     const source = normalizeUrlPath(runtimeEdge.from);
     const target = normalizeUrlPath(runtimeEdge.to);
+
+    if (!isProbablyAppRoute(source) || !isProbablyAppRoute(target)) continue;
 
     if (
       !matchesBasePaths(source, basePath) ||
@@ -269,16 +538,19 @@ function buildGraph(
       method: runtimeEdge.method,
       provenance: "runtime",
       sourceKind: runtimeEdge.kind || "anchor",
+      navigationCategory:
+        runtimeEdge.navigationCategory ||
+        classifyRuntimeNavigation(runtimeEdge.label, source, target),
+      rawSource: runtimeEdge.from,
+      rawTarget: runtimeEdge.to,
     });
   }
 
-  // Ensure runtime-only nodes are represented
   for (const edge of edges) {
     ensureNode(nodeMap, nodes, edge.source);
     ensureNode(nodeMap, nodes, edge.target);
   }
 
-  // Deduplicate edges with provenance-aware merge
   const uniqueEdges = deduplicateEdges(edges);
 
   return { nodes, edges: uniqueEdges };
@@ -295,31 +567,36 @@ function resolveFormTarget(
   explicitPostHandlers,
   hasCatchAllPost,
 ) {
-  if (method === "POST" && explicitPostHandlers.has(actionPath)) {
-    // There's an explicit handler — it may redirect somewhere else
-    // but we'll handle that via the explicit routes edges
-    return actionPath;
+  const normalizedActionPath = normalizeUrlPath(actionPath);
+
+  if (
+    String(method || "").toUpperCase() === "POST" &&
+    explicitPostHandlers.has(normalizedActionPath)
+  ) {
+    return normalizedActionPath;
   }
 
-  // With catch-all POST→GET, form POSTs redirect to the same path as a GET
-  // which means the page at that path is rendered
-  if (method === "POST" && hasCatchAllPost) {
-    return actionPath;
+  if (String(method || "").toUpperCase() === "POST" && hasCatchAllPost) {
+    return normalizedActionPath;
   }
 
-  return actionPath;
+  return normalizedActionPath;
 }
 
 function addEdge(edges, source, target, metadata) {
   source = normalizeUrlPath(source);
   target = normalizeUrlPath(target);
 
-  // Don't add self-loops unless they're meaningful
+  if (!isProbablyAppRoute(source) || !isProbablyAppRoute(target)) return;
+
   if (source === target && metadata.type !== "conditional") return;
 
   edges.push({
     source,
     target,
+    navigationCategory:
+      metadata.navigationCategory ||
+      classifyRuntimeNavigation(metadata.label, source, target),
     ...metadata,
   });
 }
@@ -354,7 +631,18 @@ function deduplicateEdges(edges) {
       existing.sourceKind = edge.sourceKind;
     }
 
-    // Preserve explicit signal for older viewer/debugging compatibility
+    if (!existing.navigationCategory && edge.navigationCategory) {
+      existing.navigationCategory = edge.navigationCategory;
+    }
+
+    if (!existing.rawSource && edge.rawSource) {
+      existing.rawSource = edge.rawSource;
+    }
+
+    if (!existing.rawTarget && edge.rawTarget) {
+      existing.rawTarget = edge.rawTarget;
+    }
+
     existing.discoveredByCrawler =
       Boolean(existing.discoveredByCrawler) || edge.provenance === "runtime";
   }
@@ -380,6 +668,7 @@ function mergeProvenance(a = "static", b = "static") {
 
 function ensureNode(nodeMap, nodes, urlPath) {
   const normalized = normalizeUrlPath(urlPath);
+  if (!isProbablyAppRoute(normalized)) return;
   if (nodeMap.has(normalized)) return;
 
   const label =
@@ -395,6 +684,8 @@ function ensureNode(nodeMap, nodes, urlPath) {
     filePath: null,
     screenshot: null,
     type: "page",
+    rawUrlPath: urlPath,
+    canonicalUrlPath: normalized,
   };
 
   nodeMap.set(normalized, node);
@@ -420,31 +711,22 @@ function buildAdjacency(graph) {
 function collectReachable(startIds, adj) {
   const reachable = new Set();
   const queue = [...startIds];
+
   while (queue.length > 0) {
     const current = queue.shift();
     if (reachable.has(current)) continue;
     reachable.add(current);
+
     (adj[current] || []).forEach((target) => {
       if (!reachable.has(target)) queue.push(target);
     });
   }
+
   return reachable;
 }
 
 /**
  * Remove excluded pages and any descendants that have no other route into them.
- *
- * Algorithm:
- *  1. Find all "exclude root" nodes whose urlPath matches the --exclude patterns.
- *  2. BFS forward from those roots to collect the full candidate subtree.
- *  3. For each node in the subtree, check whether it has any incoming forward
- *     edge from a node that is NOT itself in the subtree. If it does, the node
- *     is reachable via another path and is kept. If every incoming edge comes
- *     from inside the subtree (or from an excluded root), it is removed.
- *  4. Edges whose source or target has been removed are also dropped.
- *
- * This means that a shared page (e.g. a common confirmation screen) that is
- * also linked from outside the excluded subtree will be preserved.
  */
 function filterByExclusion(graph, exclude) {
   if (!exclude) return graph;
@@ -456,7 +738,6 @@ function filterByExclusion(graph, exclude) {
 
   if (patterns.length === 0) return graph;
 
-  // Step 1: find all nodes that are exclude roots
   const excludeRootIds = new Set(
     graph.nodes
       .filter((n) => matchesExclude(n.urlPath, exclude))
@@ -470,11 +751,9 @@ function filterByExclusion(graph, exclude) {
     return graph;
   }
 
-  // Step 2: BFS forward from exclude roots to find the full candidate subtree
   const adj = buildAdjacency(graph);
   const subtree = collectReachable([...excludeRootIds], adj);
 
-  // Step 3: build a reverse adjacency so we can check incoming edges
   const reverseAdj = {};
   graph.edges.forEach((e) => {
     if (!FORWARD_EDGE_TYPES.has(e.type)) return;
@@ -482,11 +761,9 @@ function filterByExclusion(graph, exclude) {
     reverseAdj[e.target].push(e.source);
   });
 
-  // A node in the subtree is removable only if ALL of its incoming forward
-  // edges originate from within the subtree itself (i.e. no outside entry point).
   const removable = new Set();
-
   let changed = true;
+
   while (changed) {
     changed = false;
 
@@ -495,7 +772,6 @@ function filterByExclusion(graph, exclude) {
 
       const incoming = reverseAdj[nodeId] || [];
 
-      // Exclude roots are always removable by definition
       if (excludeRootIds.has(nodeId)) {
         removable.add(nodeId);
         changed = true;
@@ -548,13 +824,47 @@ function filterByReachability(graph, from) {
 }
 
 function categoriseNode(tpl) {
-  const path = tpl.urlPath || "";
+  const routePath = tpl.urlPath || "";
 
-  if (path === "/" || path === "/index") return "start";
+  if (routePath === "/" || routePath === "/index") return "start";
   if (tpl.hub) return "hub";
   if (tpl.formActions && tpl.formActions.length > 0) return "form";
   if (tpl.links && tpl.links.length > 3) return "hub";
   return "page";
+}
+
+function classifyRuntimeNavigation(label, source, target) {
+  const text = String(label || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (!text) return "journey";
+
+  if (
+    text.includes("accessibility") ||
+    text.includes("terms and conditions") ||
+    text.includes("contact us") ||
+    text === "log out"
+  ) {
+    return "utility";
+  }
+
+  if (
+    text === "home" ||
+    text === "settings" ||
+    text === "reports" ||
+    text === "screening" ||
+    text === "image reading"
+  ) {
+    return "global-nav";
+  }
+
+  if (source === "/" && target === "/start") {
+    return "entry";
+  }
+
+  return "journey";
 }
 
 module.exports = {
@@ -562,4 +872,5 @@ module.exports = {
   filterByExclusion,
   filterByReachability,
   normalizeUrlPath,
+  isProbablyAppRoute,
 };

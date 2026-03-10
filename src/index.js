@@ -17,7 +17,14 @@ const { scanSwiftFiles } = require("./swift-scanner");
 const { parseSwiftFile } = require("./swift-parser");
 const { buildSwiftGraph } = require("./swift-graph-builder");
 const { crawlAndScreenshotIos } = require("./swift-crawler");
-const { loadConfig, applyExclusions } = require("./flow-map-config");
+const {
+  loadConfig,
+  applyExclusions,
+  getScenarios,
+  resolveSteps,
+} = require("./flow-map-config");
+const { runScenarios } = require("./scenario-runner");
+const { enrichScenarioGraph } = require("./static-enrichment");
 
 async function generate(options) {
   const {
@@ -35,7 +42,21 @@ async function generate(options) {
     title,
     exportPdf: shouldExportPdf,
     pdfMode,
+    mode = "static",
+    config,
+    scenario: scenarioName,
+    scenarioSet,
   } = options;
+
+  // Scenario mode: delegate to scenario pipeline
+  if (mode === "scenario") {
+    return generateScenario(options);
+  }
+
+  // Audit mode: force runtime crawl on
+  if (mode === "audit") {
+    options.runtimeCrawl = true;
+  }
 
   // When --name is provided, output goes to maps/<name>/ within the output dir
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
@@ -287,6 +308,178 @@ async function generateNative(options) {
     console.log("7️⃣  Building collection index...");
     buildIndex(outputDir);
     console.log("   Collection index built");
+  }
+}
+
+async function generateScenario(options) {
+  const {
+    prototypePath,
+    outputDir,
+    port,
+    viewport,
+    name,
+    title,
+    exportPdf: shouldExportPdf,
+    pdfMode,
+    config,
+    scenario: scenarioName,
+    scenarioSet,
+  } = options;
+
+  // Resolve which scenarios to run
+  const scenarios = getScenarios(config, {
+    scenario: scenarioName,
+    scenarioSet,
+  });
+  console.log(
+    `   Running ${scenarios.length} scenario(s): ${scenarios.map((s) => s.name).join(", ")}`,
+  );
+
+  // Pre-resolve steps for all scenarios
+  const resolvedStepsMap = new Map();
+  for (const scenario of scenarios) {
+    const resolved = resolveSteps(scenario.steps, config.fragments || {});
+    resolvedStepsMap.set(scenario.name, resolved);
+  }
+
+  // Log scenario plans
+  for (const scenario of scenarios) {
+    const resolved = resolvedStepsMap.get(scenario.name);
+    console.log(`\n── Scenario: ${scenario.name} ──`);
+    if (scenario.description) {
+      console.log(`   ${scenario.description}`);
+    }
+    console.log(`   Start URL: ${scenario.startUrl}`);
+    console.log(
+      `   Steps: ${resolved.length} (${scenario.steps.length} before fragment expansion)`,
+    );
+    console.log(
+      `   Scope: include ${scenario.scope.includePrefixes.length} prefixes, exclude ${scenario.scope.excludePrefixes.length} prefixes`,
+    );
+    console.log(
+      `   Limits: max ${scenario.limits.maxPages} pages, depth ${scenario.limits.maxDepth}`,
+    );
+  }
+
+  // Run static analysis for enrichment
+  console.log(`\n1️⃣  Running static analysis for enrichment...`);
+  const templateFiles = scanTemplates(prototypePath);
+  const templateData = [];
+  for (const file of templateFiles) {
+    const parsed = parseTemplate(file, prototypePath);
+    if (parsed) templateData.push(parsed);
+  }
+  const explicitRoutes = parseRoutes(prototypePath);
+  console.log(
+    `   Parsed ${templateData.length} templates, ${explicitRoutes.length} route handlers`,
+  );
+
+  // Pre-compute map output directories for each scenario
+  const mapOutputDirs = new Map();
+  const scenarioMapNames = new Map();
+  for (const scenario of scenarios) {
+    const scenarioMapName =
+      scenarios.length > 1
+        ? `${name || "scenario"}-${scenario.name}`
+        : name || scenario.name;
+    scenarioMapNames.set(scenario.name, scenarioMapName);
+    mapOutputDirs.set(
+      scenario.name,
+      path.join(outputDir, "maps", scenarioMapName),
+    );
+  }
+
+  // Run all scenarios
+  console.log(`\n   Starting prototype server and browser...`);
+  const results = await runScenarios(scenarios, {
+    prototypePath,
+    port,
+    viewport,
+    mapOutputDirs,
+    config,
+    resolvedStepsMap,
+  });
+
+  // Build output for each scenario
+  for (const result of results) {
+    const scenarioMapName = scenarioMapNames.get(result.name);
+    const mapOutputDir = mapOutputDirs.get(result.name);
+
+    console.log(`\n── Output: ${result.name} ──`);
+    console.log(
+      `   Runtime: ${result.graph.nodes.length} nodes, ${result.graph.edges.length} edges`,
+    );
+    console.log(
+      `   Crawl: ${result.crawlStats.pagesVisited} pages visited, ${result.crawlStats.runtimeLinksExtracted} links extracted`,
+    );
+
+    // Enrich with static analysis
+    const { enrichmentStats } = enrichScenarioGraph(
+      result.graph,
+      templateData,
+      explicitRoutes,
+    );
+    console.log(
+      `   Enriched: ${enrichmentStats.nodesEnriched} nodes enriched, ${enrichmentStats.staticEdgesAdded} static edges added`,
+    );
+    console.log(
+      `   Final: ${result.graph.nodes.length} nodes, ${result.graph.edges.length} edges`,
+    );
+
+    // Build viewer
+    console.log(`   Building viewer...`);
+    await buildViewer(result.graph, mapOutputDir, true, viewport, {
+      name: scenarioMapName,
+      rootOutputDir: outputDir,
+    });
+    console.log(`   Viewer built`);
+
+    // Build Mermaid sitemap
+    buildMermaid(result.graph, mapOutputDir);
+    console.log(`   Mermaid sitemap written`);
+
+    // Export PDF if requested
+    if (shouldExportPdf) {
+      const resolvedPdfMode = pdfMode || "canvas";
+      console.log(`   Generating PDF export (${resolvedPdfMode})...`);
+      await exportPdf({
+        viewerHtmlPath: path.join(mapOutputDir, "index.html"),
+        outputDir: mapOutputDir,
+        mode: resolvedPdfMode,
+      });
+      console.log(`   PDF written (map.pdf)`);
+    }
+
+    // Write map metadata
+    const meta = {
+      name: scenarioMapName,
+      title: title || result.name,
+      updatedAt: new Date().toISOString(),
+      mode: "scenario",
+      scenario: result.name,
+      nodeCount: result.graph.nodes.length,
+      edgeCount: result.graph.edges.length,
+      hasScreenshots: true,
+      crawlStats: result.crawlStats,
+    };
+    fs.mkdirSync(mapOutputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(mapOutputDir, "meta.json"),
+      JSON.stringify(meta, null, 2),
+    );
+
+    // Write graph data
+    fs.writeFileSync(
+      path.join(mapOutputDir, "graph-data.json"),
+      JSON.stringify(result.graph, null, 2),
+    );
+  }
+
+  // Rebuild collection index if in multi-map mode
+  if (name || results.length > 1) {
+    console.log(`\n   Building collection index...`);
+    buildIndex(outputDir);
+    console.log(`   Collection index built`);
   }
 }
 

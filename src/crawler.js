@@ -3,6 +3,84 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
+const NON_PAGE_PATH_PREFIXES = [
+  "/assets/",
+  "/public/",
+  "/images/",
+  "/img/",
+  "/fonts/",
+  "/js/",
+  "/css/",
+];
+
+const NON_PAGE_EXACT_PATHS = new Set([
+  "/favicon.ico",
+  "/robots.txt",
+  "/sitemap.xml",
+]);
+
+const NON_PAGE_EXTENSIONS = new Set([
+  ".css",
+  ".js",
+  ".mjs",
+  ".map",
+  ".json",
+  ".xml",
+  ".txt",
+  ".ico",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".otf",
+  ".eot",
+  ".pdf",
+  ".zip",
+]);
+
+const GLOBAL_NAV_TEXTS = new Set([
+  "accessibility",
+  "accessibility statement",
+  "contact us",
+  "contact",
+  "terms and conditions",
+  "settings",
+  "log out",
+  "logout",
+  "home",
+]);
+
+const GLOBAL_NAV_TARGETS = new Set([
+  "/",
+  "/accessibility-statement",
+  "/contact",
+  "/terms-and-conditions",
+  "/settings",
+]);
+
+const GLOBAL_NAV_SOURCE_HINTS = [
+  "/start",
+  "/dashboard",
+  "/reports",
+  "/reading",
+];
+
+const LAYOUT_CONTAINER_HINTS = [
+  "header",
+  "nav",
+  "footer",
+  ".nhsuk-header",
+  ".nhsuk-footer",
+  ".nhsuk-header__navigation",
+  ".nhsuk-footer__list",
+  "[role='navigation']",
+];
+
 /**
  * Start the prototype server, crawl all known pages, and take screenshots.
  * Adds screenshot paths to graph nodes and returns runtime-discovered edges.
@@ -29,6 +107,9 @@ async function crawlAndScreenshot(graph, options) {
     pagesVisited: 0,
     runtimeLinksExtracted: 0,
     runtimeEdgesDiscovered: 0,
+    runtimeLinksFiltered: 0,
+    runtimeGlobalNavTagged: 0,
+    runtimeGlobalNavSuppressed: 0,
   };
 
   try {
@@ -41,7 +122,9 @@ async function crawlAndScreenshot(graph, options) {
     const baseUrl = `http://localhost:${port}`;
 
     const startNodePaths = new Set(
-      graph.nodes.filter((n) => n.isStartNode).map((n) => n.urlPath),
+      graph.nodes
+        .filter((n) => n.isStartNode)
+        .map((n) => canonicalizePath(n.urlPath)),
     );
 
     const CONCURRENCY = 6;
@@ -53,7 +136,13 @@ async function crawlAndScreenshot(graph, options) {
 
         try {
           const page = await context.newPage();
-          const url = `${baseUrl}${node.urlPath}`;
+          const requestedPath = canonicalizePath(node.urlPath);
+          if (!requestedPath) {
+            await page.close();
+            continue;
+          }
+
+          const url = `${baseUrl}${requestedPath}`;
 
           const response = await page.goto(url, {
             waitUntil: "networkidle",
@@ -67,8 +156,7 @@ async function crawlAndScreenshot(graph, options) {
           await page.waitForTimeout(200);
 
           const finalUrl = new URL(page.url());
-          const requestedPath = node.urlPath;
-          const landedPath = normalizeUrlPath(finalUrl.pathname);
+          const landedPath = canonicalizePath(finalUrl.pathname);
 
           if (landedPath !== requestedPath) {
             console.warn(
@@ -121,7 +209,7 @@ async function crawlAndScreenshot(graph, options) {
             throw evalErr;
           }
 
-          const filename = urlToFilename(node.urlPath);
+          const filename = urlToFilename(requestedPath);
           const screenshotPath = path.join(screenshotsDir, filename);
 
           await page.screenshot({
@@ -133,15 +221,16 @@ async function crawlAndScreenshot(graph, options) {
           node.actualTitle = await page.title();
 
           if (runtimeCrawl) {
-            const discoveredLinks = await extractRuntimeLinks(
+            const extraction = await extractRuntimeLinks(
               page,
               requestedPath,
               baseUrl,
             );
 
-            crawlStats.runtimeLinksExtracted += discoveredLinks.length;
+            crawlStats.runtimeLinksExtracted += extraction.acceptedCount;
+            crawlStats.runtimeLinksFiltered += extraction.filteredCount;
 
-            for (const link of discoveredLinks) {
+            for (const link of extraction.links) {
               if (
                 link.target === requestedPath ||
                 startNodePaths.has(link.target)
@@ -149,11 +238,20 @@ async function crawlAndScreenshot(graph, options) {
                 continue;
               }
 
+              if (link.isGlobalNav) {
+                crawlStats.runtimeGlobalNavTagged += 1;
+                if (shouldSuppressGlobalNavLink(link, requestedPath)) {
+                  crawlStats.runtimeGlobalNavSuppressed += 1;
+                  continue;
+                }
+              }
+
               const key = createRuntimeEdgeKey({
                 source: requestedPath,
                 target: link.target,
                 kind: link.kind,
                 method: link.method,
+                isGlobalNav: link.isGlobalNav,
               });
 
               if (runtimeEdgeKeys.has(key)) continue;
@@ -171,6 +269,7 @@ async function crawlAndScreenshot(graph, options) {
                 provenance: "runtime",
                 sourceOrigin: "runtime",
                 discoveredByCrawler: true,
+                isGlobalNav: Boolean(link.isGlobalNav),
               });
             }
           }
@@ -190,12 +289,15 @@ async function crawlAndScreenshot(graph, options) {
 
     if (startUrl && startUrl !== "/") {
       try {
-        const page = await context.newPage();
-        await page.goto(`${baseUrl}${startUrl}`, {
-          waitUntil: "networkidle",
-          timeout: 10000,
-        });
-        await page.close();
+        const canonicalStartUrl = canonicalizePath(startUrl);
+        if (canonicalStartUrl) {
+          const page = await context.newPage();
+          await page.goto(`${baseUrl}${canonicalStartUrl}`, {
+            waitUntil: "networkidle",
+            timeout: 10000,
+          });
+          await page.close();
+        }
       } catch {
         // ignore
       }
@@ -215,7 +317,21 @@ async function crawlAndScreenshot(graph, options) {
 }
 
 async function extractRuntimeLinks(page, currentPath, baseUrl) {
-  const rawLinks = await page.evaluate(() => {
+  const rawLinks = await page.evaluate((layoutHints) => {
+    function isLikelyLayoutLink(element) {
+      if (!(element instanceof Element)) return false;
+
+      for (const selector of layoutHints) {
+        try {
+          if (element.closest(selector)) return true;
+        } catch {
+          // ignore invalid selector edge cases
+        }
+      }
+
+      return false;
+    }
+
     const links = [];
 
     document.querySelectorAll("a[href]").forEach((a) => {
@@ -224,8 +340,9 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
 
       links.push({
         href,
-        text: a.textContent.trim().substring(0, 60),
+        text: a.textContent.trim().substring(0, 80),
         kind: "anchor",
+        isLikelyLayoutLink: isLikelyLayoutLink(a),
       });
     });
 
@@ -240,30 +357,100 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
           (form.querySelector("button")?.textContent?.trim() || "Submit"),
         kind: "form",
         method: (form.getAttribute("method") || "GET").toUpperCase(),
+        isLikelyLayoutLink: false,
       });
     });
 
     return links;
-  });
+  }, LAYOUT_CONTAINER_HINTS);
 
-  return rawLinks
-    .map((link) => {
-      const normalizedTarget = resolveRuntimeTarget(
-        link.href,
-        currentPath,
-        baseUrl,
-      );
+  const accepted = [];
+  let filteredCount = 0;
 
-      if (!normalizedTarget) return null;
+  for (const link of rawLinks) {
+    const normalizedTarget = resolveRuntimeTarget(
+      link.href,
+      currentPath,
+      baseUrl,
+    );
 
-      return {
-        target: normalizedTarget,
-        text: link.text || "",
-        kind: link.kind,
-        method: link.kind === "form" ? link.method || "GET" : undefined,
-      };
-    })
-    .filter(Boolean);
+    if (!normalizedTarget) {
+      filteredCount += 1;
+      continue;
+    }
+
+    const normalizedText = normalizeLinkText(link.text || "");
+    const isGlobalNav = classifyGlobalNavLink({
+      source: currentPath,
+      target: normalizedTarget,
+      text: normalizedText,
+      isLikelyLayoutLink: Boolean(link.isLikelyLayoutLink),
+      kind: link.kind,
+    });
+
+    accepted.push({
+      target: normalizedTarget,
+      text: link.text || "",
+      normalizedText,
+      kind: link.kind,
+      method: link.kind === "form" ? link.method || "GET" : undefined,
+      isGlobalNav,
+    });
+  }
+
+  return {
+    links: accepted,
+    acceptedCount: accepted.length,
+    filteredCount,
+  };
+}
+
+function classifyGlobalNavLink(link) {
+  if (!link || link.kind === "form") return false;
+
+  if (link.isLikelyLayoutLink) return true;
+
+  if (GLOBAL_NAV_TARGETS.has(link.target)) return true;
+
+  if (GLOBAL_NAV_TEXTS.has(link.normalizedText)) return true;
+
+  if (
+    GLOBAL_NAV_SOURCE_HINTS.some((prefix) => link.source.startsWith(prefix)) &&
+    GLOBAL_NAV_TEXTS.has(link.normalizedText)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldSuppressGlobalNavLink(link, sourcePath) {
+  if (!link || !link.isGlobalNav) return false;
+  if (link.kind === "form") return false;
+
+  if (GLOBAL_NAV_TEXTS.has(link.normalizedText)) {
+    return true;
+  }
+
+  if (GLOBAL_NAV_TARGETS.has(link.target)) {
+    return true;
+  }
+
+  if (
+    GLOBAL_NAV_SOURCE_HINTS.some((prefix) => sourcePath.startsWith(prefix)) &&
+    link.isGlobalNav
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeLinkText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function resolveRuntimeTarget(rawHref, currentPath, baseUrl) {
@@ -283,13 +470,53 @@ function resolveRuntimeTarget(rawHref, currentPath, baseUrl) {
       return null;
     }
 
-    return normalizeUrlPath(resolved.pathname);
+    return canonicalizePath(`${resolved.pathname}${resolved.search}`);
   } catch {
     return null;
   }
 }
 
-function normalizeUrlPath(urlPath) {
+function canonicalizePath(urlPath) {
+  if (!urlPath) return "/";
+
+  let normalized = String(urlPath).trim();
+
+  try {
+    if (/^https?:\/\//i.test(normalized)) {
+      const absolute = new URL(normalized);
+      normalized = `${absolute.pathname}${absolute.search}${absolute.hash}`;
+    }
+  } catch {
+    // ignore and continue with the raw value
+  }
+
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(normalized, "http://runtime-local");
+  } catch {
+    return normalizeBasicPath(normalized);
+  }
+
+  const pathname = normalizeBasicPath(parsed.pathname);
+  if (!isProbablyPagePath(pathname)) {
+    return null;
+  }
+
+  const params = Array.from(parsed.searchParams.entries())
+    .filter(([key]) => !isIgnorableQueryParam(key))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const sortedSearch = new URLSearchParams(params).toString();
+  const canonicalPath = normalizeTemplateLikeSegments(pathname);
+
+  return `${canonicalPath}${sortedSearch ? `?${sortedSearch}` : ""}`;
+}
+
+function normalizeBasicPath(urlPath) {
   if (!urlPath) return "/";
 
   let normalized = String(urlPath).replace(/\/{2,}/g, "/");
@@ -305,12 +532,85 @@ function normalizeUrlPath(urlPath) {
   return normalized || "/";
 }
 
+function normalizeTemplateLikeSegments(urlPath) {
+  const pathname = normalizeBasicPath(urlPath);
+
+  const normalizedSegments = pathname
+    .split("/")
+    .map((segment) => {
+      if (!segment) return segment;
+
+      const decoded = safeDecodeURIComponent(segment).trim();
+
+      if (decoded.includes("{{") || decoded.includes("{%")) {
+        return ":template";
+      }
+
+      if (/^[0-9]+$/.test(decoded)) {
+        return ":id";
+      }
+
+      if (
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          decoded,
+        )
+      ) {
+        return ":uuid";
+      }
+
+      if (/^\d{4}-\d{2}-\d{2}$/.test(decoded)) {
+        return ":date";
+      }
+
+      // Short alphanumeric strings with at least one digit — likely generated IDs
+      // e.g. w48zu3om, rkge1msh, 5gpn41oi, bc724e9f
+      if (/^[a-z0-9]{6,12}$/i.test(decoded) && /\d/.test(decoded) && /[a-z]/i.test(decoded)) {
+        return ":id";
+      }
+
+      return segment;
+    })
+    .join("/");
+
+  return normalizeBasicPath(normalizedSegments);
+}
+
+function isProbablyPagePath(urlPath) {
+  if (!urlPath) return false;
+  if (!urlPath.startsWith("/")) return false;
+  if (NON_PAGE_EXACT_PATHS.has(urlPath)) return false;
+  if (NON_PAGE_PATH_PREFIXES.some((prefix) => urlPath.startsWith(prefix))) {
+    return false;
+  }
+
+  const pathname = urlPath.split("?")[0].split("#")[0];
+  const ext = path.extname(pathname).toLowerCase();
+  if (ext && NON_PAGE_EXTENSIONS.has(ext)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isIgnorableQueryParam(key) {
+  return /^(utm_|gclid|fbclid|_ga|_gl|cacheBust|timestamp|ts)$/i.test(key);
+}
+
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function createRuntimeEdgeKey(edge) {
   return [
-    normalizeUrlPath(edge.source),
-    normalizeUrlPath(edge.target),
+    canonicalizePath(edge.source),
+    canonicalizePath(edge.target),
     edge.kind || "",
     (edge.method || "").toUpperCase(),
+    edge.isGlobalNav ? "global-nav" : "",
   ].join("|");
 }
 
@@ -404,5 +704,11 @@ function urlToFilename(urlPath) {
 
 module.exports = {
   crawlAndScreenshot,
-  normalizeUrlPath,
+  normalizeUrlPath: canonicalizePath,
+  canonicalizePath,
+  isProbablyPagePath,
+  startServer,
+  stopServer,
+  extractRuntimeLinks,
+  urlToFilename,
 };

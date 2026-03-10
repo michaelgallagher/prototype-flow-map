@@ -5,6 +5,11 @@ const path = require("path");
 const { execSync } = require("child_process");
 const { generate, generateNative } = require("../src/index");
 const { isIosProject } = require("../src/swift-scanner");
+const {
+  loadConfig,
+  listScenarios,
+  VALID_MODES,
+} = require("../src/flow-map-config");
 
 function openInBrowser(filePath) {
   const commands = { darwin: "open", win32: "start", linux: "xdg-open" };
@@ -81,6 +86,23 @@ program
     "",
   )
   .option("--no-open", "Do not open the browser after generation")
+  .option(
+    "--mode <mode>",
+    'Mapping mode: "static" (default), "scenario", or "audit"',
+    "",
+  )
+  .option(
+    "--scenario <name>",
+    "Run a single named scenario (implies --mode scenario)",
+  )
+  .option(
+    "--scenario-set <name>",
+    "Run a named set of scenarios (implies --mode scenario)",
+  )
+  .option(
+    "--list-scenarios",
+    "List available scenarios from the config file and exit",
+  )
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
     const prototypeDirName = path.basename(resolvedPath);
@@ -112,9 +134,49 @@ program
       process.exit(1);
     }
 
+    // Load config from prototype directory
+    const config = loadConfig(resolvedPath);
+
+    // Handle --list-scenarios
+    if (options.listScenarios) {
+      console.log(`\n📐 Prototype Flow Map — Scenarios\n`);
+      console.log(`   Prototype: ${resolvedPath}\n`);
+      console.log(listScenarios(config));
+      console.log();
+      return;
+    }
+
+    // Determine mode: explicit flag > implied by --scenario/--scenario-set > config file > static
+    let mode = "";
+    if (options.mode) {
+      mode = options.mode.toLowerCase();
+    } else if (options.scenario || options.scenarioSet) {
+      mode = "scenario";
+    } else if (config.mode && config.mode !== "static") {
+      mode = config.mode;
+    } else {
+      mode = "static";
+    }
+
+    if (!VALID_MODES.includes(mode)) {
+      console.error(
+        `\n❌ Error: --mode must be one of: ${VALID_MODES.join(", ")}\n`,
+      );
+      process.exit(1);
+    }
+
+    // Validate scenario mode has scenarios defined
+    if (mode === "scenario" && config.scenarios.length === 0) {
+      console.error(
+        `\n❌ Error: scenario mode requires scenarios defined in flow-map.config.yml\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`\n📐 Prototype Flow Map\n`);
     console.log(`   Prototype: ${resolvedPath}`);
     console.log(`   Platform:  ${platform}`);
+    console.log(`   Mode:      ${mode}`);
     console.log(`   Output:    ${path.resolve(options.output)}`);
     console.log(`   Map:       ${mapName}`);
     console.log();
@@ -147,6 +209,10 @@ program
           title: mapTitle,
           exportPdf: Boolean(options.exportPdf),
           pdfMode,
+          mode,
+          config,
+          scenario: options.scenario,
+          scenarioSet: options.scenarioSet,
         });
       }
 

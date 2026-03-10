@@ -1,45 +1,44 @@
 const fs = require("fs");
 const path = require("path");
+const YAML = require("yaml");
 
-const CONFIG_FILENAMES = [".flow-map.json", "flow-map.config.json"];
+const JSON_CONFIG_FILENAMES = [".flow-map.json", "flow-map.config.json"];
+const YAML_CONFIG_FILENAMES = ["flow-map.config.yml", "flow-map.config.yaml"];
+const ALL_CONFIG_FILENAMES = [
+  ...YAML_CONFIG_FILENAMES,
+  ...JSON_CONFIG_FILENAMES,
+];
+
+const VALID_MODES = ["static", "scenario", "audit"];
+
+const VALID_STEP_TYPES = [
+  "goto",
+  "click",
+  "fill",
+  "select",
+  "check",
+  "submit",
+  "waitForUrl",
+  "waitForSelector",
+  "wait",
+  "beginMap",
+  "endMap",
+  "use",
+];
 
 /**
  * Load a flow-map config file from the prototype root.
- * Looks for .flow-map.json or flow-map.config.json.
+ * Looks for YAML first (flow-map.config.yml), then JSON fallbacks.
  * Returns a validated config object, or an empty default if no file found.
- *
- * Web config shape:
- * {
- *   runtimeCrawl: true,
- *   runtimeCrawlOptions: {
- *     enabled: true
- *   }
- * }
- *
- * iOS config shape:
- * {
- *   exclude: ["ViewNameA", "ViewNameB"],
- *   overrides: {
- *     "ViewName": {
- *       steps: [
- *         "tap:Label text",
- *         "tapTab:Label:index",
- *         "tapContaining:partial text",
- *         "tapCell:0",
- *         "swipeLeft:firstCell",
- *         "wait:2.0"
- *       ]
- *     }
- *   }
- * }
  */
 function loadConfig(prototypePath) {
-  for (const filename of CONFIG_FILENAMES) {
+  for (const filename of ALL_CONFIG_FILENAMES) {
     const configPath = path.join(prototypePath, filename);
     if (fs.existsSync(configPath)) {
       try {
         const raw = fs.readFileSync(configPath, "utf-8");
-        const config = JSON.parse(raw);
+        const isYaml = YAML_CONFIG_FILENAMES.includes(filename);
+        const config = isYaml ? YAML.parse(raw) : JSON.parse(raw);
         console.log(`   Config: ${filename}`);
         return validateConfig(config);
       } catch (err) {
@@ -53,18 +52,42 @@ function loadConfig(prototypePath) {
 
 function defaultConfig() {
   return {
+    mode: "static",
     exclude: [],
     overrides: {},
     runtimeCrawl: false,
     runtimeCrawlOptions: {
       enabled: false,
     },
+    runtimeMapping: {
+      canonicalization: {
+        collapseNumericSegments: true,
+        collapseUuidSegments: true,
+        collapseDateSegments: true,
+        collapseTemplateExpressions: true,
+        dropIgnoredQueryParams: true,
+      },
+      filters: {
+        suppressGlobalNav: true,
+        suppressUtilityLinks: true,
+        suppressDebugRoutes: true,
+      },
+    },
+    fragments: {},
+    scenarioSets: {},
+    scenarios: [],
   };
 }
 
 function validateConfig(raw) {
   const config = defaultConfig();
 
+  // Mode
+  if (typeof raw.mode === "string" && VALID_MODES.includes(raw.mode)) {
+    config.mode = raw.mode;
+  }
+
+  // Legacy iOS fields
   if (Array.isArray(raw.exclude)) {
     config.exclude = raw.exclude.filter((e) => typeof e === "string");
   }
@@ -79,6 +102,7 @@ function validateConfig(raw) {
     }
   }
 
+  // Legacy web runtimeCrawl fields
   if (typeof raw.runtimeCrawl === "boolean") {
     config.runtimeCrawl = raw.runtimeCrawl;
     config.runtimeCrawlOptions.enabled = raw.runtimeCrawl;
@@ -95,7 +119,271 @@ function validateConfig(raw) {
     }
   }
 
+  // Runtime mapping options (scenario/audit modes)
+  if (raw.runtimeMapping && typeof raw.runtimeMapping === "object") {
+    const rm = raw.runtimeMapping;
+
+    if (rm.canonicalization && typeof rm.canonicalization === "object") {
+      for (const key of Object.keys(config.runtimeMapping.canonicalization)) {
+        if (typeof rm.canonicalization[key] === "boolean") {
+          config.runtimeMapping.canonicalization[key] =
+            rm.canonicalization[key];
+        }
+      }
+    }
+
+    if (rm.filters && typeof rm.filters === "object") {
+      for (const key of Object.keys(config.runtimeMapping.filters)) {
+        if (typeof rm.filters[key] === "boolean") {
+          config.runtimeMapping.filters[key] = rm.filters[key];
+        }
+      }
+    }
+  }
+
+  // Fragments
+  if (raw.fragments && typeof raw.fragments === "object") {
+    for (const [name, steps] of Object.entries(raw.fragments)) {
+      if (Array.isArray(steps)) {
+        const validated = steps
+          .map((s) => validateStep(s))
+          .filter(Boolean);
+        if (validated.length > 0) {
+          config.fragments[name] = validated;
+        }
+      }
+    }
+  }
+
+  // Scenario sets
+  if (raw.scenarioSets && typeof raw.scenarioSets === "object") {
+    for (const [name, list] of Object.entries(raw.scenarioSets)) {
+      if (Array.isArray(list)) {
+        config.scenarioSets[name] = list.filter(
+          (s) => typeof s === "string",
+        );
+      }
+    }
+  }
+
+  // Scenarios
+  if (Array.isArray(raw.scenarios)) {
+    config.scenarios = raw.scenarios
+      .map((s) => validateScenario(s))
+      .filter(Boolean);
+  }
+
   return config;
+}
+
+function validateScenario(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (!raw.name || typeof raw.name !== "string") return null;
+  if (!raw.startUrl || typeof raw.startUrl !== "string") return null;
+
+  const scenario = {
+    name: raw.name,
+    description: typeof raw.description === "string" ? raw.description : "",
+    startUrl: raw.startUrl,
+    enabled: raw.enabled !== false,
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((t) => typeof t === "string")
+      : [],
+    steps: [],
+    scope: {
+      includePrefixes: [],
+      excludePrefixes: [],
+    },
+    limits: {
+      maxPages: 120,
+      maxDepth: 12,
+    },
+  };
+
+  // Steps
+  if (Array.isArray(raw.steps)) {
+    scenario.steps = raw.steps.map((s) => validateStep(s)).filter(Boolean);
+  }
+
+  // Scope
+  if (raw.scope && typeof raw.scope === "object") {
+    if (Array.isArray(raw.scope.includePrefixes)) {
+      scenario.scope.includePrefixes = raw.scope.includePrefixes.filter(
+        (s) => typeof s === "string",
+      );
+    }
+    if (Array.isArray(raw.scope.excludePrefixes)) {
+      scenario.scope.excludePrefixes = raw.scope.excludePrefixes.filter(
+        (s) => typeof s === "string",
+      );
+    }
+  }
+
+  // Limits
+  if (raw.limits && typeof raw.limits === "object") {
+    if (typeof raw.limits.maxPages === "number" && raw.limits.maxPages > 0) {
+      scenario.limits.maxPages = raw.limits.maxPages;
+    }
+    if (typeof raw.limits.maxDepth === "number" && raw.limits.maxDepth > 0) {
+      scenario.limits.maxDepth = raw.limits.maxDepth;
+    }
+  }
+
+  return scenario;
+}
+
+function validateStep(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  // Handle 'use' shorthand: { use: "fragment.name" }
+  if (typeof raw.use === "string") {
+    return { type: "use", fragment: raw.use };
+  }
+
+  if (!raw.type || typeof raw.type !== "string") return null;
+  if (!VALID_STEP_TYPES.includes(raw.type)) return null;
+
+  const step = { type: raw.type };
+
+  switch (raw.type) {
+    case "goto":
+      if (typeof raw.url !== "string") return null;
+      step.url = raw.url;
+      break;
+    case "click":
+      if (typeof raw.selector !== "string") return null;
+      step.selector = raw.selector;
+      break;
+    case "fill":
+      if (typeof raw.selector !== "string" || typeof raw.value !== "string")
+        return null;
+      step.selector = raw.selector;
+      step.value = raw.value;
+      break;
+    case "select":
+      if (typeof raw.selector !== "string" || typeof raw.value !== "string")
+        return null;
+      step.selector = raw.selector;
+      step.value = raw.value;
+      break;
+    case "check":
+      if (typeof raw.selector !== "string") return null;
+      step.selector = raw.selector;
+      break;
+    case "submit":
+      if (typeof raw.selector !== "string") return null;
+      step.selector = raw.selector;
+      break;
+    case "waitForUrl":
+      if (typeof raw.url !== "string") return null;
+      step.url = raw.url;
+      break;
+    case "waitForSelector":
+      if (typeof raw.selector !== "string") return null;
+      step.selector = raw.selector;
+      break;
+    case "wait":
+      if (typeof raw.ms !== "number") return null;
+      step.ms = raw.ms;
+      break;
+    case "beginMap":
+    case "endMap":
+      break;
+    case "use":
+      if (typeof raw.fragment !== "string") return null;
+      step.fragment = raw.fragment;
+      break;
+  }
+
+  return step;
+}
+
+/**
+ * Resolve scenario steps, expanding fragment references.
+ */
+function resolveSteps(steps, fragments) {
+  const resolved = [];
+  for (const step of steps) {
+    if (step.type === "use") {
+      const fragmentSteps = fragments[step.fragment];
+      if (!fragmentSteps) {
+        console.warn(
+          `   ⚠️  Unknown fragment "${step.fragment}" — skipping`,
+        );
+        continue;
+      }
+      // Recursively resolve (fragments can reference other fragments)
+      resolved.push(...resolveSteps(fragmentSteps, fragments));
+    } else {
+      resolved.push(step);
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Get scenarios matching a name, set, or all enabled scenarios.
+ */
+function getScenarios(config, { scenario: scenarioName, scenarioSet } = {}) {
+  const enabledScenarios = config.scenarios.filter((s) => s.enabled);
+
+  if (scenarioName) {
+    const match = enabledScenarios.find((s) => s.name === scenarioName);
+    if (!match) {
+      throw new Error(
+        `Scenario "${scenarioName}" not found. Available: ${enabledScenarios.map((s) => s.name).join(", ") || "(none)"}`,
+      );
+    }
+    return [match];
+  }
+
+  if (scenarioSet) {
+    const setNames = config.scenarioSets[scenarioSet];
+    if (!setNames) {
+      throw new Error(
+        `Scenario set "${scenarioSet}" not found. Available: ${Object.keys(config.scenarioSets).join(", ") || "(none)"}`,
+      );
+    }
+    const nameSet = new Set(setNames);
+    const matched = enabledScenarios.filter((s) => nameSet.has(s.name));
+    if (matched.length === 0) {
+      throw new Error(
+        `No enabled scenarios found in set "${scenarioSet}". Set contains: ${setNames.join(", ")}`,
+      );
+    }
+    return matched;
+  }
+
+  return enabledScenarios;
+}
+
+/**
+ * List all scenarios in a config for display.
+ */
+function listScenarios(config) {
+  if (config.scenarios.length === 0) {
+    return "No scenarios defined.";
+  }
+
+  const lines = [];
+  for (const s of config.scenarios) {
+    const status = s.enabled ? "✓" : "✗";
+    const tags = s.tags.length > 0 ? ` [${s.tags.join(", ")}]` : "";
+    lines.push(`  ${status} ${s.name}${tags}`);
+    if (s.description) {
+      lines.push(`    ${s.description}`);
+    }
+  }
+
+  if (Object.keys(config.scenarioSets).length > 0) {
+    lines.push("");
+    lines.push("Scenario sets:");
+    for (const [name, scenarios] of Object.entries(config.scenarioSets)) {
+      lines.push(`  ${name}: ${scenarios.join(", ")}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -112,4 +400,11 @@ function applyExclusions(graph, exclude) {
   };
 }
 
-module.exports = { loadConfig, applyExclusions };
+module.exports = {
+  loadConfig,
+  applyExclusions,
+  resolveSteps,
+  getScenarios,
+  listScenarios,
+  VALID_MODES,
+};
