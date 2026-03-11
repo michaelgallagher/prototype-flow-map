@@ -8,6 +8,7 @@ const {
   buildGraph,
   filterByExclusion,
   filterByReachability,
+  normalizeUrlPath,
 } = require("./graph-builder");
 const { buildViewer } = require("./build-viewer");
 const { buildMermaid } = require("./build-mermaid");
@@ -92,6 +93,18 @@ async function generate(options) {
       .split(",")
       .map((p) => p.trim())
       .filter(Boolean);
+
+    // Mark start nodes and their order for layout positioning
+    const startSet = new Set(fromPages.map(normalizeUrlPath));
+    graph.nodes.forEach((node) => {
+      if (startSet.has(node.urlPath) || startSet.has(node.id)) {
+        node.isStartNode = true;
+        node.startOrder = fromPages.findIndex(
+          (p) => normalizeUrlPath(p) === node.urlPath || normalizeUrlPath(p) === node.id,
+        );
+      }
+    });
+
     const label =
       fromPages.length === 1 ? fromPages[0] : `${fromPages.length} start pages`;
     console.log(`   Filtered to pages reachable from ${label}`);
@@ -426,31 +439,35 @@ async function generateScenario(options) {
       `   Final: ${result.graph.nodes.length} nodes, ${result.graph.edges.length} edges`,
     );
 
-    // Build viewer
-    console.log(`   Building viewer...`);
-    await buildViewer(result.graph, mapOutputDir, true, viewport, {
-      name: scenarioMapName,
-      rootOutputDir: outputDir,
-    });
-    console.log(`   Viewer built`);
-
-    // Build Mermaid sitemap
-    buildMermaid(result.graph, mapOutputDir);
-    console.log(`   Mermaid sitemap written`);
-
-    // Export PDF if requested
-    if (shouldExportPdf) {
-      const resolvedPdfMode = pdfMode || "canvas";
-      console.log(`   Generating PDF export (${resolvedPdfMode})...`);
-      await exportPdf({
-        viewerHtmlPath: path.join(mapOutputDir, "index.html"),
-        outputDir: mapOutputDir,
-        mode: resolvedPdfMode,
+    // Only build individual viewers when running a single scenario.
+    // When multiple scenarios run, we build a combined viewer instead.
+    if (results.length === 1) {
+      // Build viewer
+      console.log(`   Building viewer...`);
+      await buildViewer(result.graph, mapOutputDir, true, viewport, {
+        name: scenarioMapName,
+        rootOutputDir: outputDir,
       });
-      console.log(`   PDF written (map.pdf)`);
+      console.log(`   Viewer built`);
+
+      // Build Mermaid sitemap
+      buildMermaid(result.graph, mapOutputDir);
+      console.log(`   Mermaid sitemap written`);
+
+      // Export PDF if requested
+      if (shouldExportPdf) {
+        const resolvedPdfMode = pdfMode || "canvas";
+        console.log(`   Generating PDF export (${resolvedPdfMode})...`);
+        await exportPdf({
+          viewerHtmlPath: path.join(mapOutputDir, "index.html"),
+          outputDir: mapOutputDir,
+          mode: resolvedPdfMode,
+        });
+        console.log(`   PDF written (map.pdf)`);
+      }
     }
 
-    // Write map metadata
+    // Always write metadata and graph data (used by combined map builder)
     const meta = {
       name: scenarioMapName,
       title: title || result.name,

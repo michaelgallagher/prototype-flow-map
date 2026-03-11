@@ -152,9 +152,13 @@ async function crawlAndScreenshot(graph, options) {
           const url = `${baseUrl}${requestedPath}`;
 
           const response = await page.goto(url, {
-            waitUntil: "networkidle",
-            timeout: 10000,
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
           });
+          await Promise.race([
+            page.waitForLoadState("networkidle").catch(() => {}),
+            page.waitForTimeout(3000),
+          ]);
 
           if (response && response.ok()) {
             crawlStats.pagesVisited += 1;

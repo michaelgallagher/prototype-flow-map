@@ -475,13 +475,33 @@ async function executeStep(page, step, baseUrl) {
         ]);
         break;
 
-      case "click":
-        await page.locator(step.selector).first().click({ timeout: 5000, noWaitAfter: true });
+      case "click": {
+        const clickLocator = page.locator(step.selector).first();
+        // Wait for the element to be visible and enabled.
+        // Some prototypes use JS to enable buttons after page load (e.g. nhsuk-button-init),
+        // so we poll until the disabled attribute is removed.
+        await clickLocator.waitFor({ state: "visible", timeout: 10000 });
+        try {
+          await clickLocator.evaluate(
+            (el) => new Promise((resolve) => {
+              if (!el.disabled) return resolve();
+              const observer = new MutationObserver(() => {
+                if (!el.disabled) { observer.disconnect(); resolve(); }
+              });
+              observer.observe(el, { attributes: true, attributeFilter: ["disabled"] });
+              setTimeout(() => { observer.disconnect(); resolve(); }, 10000);
+            }),
+          );
+        } catch {
+          // If evaluate fails, proceed with click anyway
+        }
+        await clickLocator.click({ timeout: 10000, noWaitAfter: true });
         await Promise.race([
           page.waitForLoadState("networkidle").catch(() => {}),
           page.waitForTimeout(3000),
         ]);
         break;
+      }
 
       case "fill":
         await page.fill(step.selector, step.value, { timeout: 5000 });

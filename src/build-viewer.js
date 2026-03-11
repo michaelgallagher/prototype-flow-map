@@ -619,6 +619,7 @@ function generateViewerJs() {
       edgesep: 8,
       marginx: 30,
       marginy: 30,
+      align: 'UL',
     });
     g.setDefaultEdgeLabel(() => ({}));
 
@@ -700,6 +701,27 @@ function generateViewerJs() {
       if (id === virtualRootId) return;
       layoutNodes[id] = g.node(id);
     });
+
+    // Top-align nodes within each dagre rank.
+    // Dagre centers nodes on the rank's y-line, which misaligns nodes of different heights.
+    // Group by dagre rank (approximate y center) and shift each node so its top edge aligns.
+    if (!hasRanks) {
+      const RANK_TOLERANCE = 5; // nodes within 5px of same y are in same rank
+      const rankGroups = {};
+      Object.values(layoutNodes).forEach(n => {
+        const roundedY = Math.round(n.y / RANK_TOLERANCE) * RANK_TOLERANCE;
+        if (!rankGroups[roundedY]) rankGroups[roundedY] = [];
+        rankGroups[roundedY].push(n);
+      });
+      Object.values(rankGroups).forEach(group => {
+        if (group.length < 2) return;
+        // Find the topmost top-edge in this rank
+        const minTop = Math.min(...group.map(n => n.y - n.height / 2));
+        group.forEach(n => {
+          n.y = minTop + n.height / 2;
+        });
+      });
+    }
 
     // Override y-positions to enforce rank ordering.
     // Dagre determines vertical order from edges, but visit-driven scenarios
