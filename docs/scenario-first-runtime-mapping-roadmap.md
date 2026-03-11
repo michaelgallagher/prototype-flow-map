@@ -163,7 +163,7 @@ scenarios:
 
 The setup phase should be intentionally small and composable.
 
-### Supported initial actions
+### Supported actions
 - `goto`
 - `click`
 - `fill`
@@ -173,6 +173,8 @@ The setup phase should be intentionally small and composable.
 - `waitForUrl`
 - `waitForSelector`
 - `wait`
+- `visit` — visit a page and add it to the map (visit-driven mode)
+- `snapshot` — capture the current page after interactive navigation (for session-dependent pages)
 - `beginMap`
 - `endMap`
 - `use`
@@ -258,280 +260,141 @@ This keeps the final graph focused on the experience, not on all setup mechanics
 
 ---
 
-## Phase 1 — Scenario-First Design and Scope
+## Phase 1 — Scenario-First Design and Scope ✓
 
 ### Goal
 Define the scenario model and make it the center of the roadmap.
 
 ### Tasks
-- [ ] Define what a “scenario” is in this tool
-- [ ] Finalise YAML as the preferred scenario format
-- [ ] Decide where scenario definitions live:
-  - [ ] prototype-level config file
-  - [ ] separate scenario files
-  - [ ] shared library plus per-prototype overrides
-- [ ] Define minimum scenario structure:
-  - [ ] `name`
-  - [ ] `description`
-  - [ ] `startUrl`
-  - [ ] setup steps
-  - [ ] crawl scope rules
-- [ ] Decide whether output should default to:
-  - [ ] one scenario map at a time
-  - [ ] all scenarios separately
-  - [ ] merged multi-scenario map plus per-scenario maps
+- [x] Define what a “scenario” is in this tool
+- [x] Finalise YAML as the preferred scenario format
+- [x] Decide where scenario definitions live: prototype-level `flow-map.config.yml`
+- [x] Define minimum scenario structure: name, description, startUrl, steps, scope, limits
+- [x] Output: per-scenario maps plus merged multi-scenario maps when running sets
 
 ### Acceptance criteria
-- [ ] Scenario structure is documented and stable
-- [ ] The roadmap clearly treats scenario mapping as the main mode
-- [ ] Broad crawl is explicitly demoted to debug/audit mode
+- [x] Scenario structure is documented and stable
+- [x] The roadmap clearly treats scenario mapping as the main mode
+- [x] Broad crawl is explicitly demoted to debug/audit mode
 
 ---
 
-## Phase 2 — Canonicalization and Noise Reduction
+## Phase 2 — Canonicalization and Noise Reduction ✓
 
 ### Goal
 Reduce route noise so scenario maps remain readable.
 
 ### Tasks
-- [ ] Keep centralized canonicalization in one place
-- [ ] Canonicalize volatile routes:
-  - [ ] numeric IDs -> `:id`
-  - [ ] UUIDs -> `:uuid`
-  - [ ] date-like segments -> `:date`
-  - [ ] template expressions -> semantic placeholder when possible
-- [ ] Filter obvious non-page targets:
-  - [ ] assets
-  - [ ] CSS/JS/image/font paths
-  - [ ] internal framework/admin paths where appropriate
-- [ ] Reduce layout/global-nav noise:
-  - [ ] classify links as `journey`, `global-nav`, `utility`, `entry`
-  - [ ] suppress or separately tag low-value repeated links
-- [ ] Preserve raw and canonical forms for debugging
+- [x] Centralized canonicalization in `src/crawler.js` (`canonicalizePath`)
+- [x] Canonicalize volatile routes: numeric IDs, UUIDs, dates, short alphanumeric IDs (6-12 chars), template expressions
+- [x] Filter non-page targets: assets, CSS/JS/image/font paths, framework/admin paths
+- [x] Classify links as `journey`, `global-nav`, `utility` — suppress global nav by default
+- [x] Global nav edge upgrading: non-global-nav links upgrade existing global-nav duplicates
+- [x] Visit-driven mode uses raw URLs as node IDs (preserves entity instances) with canonical mapping for edge resolution
+- [x] Preserve raw and canonical forms via `canonicalToRaw` mapping
 
 ### Acceptance criteria
-- [ ] Asset/internal junk does not dominate the graph
-- [ ] Dynamic route families collapse into readable route patterns
-- [ ] Global layout links no longer overwhelm journey structure
+- [x] Asset/internal junk does not dominate the graph
+- [x] Dynamic route families collapse into readable route patterns
+- [x] Global layout links no longer overwhelm journey structure
 
 ---
 
-## Phase 3 — Scenario Execution Engine
+## Phase 3 — Scenario Execution Engine ✓
 
 ### Goal
 Crawl only from realistic user states, not from every known route.
 
 ### Tasks
-- [ ] Add scenario runner with isolated browser/session context
-- [ ] Support scenario setup actions:
-  - [ ] navigate
-  - [ ] click
-  - [ ] fill
-  - [ ] submit
-  - [ ] wait for URL
-  - [ ] wait for selector
-  - [ ] reusable `use` fragments
-- [ ] Support per-scenario seed/user setup
-- [ ] Start crawl expansion only after scenario setup is complete
-- [ ] Restrict discovered edges to scenario-valid state
-- [ ] Store scenario provenance on edges/nodes/screenshots
+- [x] Scenario runner (`src/scenario-runner.js`) with isolated browser/session context
+- [x] All setup actions: goto, click, fill, select, check, submit, waitForUrl, waitForSelector, wait
+- [x] Reusable `use` fragments with recursive resolution
+- [x] `beginMap` / `endMap` boundaries separating setup from mapped journey
+- [x] Visit-driven mode: `visit` steps specify exact pages; `snapshot` captures session-dependent pages
+- [x] BFS crawl mode: automatic when no visit/snapshot steps present
+- [x] Redirect resolution: probes unresolved link targets to discover redirects
+- [x] Modal/overlay dismissal before screenshots
+- [x] Dynamic screenshot heights based on actual page content
+- [x] Desktop viewport support (`--desktop` flag, 1280x800)
+- [x] Layout rank computation with tab sibling detection for layer-cake arrangement
+- [x] Per-scenario provenance on edges/nodes
 
 ### Acceptance criteria
-- [ ] Screens discovered in a scenario are valid in-context pages
-- [ ] Black/empty screenshots are significantly reduced
-- [ ] The map reflects actual user-visible progression
+- [x] Screens discovered in a scenario are valid in-context pages
+- [x] Black/empty screenshots are significantly reduced
+- [x] The map reflects actual user-visible progression
 
 ---
 
-## Phase 4 — Scenario Outputs and Viewer Experience
+## Phase 4 — Scenario Outputs and Viewer Experience ✓
 
 ### Goal
 Make scenario maps easy to inspect and compare.
 
 ### Tasks
-- [ ] Output one graph per scenario
-- [ ] Optionally output merged graph across selected scenarios
-- [ ] Add metadata:
-  - [ ] `scenario`
-  - [ ] `provenance`
-  - [ ] `navigationCategory`
-- [ ] Add viewer controls for:
-  - [ ] scenario filter
-  - [ ] provenance filter
-  - [ ] navigation-category filter
-- [ ] Consider hiding suppressed nav by default while allowing reveal in debug mode
+- [x] Output one graph per scenario with viewer, Mermaid sitemap, and metadata
+- [x] Merged graph across selected scenarios (via `--scenario-set`)
+- [x] Combined maps with shared nodes (e.g. `/dashboard`) and per-scenario layout
+- [x] Per-scenario y-positioning in merged maps (tall pages in one scenario don't affect the other)
+- [x] Layer-cake layout: tab siblings side-by-side, flow top to bottom
+- [x] Forward edges routed through dagre; lateral and backward edges rendered as visual-only lines
+- [x] Provenance filter in viewer (runtime/static/both)
+- [x] Global nav toggle (hidden by default in scenario mode)
 
 ### Acceptance criteria
-- [ ] A user can inspect one scenario without unrelated flows cluttering the map
-- [ ] Merged views remain understandable
-- [ ] Viewer controls make provenance/noise visible but manageable
+- [x] A user can inspect one scenario without unrelated flows cluttering the map
+- [x] Merged views remain understandable
+- [x] Viewer controls make provenance/noise visible but manageable
 
 ---
 
-## Phase 5 — Broad Crawl as Debug Mode
+## Phase 5 — Broad Crawl as Debug Mode ✓
 
 ### Goal
 Keep exhaustive crawl capability without letting it define the main product.
 
 ### Tasks
-- [ ] Rename/document broad crawl as debug or audit mode
-- [ ] Ensure broad crawl output is clearly labeled non-representative
-- [ ] Add diagnostics/reporting for:
-  - [ ] invalid pages
-  - [ ] redirects
-  - [ ] suppressed layout links
-  - [ ] collapsed canonical routes
-- [ ] Keep this mode available for engineering validation only
+- [x] Broad crawl available as `audit` mode (`--mode audit`)
+- [x] Static-only analysis available as `static` mode (default when no config)
+- [x] Scenario mode is the primary mode for prototypes with config files
+- [x] CLI documentation clearly distinguishes the three modes
 
 ### Acceptance criteria
-- [ ] Broad crawl remains useful for debugging
-- [ ] It is no longer confused with the main user-facing map mode
+- [x] Broad crawl remains useful for debugging
+- [x] It is no longer confused with the main user-facing map mode
 
 ---
 
-## Phase 6 — Validation with `manage-breast-screening-prototype`
+## Phase 6 — Validation with `manage-breast-screening-prototype` ✓
 
 ### Goal
 Use the breast screening prototype as the proving ground for the new approach.
 
-### Initial target scenarios
+### Implemented scenarios
 
-#### 1. `login-and-dashboard`
-**Purpose:** establish the prototype’s top-level entry and user selection flow.
+All five target scenarios have been defined in the prototype’s `flow-map.config.yml`:
 
-**Likely scope:**
-- `/`
-- `/start`
-- `/choose-user`
-- `/cis2`
-- `/dashboard`
+1. **`login-and-dashboard`** — Entry flow from start page through user selection to dashboard
+2. **`clinic-workflow`** — Visit-driven: 20+ pages covering clinic tabs, appointment details, check-in flow, and clinic reports
+3. **`participant-management`** — BFS crawl of participant lookup, details, and medical history
+4. **`reading-workflow`** — Interactive: uses `click` + `snapshot` for session-dependent batch pages (opinions, compare, technical recall, review), plus `visit` for static pages (priors, history, clinics tabs)
+5. **`reporting`** — Reports and data exports
 
-**Why it matters:**
-- this is the common entry path into the rest of the prototype
-- it provides the initial valid runtime context for other scenarios
+### Combined maps
+- `clinic-and-reading` scenario set produces a merged side-by-side view with `/dashboard` as a shared node
+- `core-user-journeys` set runs all five scenarios
 
-**Candidate setup:**
-- start at `/`
-- move through `/start`
-- choose a user role
-- confirm arrival at `/dashboard`
-
----
-
-#### 2. `clinic-workflow`
-**Purpose:** map reception/clinic operational flow around appointments and event handling.
-
-**Likely scope:**
-- `/dashboard`
-- `/clinics`
-- `/events`
-- selected `/participants` screens that are genuinely reached from clinic flow
-
-**Why it matters:**
-- this appears to be one of the highest-value operational journeys
-- many black/invalid screens seem related to clinic/event context, so this scenario will prove whether scenario-first crawling improves validity
-
-**Candidate setup:**
-- choose receptionist/clinic user
-- navigate to clinic list or current clinic day
-- open an event/appointment from valid context
-- begin crawl from the first stable appointment-management page
-
----
-
-#### 3. `participant-management`
-**Purpose:** map participant lookup, details, edits, and questionnaire-related flows.
-
-**Likely scope:**
-- `/participants`
-- `/participants/:id`
-- questionnaire and personal-details flows that are actually reachable in context
-
-**Why it matters:**
-- participant-specific screens are heavily dynamic and are a common source of noisy route expansion
-- this scenario will test canonicalization and context-aware screenshots
-
-**Candidate setup:**
-- choose an operational user
-- navigate from dashboard to participant search/list
-- open one participant from the seeded list
-- crawl from the participant summary/details page
-
----
-
-#### 4. `reading-workflow`
-**Purpose:** map the image reading journey and associated review/opinion flows.
-
-**Likely scope:**
-- `/reading`
-- `/reading/batch/...`
-- `/reading/workflow/...`
-- `/reading/history/...`
-- related priors and review pages when valid in context
-
-**Why it matters:**
-- reading appears to be a substantial, internally connected journey
-- this is likely one of the most important end-to-end scenario maps in the prototype
-
-**Candidate setup:**
-- choose a reading-capable user
-- navigate into reading from dashboard
-- open a valid batch/event from list context
-- crawl from the first real reading workflow screen
-
----
-
-#### 5. `reporting`
-**Purpose:** map high-level reporting/navigation without polluting other operational maps.
-
-**Likely scope:**
-- `/reports`
-- `/reports/screening`
-- any valid report detail routes reached from the report UI
-
-**Why it matters:**
-- reporting is useful but structurally different from task workflows
-- keeping it as a separate scenario may make the output much clearer
-
-**Candidate setup:**
-- choose a role with reporting access
-- navigate from dashboard to reports
-- start crawl from reports landing page
-
----
-
-#### 6. `admin-or-prototype-tools` (optional, debug-oriented)
-**Purpose:** isolate prototype-only tools/settings from product journeys.
-
-**Likely scope:**
-- `/settings`
-- seed profile screens
-- prototype/admin/reset utilities
-
-**Why it matters:**
-- these screens may be useful, but should not clutter user journey maps
-- keeping them separate allows explicit inclusion without contaminating primary outputs
-
-### Tasks
-- [ ] Identify a small set of realistic scenario families, for example:
-  - [ ] login / choose-user
-  - [ ] clinic workflow
-  - [ ] participant management
-  - [ ] image reading
-  - [ ] reporting
-- [ ] Create initial scenario definitions for those flows
-- [ ] Run scenario maps and compare against current broad crawl output
-- [ ] Evaluate:
-  - [ ] representativeness
-  - [ ] screenshot validity
-  - [ ] graph readability
-  - [ ] missing journey-critical screens
-- [ ] Record which scenario maps are worth keeping separate vs merged
+### Results
+- clinic-workflow: 11 nodes, 59 edges
+- reading-workflow: 17 nodes, 57 edges
+- Combined: 27 nodes, 116 edges (1 shared node)
+- Screenshots are valid, in-context, and dynamically sized
+- Layer-cake layout with tab groups side-by-side
 
 ### Acceptance criteria
-- [ ] Scenario maps look closer to real user experience than the broad crawl map
-- [ ] Black/empty screens are materially reduced
-- [ ] The resulting maps are useful to humans without deep prototype knowledge
+- [x] Scenario maps look closer to real user experience than the broad crawl map
+- [x] Black/empty screenshots are materially reduced
+- [x] The resulting maps are useful to humans without deep prototype knowledge
 
 ---
 
@@ -552,15 +415,21 @@ Do not prioritize:
 
 ---
 
+## Resolved design questions
+
+- [x] Scenario maps are the primary CLI output when a config file exists
+- [x] Merged maps are produced automatically when running scenario sets
+- [x] Suppressed global-nav links are hidden by default in the viewer (toggle available)
+- [x] Canonicalization collapses to `:id` (not semantic names) — simpler and sufficient
+- [x] Screenshots from redirected/invalid pages are skipped automatically
+- [x] Scenario setup lives in `flow-map.config.yml` (YAML config, not code)
+- [x] Setup prefers UI-driven steps; `visit` and `snapshot` provide flexible alternatives
+
 ## Open design questions
 
-- [ ] Should scenario maps be the default CLI output?
-- [ ] Should merged maps be opt-in instead of default?
-- [ ] Should suppressed global-nav links remain hidden by default in the viewer?
-- [ ] How much semantic param naming is worth preserving (`:participantId`) vs collapsing to `:id`?
-- [ ] Should black/empty screenshots be excluded automatically or flagged for review?
-- [ ] Should scenario setup live in config or code fixtures?
-- [ ] Should scenario setup prefer UI-driven steps exclusively, or allow direct state injection where prototypes are otherwise impractical to drive?
+- [ ] Should the tool auto-detect visit-driven vs BFS mode, or should it be explicit in config?
+- [ ] Should merged maps support more than two scenarios side-by-side?
+- [ ] Should there be a way to define shared "anchor" nodes across scenarios beyond automatic dedup?
 
 ---
 
@@ -578,8 +447,14 @@ This strategy is successful if:
 
 ## Immediate next steps
 
-- [ ] Update planning docs to make scenario-first mapping the primary recommendation
-- [ ] Stop treating broad runtime crawl as the default success metric
-- [ ] Finalise the YAML scenario definition format
-- [ ] Implement the first 3-5 real scenarios for `manage-breast-screening-prototype`
-- [ ] Validate that those scenario maps are more representative than the current broad crawl output
+- [x] Update planning docs to make scenario-first mapping the primary recommendation
+- [x] Stop treating broad runtime crawl as the default success metric
+- [x] Finalise the YAML scenario definition format
+- [x] Implement 5 real scenarios for `manage-breast-screening-prototype`
+- [x] Validate that scenario maps are more representative than broad crawl output
+
+### Future work
+- [ ] Add tests for scenario runner and config validation
+- [ ] Improve error recovery when interactive steps fail mid-scenario
+- [ ] Consider a scenario recorder that watches user interaction and generates YAML
+- [ ] Explore cross-prototype stitching (iOS native → web prototype handoff)

@@ -701,26 +701,100 @@ function generateViewerJs() {
       layoutNodes[id] = g.node(id);
     });
 
-    // Top-align nodes within each rank layer.
-    // Dagre centers nodes vertically, but with variable-height screenshots
-    // (desktop mode) it looks much better to align the tops of each row.
+    // Override y-positions to enforce rank ordering.
+    // Dagre determines vertical order from edges, but visit-driven scenarios
+    // may have gaps where no forward edge connects consecutive ranks.
+    // We keep dagre's x-positioning (horizontal placement) and recompute y
+    // so ranks stack top-to-bottom in order, top-aligned, with consistent gaps.
     if (hasRanks) {
-      const rankBuckets = {};
-      Object.keys(layoutNodes).forEach(id => {
-        const r = nodeRank[id];
-        if (r === undefined) return;
-        if (!rankBuckets[r]) rankBuckets[r] = [];
-        rankBuckets[r].push(layoutNodes[id]);
-      });
-      Object.values(rankBuckets).forEach(nodesInRank => {
-        if (nodesInRank.length < 2) return;
-        // Find the minimum top edge (y - height/2) in this rank
-        const minTop = Math.min(...nodesInRank.map(n => n.y - n.height / 2));
-        // Shift each node so its top edge aligns with minTop
-        nodesInRank.forEach(n => {
-          n.y = minTop + n.height / 2;
+      const RANK_GAP = 50;
+
+      // Check if this is a merged multi-scenario map
+      const isMerged = graph.nodes.some(n => n.scenarios && n.scenarios.length >= 1);
+
+      if (isMerged) {
+        // Merged map: position each scenario's nodes independently so a tall
+        // page in scenario A doesn't push scenario B's nodes down.
+        // Shared nodes (multiple scenarios) get positioned at the max y needed.
+        const allScenarios = new Set();
+        graph.nodes.forEach(n => {
+          if (n.scenarios) n.scenarios.forEach(s => allScenarios.add(s));
         });
-      });
+
+        // For each scenario, compute cumulative y-positions per rank
+        const scenarioTops = {}; // scenario → { rank → topY }
+        for (const sc of allScenarios) {
+          const scNodes = Object.keys(layoutNodes).filter(id => {
+            const gn = graph.nodes.find(n => n.id === id);
+            return gn && gn.scenarios && gn.scenarios.includes(sc) &&
+              (!gn.scenarios || gn.scenarios.length === 1); // non-shared only
+          });
+          if (scNodes.length === 0) continue;
+
+          const scRanks = {};
+          scNodes.forEach(id => {
+            const r = nodeRank[id];
+            if (r === undefined) return;
+            if (!scRanks[r]) scRanks[r] = [];
+            scRanks[r].push(layoutNodes[id]);
+          });
+
+          let currentTop = 30;
+          // Also account for shared nodes at rank 0
+          const sharedAtZero = Object.keys(layoutNodes).filter(id => {
+            const gn = graph.nodes.find(n => n.id === id);
+            return gn && gn.scenarios && gn.scenarios.length > 1 && nodeRank[id] === 0;
+          });
+          if (sharedAtZero.length > 0) {
+            const maxH = Math.max(...sharedAtZero.map(id => layoutNodes[id].height));
+            currentTop = 30 + maxH + RANK_GAP;
+          }
+
+          scenarioTops[sc] = {};
+          const sortedRanks = Object.keys(scRanks).map(Number).sort((a, b) => a - b);
+          sortedRanks.forEach(rank => {
+            scenarioTops[sc][rank] = currentTop;
+            const maxH = Math.max(...scRanks[rank].map(n => n.height));
+            currentTop += maxH + RANK_GAP;
+          });
+
+          // Position this scenario's non-shared nodes
+          sortedRanks.forEach(rank => {
+            scRanks[rank].forEach(n => {
+              n.y = scenarioTops[sc][rank] + n.height / 2;
+            });
+          });
+        }
+
+        // Position shared nodes (rank 0) at the top
+        Object.keys(layoutNodes).forEach(id => {
+          const gn = graph.nodes.find(n => n.id === id);
+          if (gn && gn.scenarios && gn.scenarios.length > 1 && nodeRank[id] === 0) {
+            layoutNodes[id].y = 30 + layoutNodes[id].height / 2;
+          }
+        });
+
+      } else {
+        // Single scenario: use simple rank stacking
+        const rankBuckets = {};
+        Object.keys(layoutNodes).forEach(id => {
+          const r = nodeRank[id];
+          if (r === undefined) return;
+          if (!rankBuckets[r]) rankBuckets[r] = [];
+          rankBuckets[r].push(layoutNodes[id]);
+        });
+
+        const sortedRanks = Object.keys(rankBuckets).map(Number).sort((a, b) => a - b);
+        let currentTop = 30;
+        sortedRanks.forEach(rank => {
+          const nodesInRank = rankBuckets[rank];
+          nodesInRank.forEach(n => {
+            n.y = currentTop + n.height / 2;
+          });
+          const maxHeight = Math.max(...nodesInRank.map(n => n.height));
+          currentTop += maxHeight + RANK_GAP;
+        });
+      }
     }
 
     // Assign each node to its nearest start node's subgraph (multi-source BFS)

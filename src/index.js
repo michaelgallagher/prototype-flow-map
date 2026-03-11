@@ -475,12 +475,145 @@ async function generateScenario(options) {
     );
   }
 
-  // Rebuild collection index if in multi-map mode
+  // When multiple scenarios are run, also build a combined map
+  if (results.length > 1) {
+    console.log(`\n── Combined map ──`);
+    const combinedGraph = mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames);
+    console.log(
+      `   Merged: ${combinedGraph.nodes.length} nodes, ${combinedGraph.edges.length} edges`,
+    );
+
+    const combinedMapName = name || "combined";
+    const combinedOutputDir = path.join(outputDir, "maps", combinedMapName);
+    fs.mkdirSync(combinedOutputDir, { recursive: true });
+
+    // Copy screenshots from each scenario into the combined output
+    const combinedScreenshotsDir = path.join(combinedOutputDir, "screenshots");
+    fs.mkdirSync(combinedScreenshotsDir, { recursive: true });
+    for (const result of results) {
+      const srcDir = path.join(mapOutputDirs.get(result.name), "screenshots");
+      if (fs.existsSync(srcDir)) {
+        for (const file of fs.readdirSync(srcDir)) {
+          const src = path.join(srcDir, file);
+          const dest = path.join(combinedScreenshotsDir, file);
+          if (!fs.existsSync(dest)) {
+            fs.copyFileSync(src, dest);
+          }
+        }
+      }
+    }
+
+    await buildViewer(combinedGraph, combinedOutputDir, true, viewport, {
+      name: combinedMapName,
+      rootOutputDir: outputDir,
+    });
+    console.log(`   Combined viewer built`);
+
+    buildMermaid(combinedGraph, combinedOutputDir);
+
+    const combinedMeta = {
+      name: combinedMapName,
+      title: title || "Combined scenarios",
+      updatedAt: new Date().toISOString(),
+      mode: "scenario",
+      scenario: results.map((r) => r.name).join(" + "),
+      nodeCount: combinedGraph.nodes.length,
+      edgeCount: combinedGraph.edges.length,
+      hasScreenshots: true,
+    };
+    fs.writeFileSync(
+      path.join(combinedOutputDir, "meta.json"),
+      JSON.stringify(combinedMeta, null, 2),
+    );
+    fs.writeFileSync(
+      path.join(combinedOutputDir, "graph-data.json"),
+      JSON.stringify(combinedGraph, null, 2),
+    );
+  }
+
+  // Rebuild collection index
   if (name || results.length > 1) {
     console.log(`\n   Building collection index...`);
     buildIndex(outputDir);
     console.log(`   Collection index built`);
   }
+}
+
+/**
+ * Merge multiple scenario graphs into a single combined graph.
+ * Shared nodes (e.g. /dashboard) are merged; edges are deduplicated.
+ * Layout ranks are recomputed so shared nodes sit at the top and
+ * each scenario's flow extends below.
+ */
+function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
+  const nodeMap = new Map();
+  const edgeKeys = new Set();
+  const edges = [];
+
+  for (const result of results) {
+    const scenarioScreenshotPrefix = scenarioMapNames.get(result.name);
+    const scenarioOutputDir = mapOutputDirs.get(result.name);
+
+    for (const node of result.graph.nodes) {
+      if (!nodeMap.has(node.id)) {
+        nodeMap.set(node.id, {
+          ...node,
+          scenarios: [result.name],
+        });
+      } else {
+        // Node already exists from another scenario — mark as shared
+        const existing = nodeMap.get(node.id);
+        if (!existing.scenarios.includes(result.name)) {
+          existing.scenarios.push(result.name);
+        }
+      }
+    }
+
+    for (const edge of result.graph.edges) {
+      const key = `${edge.source}|${edge.target}|${edge.type}|${edge.method || "GET"}`;
+      if (!edgeKeys.has(key)) {
+        edgeKeys.add(key);
+        edges.push({ ...edge, scenario: result.name });
+      }
+    }
+  }
+
+  // Recompute layout ranks for the combined graph.
+  // Strategy: shared nodes get rank 0. Each scenario's non-shared nodes
+  // keep their relative rank ordering, offset by 1 (after the shared rank).
+  // Scenarios run in PARALLEL (same rank numbers), so they appear side-by-side
+  // rather than stacked vertically.
+  const nodes = Array.from(nodeMap.values());
+  const sharedNodes = nodes.filter((n) => n.scenarios && n.scenarios.length > 1);
+  const sharedIds = new Set(sharedNodes.map((n) => n.id));
+
+  // Give shared nodes rank 0
+  sharedNodes.forEach((n) => { n.layoutRank = 0; });
+
+  // For each scenario, map its original ranks to combined ranks starting at 1.
+  // All scenarios start at rank 1, so they sit side-by-side below the shared nodes.
+  for (const result of results) {
+    const scenarioNodes = result.graph.nodes
+      .filter((n) => !sharedIds.has(n.id) && n.layoutRank !== undefined)
+      .sort((a, b) => a.layoutRank - b.layoutRank);
+
+    if (scenarioNodes.length === 0) continue;
+
+    // Get the distinct ranks used by this scenario's non-shared nodes
+    const origRanks = [...new Set(scenarioNodes.map((n) => n.layoutRank))].sort((a, b) => a - b);
+    // Map each original rank to a combined rank (1-based)
+    const rankMapping = new Map();
+    origRanks.forEach((origRank, idx) => {
+      rankMapping.set(origRank, idx + 1);
+    });
+
+    for (const n of scenarioNodes) {
+      const merged = nodeMap.get(n.id);
+      if (merged) merged.layoutRank = rankMapping.get(n.layoutRank);
+    }
+  }
+
+  return { nodes, edges };
 }
 
 module.exports = { generate, generateNative };

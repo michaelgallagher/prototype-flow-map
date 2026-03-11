@@ -25,6 +25,7 @@ const VALID_STEP_TYPES = [
   "endMap",
   "use",
   "visit",
+  "snapshot",
 ];
 
 /**
@@ -291,6 +292,7 @@ function validateStep(raw) {
       if (typeof raw.url !== "string") return null;
       step.url = raw.url;
       break;
+    case "snapshot":
     case "beginMap":
     case "endMap":
       break;

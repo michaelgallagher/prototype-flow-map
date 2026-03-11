@@ -112,7 +112,7 @@ async function runSingleScenario(scenario, options) {
     }
 
     // Check if this is a visit-driven scenario
-    const hasVisitSteps = mapSteps.some((s) => s.type === "visit");
+    const hasVisitSteps = mapSteps.some((s) => s.type === "visit" || s.type === "snapshot");
 
     if (hasVisitSteps) {
       // Visit-driven mode: follow the script exactly
@@ -200,11 +200,35 @@ async function visitDrivenMap(options) {
     screenshotsDir,
   } = options;
 
+  // In visit-driven mode, use raw URLs as node IDs (not canonicalized).
+  // The user explicitly listed each page, so /events/9i4uil3x/opinion and
+  // /events/czom9wzg/opinion should be separate nodes with separate screenshots.
+  // We normalize the path (trim, ensure leading slash, strip trailing slash)
+  // but do NOT collapse entity IDs to :id.
+  function normalizePath(url) {
+    let p = String(url).trim();
+    if (!p.startsWith("/")) p = "/" + p;
+    if (p.length > 1 && p.endsWith("/")) p = p.replace(/\/+$/, "");
+    return p;
+  }
+
   // Collect all visit URLs (the full set of pages to include in the map)
   const visitUrls = mapSteps
     .filter((s) => s.type === "visit")
-    .map((s) => canonicalizePath(s.url));
+    .map((s) => normalizePath(s.url));
   const visitSet = new Set(visitUrls);
+
+  // Map from canonicalized path → raw visit URL, for resolving edge targets.
+  // When a page links to a canonical path that matches one of our visit URLs,
+  // we map it to the raw URL. If multiple raw URLs share a canonical path,
+  // we keep the first (the canonical form is ambiguous anyway).
+  const canonicalToRaw = new Map();
+  for (const raw of visitUrls) {
+    const canonical = canonicalizePath(raw);
+    if (!canonicalToRaw.has(canonical)) {
+      canonicalToRaw.set(canonical, raw);
+    }
+  }
 
   // Track links extracted from each page (for building cross-edges)
   const pageLinks = new Map();
@@ -216,7 +240,7 @@ async function visitDrivenMap(options) {
     if (step.type === "endMap") break;
 
     if (step.type === "visit") {
-      const urlPath = canonicalizePath(step.url);
+      const urlPath = normalizePath(step.url);
 
       // Navigate to the page
       try {
@@ -233,9 +257,46 @@ async function visitDrivenMap(options) {
         continue;
       }
 
-      // Only screenshot and extract links on first visit
+      // Check if the page redirected away from the expected URL
+      const landedPath = normalizePath(new URL(page.url()).pathname);
+      if (landedPath !== urlPath) {
+        console.warn(
+          `   ⚠️  ${urlPath} redirected to ${landedPath} — skipping screenshot. ` +
+          `You may need to add interaction steps before this visit to set up session state.`,
+        );
+        continue;
+      }
+
+      // Only screenshot and extract links on first visit to this exact URL
       if (!nodes.has(urlPath)) {
         visitOrder.push(urlPath);
+        const result = await visitPage(page, urlPath, {
+          baseUrl,
+          scenario,
+          screenshotsDir,
+          crawlStats,
+        });
+
+        if (result) {
+          nodes.set(urlPath, result.node);
+          pageLinks.set(urlPath, result.links);
+        }
+      }
+    } else if (step.type === "snapshot") {
+      // Capture whatever page the browser is currently on.
+      // Useful after goto/click steps that navigate to dynamic URLs.
+      const currentUrl = new URL(page.url());
+      const urlPath = normalizePath(currentUrl.pathname);
+
+      if (!nodes.has(urlPath)) {
+        visitOrder.push(urlPath);
+        visitSet.add(urlPath);
+        // Also register in canonicalToRaw for edge resolution
+        const canonical = canonicalizePath(urlPath);
+        if (!canonicalToRaw.has(canonical)) {
+          canonicalToRaw.set(canonical, urlPath);
+        }
+
         const result = await visitPage(page, urlPath, {
           baseUrl,
           scenario,
@@ -258,16 +319,30 @@ async function visitDrivenMap(options) {
     }
   }
 
-  // Resolve redirects: collect link targets not in the visit set,
-  // probe them to discover where they redirect, and map aliases.
-  const redirectMap = new Map(); // e.g. /clinics → /clinics/today
+  // Resolve a link target to a visit-set node ID.
+  // 1. Direct match against raw visit URLs (e.g. link to /clinics/wtrl7jud matches exactly)
+  // 2. Canonical match: canonicalize the target and look up canonicalToRaw
+  //    (e.g. link to /clinics/wtrl7jud matches visit URL /clinics/wtrl7jud even
+  //    if canonicalizePath would turn it to /clinics/:id)
+  // 3. Redirect resolution (deferred — see below)
+  function resolveTarget(rawTarget) {
+    const normalized = normalizePath(rawTarget);
+    if (visitSet.has(normalized)) return normalized;
+    const canonical = canonicalizePath(rawTarget);
+    const mapped = canonicalToRaw.get(canonical);
+    if (mapped) return mapped;
+    return null;
+  }
+
+  // Collect unresolved link targets and probe for redirects
+  const redirectMap = new Map();
   const unknownTargets = new Set();
   for (const [sourcePath, links] of pageLinks) {
     for (const link of links) {
-      const target = canonicalizePath(link.target);
-      if (!target || target === sourcePath) continue;
-      if (!visitSet.has(target) && !unknownTargets.has(target)) {
-        unknownTargets.add(target);
+      if (!link.target) continue;
+      const resolved = resolveTarget(link.target);
+      if (!resolved && !unknownTargets.has(link.target)) {
+        unknownTargets.add(link.target);
       }
     }
   }
@@ -279,26 +354,29 @@ async function visitDrivenMap(options) {
         timeout: 8000,
       });
       if (response && response.ok()) {
-        const landedPath = canonicalizePath(new URL(page.url()).pathname);
-        if (landedPath !== target && visitSet.has(landedPath)) {
-          redirectMap.set(target, landedPath);
+        const landedRaw = normalizePath(new URL(page.url()).pathname);
+        const landedResolved = resolveTarget(landedRaw);
+        if (landedResolved && landedResolved !== normalizePath(target)) {
+          redirectMap.set(normalizePath(target), landedResolved);
+          // Also map the canonical form of the target
+          redirectMap.set(canonicalizePath(target), landedResolved);
         }
       }
     } catch { /* ignore — just means we can't resolve this target */ }
   }
 
   // Build edges: for each visited page, check which of its DOM links
-  // point to other visited pages (directly or via redirect)
+  // point to other visited pages (directly, via canonical mapping, or via redirect)
   for (const [sourcePath, links] of pageLinks) {
     for (const link of links) {
-      let target = canonicalizePath(link.target);
-      if (!target || target === sourcePath) continue;
-
-      // Resolve through redirect map if not a direct match
-      if (!visitSet.has(target)) {
-        target = redirectMap.get(target);
-        if (!target) continue;
+      if (!link.target) continue;
+      let target = resolveTarget(link.target);
+      if (!target) {
+        // Try redirect resolution
+        target = redirectMap.get(normalizePath(link.target))
+          || redirectMap.get(canonicalizePath(link.target));
       }
+      if (!target || target === sourcePath) continue;
 
       addEdge(edges, edgeKeys, sourcePath, {
         ...link,
@@ -398,9 +476,9 @@ async function executeStep(page, step, baseUrl) {
         break;
 
       case "click":
-        await page.click(step.selector, { timeout: 5000 });
+        await page.locator(step.selector).first().click({ timeout: 5000, noWaitAfter: true });
         await Promise.race([
-          page.waitForLoadState("networkidle"),
+          page.waitForLoadState("networkidle").catch(() => {}),
           page.waitForTimeout(3000),
         ]);
         break;
@@ -482,6 +560,8 @@ function describeStep(step) {
       return `endMap`;
     case "visit":
       return `visit ${step.url}`;
+    case "snapshot":
+      return `snapshot (current page)`;
     default:
       return step.type;
   }

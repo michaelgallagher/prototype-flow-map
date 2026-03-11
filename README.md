@@ -9,12 +9,16 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 ## Features
 
 - **Scenario-first mapping** — define realistic user journeys and map what users actually experience, not every possible route
+- **Visit-driven mapping** — specify exact pages to visit, or let the crawler discover pages via BFS; supports interactive steps (`click`, `fill`, `check`, `select`) and `snapshot` for capturing session-dependent pages
+- **Combined scenario maps** — run multiple scenarios together and produce a merged side-by-side view with shared nodes (e.g. `/dashboard`)
 - **Auto-discovers all pages** from Nunjucks templates (mirrors the prototype kit's auto-routing)
 - **Extracts navigation** from `href` links, `<form action>` attributes, and JS redirects
 - **Detects conditional branches** (`{% if data['...'] %}` blocks wrapping different links)
 - **Parses Express route handlers** for explicit redirects and renders
-- **Screenshots every page** using Playwright (headless Chromium)
+- **Screenshots every page** using Playwright (headless Chromium), with dynamic height based on actual page content
+- **Desktop mode** — capture screenshots at 1280x800 desktop viewport instead of mobile
 - **Interactive web viewer** — pan, zoom, click nodes for detail, filter by provenance, toggle global nav, search
+- **Layer-cake layout** — tab groups are arranged side-by-side at each level, with the flow progressing top to bottom following visit order
 - **Shareable output** — a static HTML site you can open locally or deploy anywhere
 - **PDF export** — optional `map.pdf`, with full-canvas layout as default
 
@@ -47,9 +51,10 @@ Many prototypes use seed data — without the right user, site, or entity ID in 
 
 Instead of visiting every technically reachable URL, scenario mode:
 1. Runs setup steps (login, select a user, navigate to a section)
-2. Begins crawling from a meaningful start point
-3. Only follows links within a defined scope
-4. Captures screenshots of pages that are valid in context
+2. Begins mapping from a meaningful start point
+3. Either crawls via BFS within scope, or visits an explicit list of pages (visit-driven mode)
+4. Supports interactive steps and snapshots for session-dependent pages
+5. Captures screenshots of pages that are valid in context, with dynamic heights
 
 The result is an experience map, not a route inventory.
 
@@ -79,17 +84,18 @@ fragments:
     - type: goto
       url: /choose-user
     - type: click
-      selector: "a[href='/dashboard?currentUserId=ae7537b3']"
+      selector: "a[href*='ae7537b3']"
     - type: waitForUrl
       url: /dashboard
 
 # Scenario definitions
 scenarios:
+  # Visit-driven: explicit list of pages to map
   - name: clinic-workflow
     description: Reception/clinic operational flow
     startUrl: /clinics
     scope:
-      includePrefixes: [/dashboard, /clinics, /events, /participants]
+      includePrefixes: [/dashboard, /clinics, /events, /reports]
       excludePrefixes: [/prototype-admin, /api, /assets]
     limits:
       maxPages: 120
@@ -97,19 +103,37 @@ scenarios:
     steps:
       - use: setup.clinician
       - type: beginMap
+      - type: visit
+        url: /dashboard
+      - type: visit
+        url: /clinics/today
+      - type: visit
+        url: /clinics/upcoming
+      # ... more visit steps
+      - type: endMap
 
+  # Interactive: click/snapshot for session-dependent pages
   - name: reading-workflow
     description: Image reading — batch creation, mammogram review, opinions
     startUrl: /reading
     scope:
       includePrefixes: [/reading, /dashboard]
-      excludePrefixes: [/prototype-admin, /api, /assets, /clinics, /participants, /reports, /settings]
-    limits:
-      maxPages: 80
-      maxDepth: 12
+      excludePrefixes: [/prototype-admin, /api, /assets]
     steps:
       - use: setup.clinician
       - type: beginMap
+      - type: visit
+        url: /reading
+      - type: click
+        selector: "a[href*='/create-batch']"
+      - type: snapshot    # captures the page the browser landed on
+      - type: click
+        selector: "button:has-text('Normal')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # ... more interactive steps
+      - type: endMap
 
 # Named groups of scenarios to run together
 scenarioSets:
@@ -133,6 +157,8 @@ Steps before `beginMap` are setup-only — they establish context but don't appe
 | `waitForUrl` | `url` | Wait for navigation to a URL (prefix match) |
 | `waitForSelector` | `selector` | Wait until a selector appears |
 | `wait` | `ms` | Wait a fixed number of milliseconds |
+| `visit` | `url` | Visit a page and add it to the map (visit-driven mode) |
+| `snapshot` | — | Capture the current page as a map node (for session-dependent pages after click/navigation) |
 | `beginMap` | — | Mark where the map starts (steps before this are setup-only) |
 | `endMap` | — | Optional stop marker |
 | `use` | fragment name | Include a reusable fragment (e.g. `use: setup.clinician`) |
@@ -157,6 +183,39 @@ scenarios:
       - use: setup.admin
       - type: beginMap
 ```
+
+#### Visit-driven vs BFS crawl mode
+
+Within a scenario, there are two mapping modes, chosen automatically based on your steps:
+
+- **Visit-driven** (steps include `visit` or `snapshot`): You specify exactly which pages to map. Edges are built from the actual DOM links each page contains, but only to other visited pages. This gives precise control over what appears in the map.
+- **BFS crawl** (no `visit` or `snapshot` steps): The tool crawls from `startUrl`, following every in-scope link. Good for broad discovery.
+
+Visit-driven mode is recommended for prototypes with complex routing, tabs, or pages that require specific navigation sequences.
+
+#### Snapshot steps
+
+For pages that depend on session state (e.g. a batch reading page created by clicking "Start session"), you can't use `visit` because the URL is dynamic. Instead, use `click` to trigger navigation, then `snapshot` to capture whatever page the browser landed on:
+
+```yaml
+steps:
+  - type: click
+    selector: "a[href*='/create-batch']"
+  - type: snapshot    # captures the dynamically-created batch page
+  - type: click
+    selector: "button:has-text('Normal')"
+  - type: wait
+    ms: 1000
+  - type: snapshot    # captures the next opinion page
+```
+
+#### Combined scenario maps
+
+When you run multiple scenarios together (via `--scenario-set`), the tool produces:
+- Individual maps for each scenario
+- A combined/merged map showing all scenarios side-by-side with shared nodes (e.g. `/dashboard` appears once, connecting to both flows)
+
+Each scenario's pages are laid out independently in the merged map, so tall pages in one scenario don't affect spacing in the other.
 
 #### Scenario sets
 
@@ -229,6 +288,7 @@ npx prototype-flow-map /path/to/prototype --mode audit
 | `-p, --port` | `4321` | Port to start the prototype server on |
 | `--width` | `375` | Screenshot viewport width (pixels) |
 | `--height` | `812` | Screenshot viewport height (pixels) |
+| `--desktop` | — | Use desktop viewport (1280x800) instead of mobile |
 | `--no-screenshots` | — | Skip screenshotting (much faster) |
 | `--mode` | `static` | Mapping mode: `static`, `scenario`, or `audit` |
 | `--scenario` | — | Run a single named scenario (implies `--mode scenario`) |
@@ -356,11 +416,15 @@ A map of view name to custom test steps. Each step is a string in the format `co
 4. **For each scenario:**
    - Creates a fresh browser context (isolated cookies/session)
    - Executes setup steps (login, navigate, fill forms)
-   - BFS-crawls from the start URL, following links within scope
-   - Captures screenshots of each valid page
-   - Builds a runtime graph of nodes and edges
+   - Maps pages via visit-driven steps or BFS crawl within scope
+   - Handles interactive steps (`click`, `check`, `select`) and `snapshot` for session-dependent pages
+   - Dismisses modals/overlays before capturing screenshots
+   - Captures dynamically-sized screenshots (height based on actual page content)
+   - Resolves redirects (e.g. `/clinics` → `/clinics/today`) to preserve edge connections
+   - Builds a runtime graph with layout ranks for layer-cake arrangement
 5. **Enriches** the runtime graph with static analysis metadata (titles, file paths, node types)
 6. **Generates** a viewer, Mermaid sitemap, and metadata per scenario
+7. **Optionally merges** multiple scenario graphs into a combined side-by-side view
 
 ### iOS prototypes
 

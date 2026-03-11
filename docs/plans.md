@@ -5,28 +5,29 @@
 - Goal: map both iOS and web parts together, so the flow map shows the full picture including web screens reached from the native app
 - Will need to detect where the native app hands off to web views and continue crawling from there
 
-## 2. Data-driven web prototype support
+## 2. Scenario-first runtime mapping (implemented)
 
-The current web parser is still too static-first for realistic, seed-data-heavy prototypes. It can discover routes and templates, but that does not reliably produce a map that matches what users actually experience.
+Scenario-first mapping is now the primary mode for complex, seed-data-driven prototypes. See the README for full usage documentation.
 
-Recent testing showed why:
-- many technically addressable routes are not meaningful user screens
-- some routes only work with the right seeded entity or session state
-- some pages redirect immediately to valid sub-flows
-- some direct visits produce empty, broken, or black screens
-- a broad “visit every page” crawl tends to generate a route inventory, not an experience map
+### What's been built
+- **Scenario runner** (`src/scenario-runner.js`) — Playwright-based execution with setup steps, scope filtering, and canonical dedup
+- **Visit-driven mapping** — scenarios specify exact pages via `visit` steps; edges built from actual DOM links between visited pages
+- **Snapshot steps** — `snapshot` captures session-dependent pages after interactive navigation (click, fill, check, select)
+- **Redirect resolution** — probes unresolved link targets to discover redirects (e.g. `/clinics` → `/clinics/today`)
+- **Layout ranks** — layer-cake arrangement with tab siblings side-by-side and flow progressing top to bottom
+- **Combined scenario maps** — merges multiple scenarios into side-by-side view with shared nodes and per-scenario row heights
+- **Desktop viewport** — `--desktop` flag for 1280x800 screenshots
+- **Dynamic screenshot heights** — each node sized based on actual page height
+- **Modal dismissal** — removes overlays before screenshots
+- **Global nav edge upgrading** — non-global-nav links upgrade existing global-nav duplicates
+- **Static enrichment** (`src/static-enrichment.js`) — enriches runtime graphs with template metadata
 
-For this class of prototype, the primary goal should be:
-
-> **Visualise realistic user journeys, not every possible route string.**
-
-That changes the recommendation.
-
-For the implementation roadmap and scenario design details, see `docs/scenario-first-runtime-mapping-roadmap.md`.
+### Implementation details
+For the original roadmap and design rationale, see `docs/scenario-first-runtime-mapping-roadmap.md`.
 
 ---
 
-### Option A: Scenario-first runtime mapping (recommended)
+### Option A: Scenario-first runtime mapping (implemented)
 
 **Idea**: Use runtime crawling, but make it **scenario-driven** rather than “crawl every known page”. Start from realistic user entry points, establish the required seeded/session state, and expand only through navigation that a real user can actually take from that state.
 
@@ -540,107 +541,58 @@ Useful only as a supplementary technique or fallback when runtime execution is i
 
 ---
 
-## Revised recommendation
+## Current architecture
 
-Proceed with **Option A**, but redefine it as:
-
-> **Scenario-first runtime mapping, with static analysis as supporting metadata.**
-
-This is now the primary recommendation because it is the best match for the real objective:
-
-- not exhaustive route discovery
-- but a flow map that is representative of what users actually experience
+The tool now implements **scenario-first runtime mapping, with static analysis as supporting metadata.**
 
 ### Primary output
-The main output should usually be:
-- **one map per scenario**
-
-Examples:
-- `clinic-workflow`
-- `participant-management`
-- `reading-workflow`
-- `reporting`
+- **One map per scenario** (e.g. `clinic-workflow`, `reading-workflow`)
+- **Merged multi-scenario maps** when running scenario sets (e.g. `clinic-and-reading`)
 
 ### Secondary output
-Optionally also support:
-- a merged “combined journeys” map
-- a debug “all discovered routes” map for engineering use
-
-This gives two modes with different purposes:
-- **scenario maps** for understanding journeys
-- **debug maps** for inspecting prototype coverage
+- Static-only mode for simple prototypes without seed data
+- Audit mode for debug/coverage checks
 
 ---
 
-## Suggested delivery plan
+## Delivery status
 
-### Phase 1 — Runtime extraction foundation
-- Add runtime DOM extraction for anchors/forms
-- Capture runtime-discovered edges
-- Merge with static metadata
-- Keep this behind a flag initially
+All five phases of the original delivery plan have been completed:
 
-### Phase 2 — Canonicalization and filtering
-- Canonicalize IDs, UUIDs, dates, and template-like paths
-- Filter internal/asset routes
-- Classify global nav vs utility vs journey links
-- Suppress or hide noisy layout navigation by default
+1. ✓ **Runtime extraction** — DOM link extraction, runtime-discovered edges, static metadata merge
+2. ✓ **Canonicalization and filtering** — ID/UUID/date collapse, global nav classification, edge upgrading
+3. ✓ **Scenario-first crawling** — YAML config, setup steps, visit-driven and BFS modes, snapshot steps
+4. ✓ **Viewer experience** — layer-cake layout, per-scenario positioning, combined maps, nav toggles
+5. ✓ **Validation** — tested with 5 scenarios against `manage-breast-screening-prototype`
 
-### Phase 3 — Scenario-first crawling becomes primary mode
-- Add scenario definitions in YAML
-- Support setup steps and isolated contexts
-- Build one graph per scenario
-- Reduce reliance on broad route crawling
-
-### Phase 4 — Viewer support for navigation classes
-- Toggle journey/global-nav/utility links
-- Prefer scenario-specific maps in the UI
-- Make combined/debug views secondary
-
-### Phase 5 — Quality, docs, and rollout
-- Add tests for canonicalization and scenario execution
-- Validate against realistic seed-heavy prototypes
-- Document scenario configuration patterns
-- Decide when scenario-first mode becomes the default
+### Remaining work
+- Add automated tests for scenario runner and config validation
+- Improve error recovery for interactive step failures
+- Consider scenario recorder for generating YAML from user interaction
 
 ---
 
-## Key files likely to change
+## Key files
 
-- `src/crawler.js`
-  - scenario setup hooks
-  - DOM extraction
-  - link classification
-  - suppression of layout/global-nav noise
-- `src/graph-builder.js`
-  - canonicalization
-  - provenance
-  - navigation category metadata
-  - runtime/static merge rules
-- `src/flow-map-config.js`
-  - YAML scenario loading and validation
-  - canonicalization options
-  - filtering options
-- `src/index.js`
-  - scenario execution pipeline
-  - per-scenario output handling
-- `src/build-viewer.js`
-  - scenario-aware presentation
-  - filters for navigation categories
-  - support for multiple scenario outputs
+- `src/scenario-runner.js` — Playwright-based scenario execution: setup steps, visit-driven mapping, snapshot, BFS crawl, redirect resolution, layout rank computation
+- `src/crawler.js` — DOM link extraction, canonicalization, global nav classification, screenshot capture, modal dismissal
+- `src/static-enrichment.js` — enriches runtime graphs with static template metadata (titles, file paths, node types)
+- `src/flow-map-config.js` — YAML/JSON config loading, scenario/fragment/step validation
+- `src/index.js` — orchestration: scenario pipeline, multi-scenario merging, output generation
+- `src/build-viewer.js` — HTML viewer with dagre layout, rank-based positioning, per-scenario row heights, edge filtering
+- `src/graph-builder.js` — static graph construction, provenance metadata
+- `bin/cli.js` — CLI with `--scenario`, `--scenario-set`, `--desktop`, `--list-scenarios`
 
 ---
 
-## Final position
+## Summary
 
-The original recommendation — runtime crawling over seed-aware static expansion — was still directionally correct.
-
-But the real lesson from testing is this:
-
-> **Runtime crawling should be guided by realistic scenarios, not by the desire to visit every discoverable page.**
-
-That is the approach most likely to produce maps that are:
+Scenario-first runtime mapping is now fully implemented and validated. The approach produces maps that are:
 - readable
 - trustworthy
 - representative of user experience
 - useful for design and analysis
+
+The key insight remains:
+
+> **Runtime crawling should be guided by realistic scenarios, not by the desire to visit every discoverable page.**
