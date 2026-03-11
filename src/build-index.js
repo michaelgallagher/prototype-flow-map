@@ -64,6 +64,7 @@ function generateIndexHtml(maps) {
           <span>${meta.nodeCount} pages</span>
           <span>${meta.edgeCount} connections</span>
           ${meta.hasScreenshots ? "<span>Screenshots</span>" : "<span>No screenshots</span>"}
+          ${meta.scenario ? `<span class="map-card-scenario">${escapeHtml(meta.scenario)}</span>` : ""}
         </div>
         ${meta.from ? `<div class="map-card-from">From: ${escapeHtml(meta.from)}</div>` : ""}
       </a>`;
@@ -146,6 +147,12 @@ function generateIndexHtml(maps) {
       gap: 16px;
       font-size: 12px;
       color: #8899aa;
+    }
+    .map-card-scenario {
+      background: #0f3460;
+      padding: 1px 6px;
+      border-radius: 3px;
+      color: #53d8fb;
     }
     .map-card-from {
       margin-top: 6px;

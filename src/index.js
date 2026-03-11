@@ -439,38 +439,37 @@ async function generateScenario(options) {
       `   Final: ${result.graph.nodes.length} nodes, ${result.graph.edges.length} edges`,
     );
 
-    // Only build individual viewers when running a single scenario.
-    // When multiple scenarios run, we build a combined viewer instead.
-    if (results.length === 1) {
-      // Build viewer
-      console.log(`   Building viewer...`);
-      await buildViewer(result.graph, mapOutputDir, true, viewport, {
-        name: scenarioMapName,
-        rootOutputDir: outputDir,
+    // Build viewer for each scenario
+    console.log(`   Building viewer...`);
+    await buildViewer(result.graph, mapOutputDir, true, viewport, {
+      name: scenarioMapName,
+      rootOutputDir: outputDir,
+    });
+    console.log(`   Viewer built`);
+
+    // Build Mermaid sitemap
+    buildMermaid(result.graph, mapOutputDir);
+    console.log(`   Mermaid sitemap written`);
+
+    // Export PDF if requested
+    if (shouldExportPdf) {
+      const resolvedPdfMode = pdfMode || "canvas";
+      console.log(`   Generating PDF export (${resolvedPdfMode})...`);
+      await exportPdf({
+        viewerHtmlPath: path.join(mapOutputDir, "index.html"),
+        outputDir: mapOutputDir,
+        mode: resolvedPdfMode,
       });
-      console.log(`   Viewer built`);
-
-      // Build Mermaid sitemap
-      buildMermaid(result.graph, mapOutputDir);
-      console.log(`   Mermaid sitemap written`);
-
-      // Export PDF if requested
-      if (shouldExportPdf) {
-        const resolvedPdfMode = pdfMode || "canvas";
-        console.log(`   Generating PDF export (${resolvedPdfMode})...`);
-        await exportPdf({
-          viewerHtmlPath: path.join(mapOutputDir, "index.html"),
-          outputDir: mapOutputDir,
-          mode: resolvedPdfMode,
-        });
-        console.log(`   PDF written (map.pdf)`);
-      }
+      console.log(`   PDF written (map.pdf)`);
     }
 
     // Always write metadata and graph data (used by combined map builder)
+    const scenarioTitle = results.length > 1
+      ? `${title || name || "Scenario"}: ${result.name}`
+      : title || result.name;
     const meta = {
       name: scenarioMapName,
-      title: title || result.name,
+      title: scenarioTitle,
       updatedAt: new Date().toISOString(),
       mode: "scenario",
       scenario: result.name,
