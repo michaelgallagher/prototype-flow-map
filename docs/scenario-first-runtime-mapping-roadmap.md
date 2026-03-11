@@ -372,24 +372,27 @@ Use the breast screening prototype as the proving ground for the new approach.
 
 ### Implemented scenarios
 
-All five target scenarios have been defined in the prototype’s `flow-map.config.yml`:
+Six scenarios have been defined in the prototype’s `flow-map.config.yml`:
 
 1. **`login-and-dashboard`** — Entry flow from start page through user selection to dashboard
-2. **`clinic-workflow`** — Visit-driven: 20+ pages covering clinic tabs, appointment details, check-in flow, and clinic reports
-3. **`participant-management`** — BFS crawl of participant lookup, details, and medical history
-4. **`reading-workflow`** — Interactive: uses `click` + `snapshot` for session-dependent batch pages (opinions, compare, technical recall, review), plus `visit` for static pages (priors, history, clinics tabs)
-5. **`reporting`** — Reports and data exports
+2. **`clinic-workflow`** — Visit-driven: 20+ pages covering clinic tabs, appointment details, and clinic reports; uses click+snapshot for dynamic event pages
+3. **`check-in-workflow`** — Full interactive workflow: identity confirmation → medical history (breast cancer form with checkboxes, radios, text input) → imaging → completion; uses sequential navigation edges through redirects
+4. **`participant-management`** — BFS crawl of participant lookup, details, and medical history
+5. **`reading-workflow`** — Interactive: uses `click` + `snapshot` for session-dependent batch pages (opinions, compare, technical recall, review), plus `visit` for static pages (priors, history, clinics tabs)
+6. **`reporting`** — Reports and data exports
 
 ### Combined maps
 - `clinic-and-reading` scenario set produces a merged side-by-side view with `/dashboard` as a shared node
-- `core-user-journeys` set runs all five scenarios
+- `clinic-full` set combines clinic-workflow + check-in-workflow
+- `core-user-journeys` set runs all six scenarios
 
 ### Results
-- clinic-workflow: 11 nodes, 59 edges
+- clinic-workflow: 15 nodes, 46 edges (visit-driven + click/snapshot for dynamic events)
+- check-in-workflow: 7 nodes, 17 edges (full interactive workflow through 7 screens)
 - reading-workflow: 17 nodes, 57 edges
-- Combined: 27 nodes, 116 edges (1 shared node)
 - Screenshots are valid, in-context, and dynamically sized
 - Layer-cake layout with tab groups side-by-side
+- Sequential navigation edges correctly link pages navigated via server-side redirects
 
 ### Acceptance criteria
 - [x] Scenario maps look closer to real user experience than the broad crawl map

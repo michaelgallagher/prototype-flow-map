@@ -12,6 +12,7 @@ runtimeMapping:
     suppressUtilityLinks: true
     suppressDebugRoutes: true
 
+# Reusable setup sequences
 fragments:
   setup.clinician:
     - type: goto
@@ -29,18 +30,24 @@ fragments:
     - type: waitForUrl
       url: /dashboard
 
+# Named groups of scenarios to run together
 scenarioSets:
   core-user-journeys:
     - login-and-dashboard
     - clinic-workflow
+    - check-in-workflow
     - participant-management
     - reading-workflow
     - reporting
   clinic-and-reading:
     - clinic-workflow
     - reading-workflow
+  clinic-full:
+    - clinic-workflow
+    - check-in-workflow
 
 scenarios:
+  # BFS crawl: no visit/snapshot steps, so the tool crawls from startUrl
   - name: login-and-dashboard
     description: Entry flow from start page through user selection to dashboard
     startUrl: /dashboard
@@ -60,14 +67,14 @@ scenarios:
       - type: waitForUrl
         url: /start
 
+  # Visit-driven: explicit list of pages to map with edges from DOM links
   - name: clinic-workflow
     description: Reception/clinic operational flow — appointments, events, check-in
     startUrl: /clinics
     tags: [clinic, appointment, core]
     scope:
       includePrefixes: [/dashboard, /clinics, /events, /reports]
-      excludePrefixes:
-        [/prototype-admin, /api, /assets, /settings, /participants]
+      excludePrefixes: [/prototype-admin, /api, /assets, /settings, /participants]
     limits:
       maxPages: 120
       maxDepth: 12
@@ -77,7 +84,7 @@ scenarios:
       # Dashboard
       - type: visit
         url: /dashboard
-      # Clinic tabs
+      # Clinic tabs — mutually linked pages are arranged side-by-side
       - type: visit
         url: /clinics/today
       - type: visit
@@ -100,46 +107,123 @@ scenarios:
       # Clinic report
       - type: visit
         url: /reports/wtrl7jud
-      # Appointment and details
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/appointment
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/special-appointment/edit
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/participant
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/medical-information
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/appointment-note
-      # Check-in flow
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/confirm-identity
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/review-medical-information
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/take-images
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/images-manual-details
-      - type: visit
-        url: /clinics/wtrl7jud/events/elkfirxy/check-information
+      # Navigate into an event (click first "View appointment" link)
+      # Uses click+snapshot because event IDs are dynamic from seed data
+      - type: goto
+        url: /clinics/wtrl7jud/all
+      - type: click
+        selector: "a:has-text('View appointment')"
+      - type: snapshot
+      # Event detail tabs
+      - type: click
+        selector: "a[href*='/participant']"
+      - type: snapshot
+      - type: click
+        selector: "a[href*='/medical-information']"
+      - type: snapshot
+      - type: click
+        selector: "a[href*='/appointment']"
+      - type: snapshot
       - type: endMap
 
+  # Interactive workflow: click through forms, fill fields, snapshot each page
+  - name: check-in-workflow
+    description: Full check-in workflow — identity confirmation, medical history, imaging, completion
+    startUrl: /clinics/wtrl7jud
+    tags: [clinic, check-in, workflow]
+    scope:
+      includePrefixes: [/clinics]
+      excludePrefixes: [/prototype-admin, /api, /assets, /settings, /participants, /reading, /reports]
+    limits:
+      maxPages: 30
+      maxDepth: 15
+    steps:
+      - use: setup.clinician
+      - type: beginMap
+      # Start on the clinic page
+      - type: visit
+        url: /clinics/wtrl7jud
+      # Navigate into a not-started event
+      - type: goto
+        url: /clinics/wtrl7jud
+      - type: click
+        selector: "a:has-text('View appointment')"
+      - type: waitForSelector
+        selector: "a:has-text('Start this appointment')"
+      - type: snapshot
+      # Start the appointment (link styled as button, href="./start")
+      - type: click
+        selector: "a:has-text('Start this appointment')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Confirm identity — submit the form
+      - type: click
+        selector: "button:has-text('Confirm identity')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Review medical information — expand medical history and add breast cancer
+      - type: click
+        selector: "details#medical-history > summary"
+      - type: wait
+        ms: 500
+      - type: click
+        selector: "a:has-text('Breast cancer')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Fill breast cancer form (NHS design system: first item = idPrefix, no -1 suffix)
+      - type: check
+        selector: "#cancerLocationRightBreast"
+      - type: check
+        selector: "#proceduresRightBreast"
+      - type: check
+        selector: "#otherSurgeryRightBreast"
+      - type: check
+        selector: "#treatmentRightBreast"
+      - type: check
+        selector: "#location"
+      - type: wait
+        ms: 500
+      - type: fill
+        selector: "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']"
+        value: "Unknown"
+      - type: click
+        selector: "button[value='save']"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Complete all sections and continue to imaging
+      - type: click
+        selector: "button.js-complete-all-sections"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Take images — select standard set radio, click Continue
+      - type: check
+        selector: "#imagingComplete"
+      - type: click
+        selector: "button:has-text('Continue')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      # Check information — complete screening
+      - type: click
+        selector: "button:has-text('Complete screening and return to clinic')"
+      - type: wait
+        ms: 1000
+      - type: snapshot
+      - type: endMap
+
+  # BFS crawl: no visit steps, crawls from startUrl following in-scope links
   - name: participant-management
     description: Participant lookup, details, medical history, and questionnaire flows
     startUrl: /participants
     tags: [participant, core]
     scope:
       includePrefixes: [/dashboard, /participants]
-      excludePrefixes:
-        [
-          /prototype-admin,
-          /api,
-          /assets,
-          /settings,
-          /clinics,
-          /reading,
-          /reports,
-        ]
+      excludePrefixes: [/prototype-admin, /api, /assets, /settings, /clinics, /reading, /reports]
     limits:
       maxPages: 80
       maxDepth: 10
@@ -147,50 +231,40 @@ scenarios:
       - use: setup.admin
       - type: beginMap
 
+  # Mixed: visit steps for static pages + click/snapshot for interactive flow
   - name: reading-workflow
     description: Image reading — batch creation, mammogram review, opinions
     startUrl: /reading
     tags: [reading, core]
     scope:
       includePrefixes: [/dashboard, /reading]
-      excludePrefixes:
-        [
-          /prototype-admin,
-          /api,
-          /assets,
-          /settings,
-          /clinics,
-          /participants,
-          /reports,
-        ]
+      excludePrefixes: [/prototype-admin, /api, /assets, /settings, /clinics, /participants, /reports]
     limits:
       maxPages: 80
       maxDepth: 12
     steps:
       - use: setup.clinician
       - type: beginMap
-      # Dashboard and reading landing
+      # Static pages
       - type: visit
         url: /dashboard
       - type: visit
         url: /reading
-      # Enter the batch — click "Start session" link
+      # Interactive flow: click through batch creation and opinions
       - type: click
         selector: "a[href*='/create-batch']"
       - type: snapshot
-      # Opinion 1: click "Normal (N)" to submit opinion and advance
       - type: click
         selector: "button:has-text('Normal')"
       - type: wait
         ms: 1000
       - type: snapshot
-      # Opinion 2: click "Technical recall (T)" — goes to compare page
       - type: click
         selector: "button:has-text('Technical recall')"
       - type: wait
         ms: 1000
       - type: snapshot
-      # Compare: select "Keep my opinion" radio, click Continue
+      # Form interaction: select radio, click button
       - type: click
         selector: "input[value='keep']"
       - type: click
@@ -198,12 +272,11 @@ scenarios:
       - type: wait
         ms: 1000
       - type: snapshot
-      # Technical recall: check the RCC checkbox to expose reason dropdown
+      # Checkbox + dropdown interaction
       - type: check
         selector: "input[value='RCC']"
       - type: wait
         ms: 500
-      # Select reason from the revealed dropdown
       - type: select
         selector: "#technicalRecall-RCC-reason"
         value: Image obscured
@@ -212,32 +285,27 @@ scenarios:
       - type: wait
         ms: 1000
       - type: snapshot
-      # Review: click "Confirm and save"
       - type: click
         selector: "button:has-text('Confirm and save')"
       - type: wait
         ms: 1000
       - type: snapshot
-      # Existing read: click "Next case" forward link
       - type: click
         selector: ".nhsuk-forward-link"
       - type: wait
         ms: 1000
       - type: snapshot
-      # Create custom batch
+      # More static pages
       - type: visit
         url: /reading/create-custom-batch
-      # Clinics tabs
       - type: visit
         url: /reading/clinics/mine
       - type: visit
         url: /reading/clinics/all
-      # History tabs
       - type: visit
         url: /reading/history/mine
       - type: visit
         url: /reading/history/all
-      # Priors tabs
       - type: visit
         url: /reading/priors
       - type: visit
@@ -254,16 +322,7 @@ scenarios:
     tags: [reporting, core]
     scope:
       includePrefixes: [/dashboard, /reports]
-      excludePrefixes:
-        [
-          /prototype-admin,
-          /api,
-          /assets,
-          /settings,
-          /clinics,
-          /participants,
-          /reading,
-        ]
+      excludePrefixes: [/prototype-admin, /api, /assets, /settings, /clinics, /participants, /reading]
     limits:
       maxPages: 40
       maxDepth: 8

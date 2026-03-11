@@ -236,6 +236,11 @@ async function visitDrivenMap(options) {
   // Track the unique visit order (first appearance only)
   const visitOrder = [];
 
+  // Track the last captured page URL to create sequential navigation edges.
+  // When click steps navigate between two captured pages, we add an edge
+  // even if the DOM links don't directly match (e.g. via redirects).
+  let lastCapturedUrl = null;
+
   for (const step of mapSteps) {
     if (step.type === "endMap") break;
 
@@ -282,6 +287,7 @@ async function visitDrivenMap(options) {
           pageLinks.set(urlPath, result.links);
         }
       }
+      lastCapturedUrl = urlPath;
     } else if (step.type === "snapshot") {
       // Capture whatever page the browser is currently on.
       // Useful after goto/click steps that navigate to dynamic URLs.
@@ -309,6 +315,18 @@ async function visitDrivenMap(options) {
           pageLinks.set(urlPath, result.links);
         }
       }
+
+      // Create a sequential navigation edge from the last captured page.
+      // This handles click-driven navigation through redirects where
+      // the DOM link target doesn't directly match the visited page URL.
+      if (lastCapturedUrl && lastCapturedUrl !== urlPath) {
+        addEdge(edges, edgeKeys, lastCapturedUrl, {
+          target: urlPath,
+          text: "",
+          kind: "link",
+        });
+      }
+      lastCapturedUrl = urlPath;
     } else {
       // Execute non-visit steps (click, fill, etc.) inline
       try {

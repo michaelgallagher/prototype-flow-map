@@ -10,6 +10,7 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 
 - **Scenario-first mapping** — define realistic user journeys and map what users actually experience, not every possible route
 - **Visit-driven mapping** — specify exact pages to visit, or let the crawler discover pages via BFS; supports interactive steps (`click`, `fill`, `check`, `select`) and `snapshot` for capturing session-dependent pages
+- **Interactive workflow mapping** — walk through multi-step forms with checkboxes, radio buttons, text inputs, and expandable sections; sequential navigation edges are automatically created between click-navigated pages (even through redirects)
 - **Combined scenario maps** — run multiple scenarios together and produce a merged side-by-side view with shared nodes (e.g. `/dashboard`)
 - **Auto-discovers all pages** from Nunjucks templates (mirrors the prototype kit's auto-routing)
 - **Extracts navigation** from `href` links, `<form action>` attributes, and JS redirects
@@ -135,6 +136,59 @@ scenarios:
       # ... more interactive steps
       - type: endMap
 
+  # Workflow: click through multi-step forms with checkboxes, radios, text inputs
+  - name: check-in-workflow
+    description: Full check-in workflow with form interactions
+    startUrl: /clinics/wtrl7jud
+    scope:
+      includePrefixes: [/clinics]
+      excludePrefixes: [/prototype-admin, /api, /assets]
+    steps:
+      - use: setup.clinician
+      - type: beginMap
+      - type: visit
+        url: /clinics/wtrl7jud
+      # Navigate into a dynamic event via click + snapshot
+      - type: goto
+        url: /clinics/wtrl7jud
+      - type: click
+        selector: "a:has-text('View appointment')"
+      - type: waitForSelector
+        selector: "a:has-text('Start this appointment')"
+      - type: snapshot
+      # Walk through the check-in workflow
+      - type: click
+        selector: "a:has-text('Start this appointment')"
+      - type: wait
+        ms: 1000
+      - type: snapshot    # confirm-identity page
+      - type: click
+        selector: "button:has-text('Confirm identity')"
+      - type: wait
+        ms: 1000
+      - type: snapshot    # review-medical-information page
+      # Interact with expandable section and fill a form
+      - type: click
+        selector: "details#medical-history > summary"
+      - type: click
+        selector: "a:has-text('Breast cancer')"
+      - type: wait
+        ms: 1000
+      - type: snapshot    # breast cancer form
+      - type: check
+        selector: "#cancerLocationRightBreast"
+      - type: check
+        selector: "#proceduresRightBreast"
+      - type: fill
+        selector: "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']"
+        value: "Unknown"
+      - type: click
+        selector: "button[value='save']"
+      - type: wait
+        ms: 1000
+      - type: snapshot    # back to review page with saved data
+      - type: endMap
+
 # Named groups of scenarios to run together
 scenarioSets:
   core-user-journeys:
@@ -208,6 +262,12 @@ steps:
     ms: 1000
   - type: snapshot    # captures the next opinion page
 ```
+
+#### Sequential navigation edges
+
+When you use `click` steps to navigate between pages (e.g. clicking "Start this appointment" which redirects through `/start` to `/confirm-identity`), the tool automatically creates edges between consecutive snapshot pages. This means the map shows the correct flow even when the DOM link target doesn't directly match the destination URL (e.g. through server-side redirects).
+
+These edges are created whenever a `snapshot` captures a different page than the previous `visit` or `snapshot` — no additional configuration needed.
 
 #### Combined scenario maps
 

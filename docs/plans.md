@@ -13,6 +13,8 @@ Scenario-first mapping is now the primary mode for complex, seed-data-driven pro
 - **Scenario runner** (`src/scenario-runner.js`) — Playwright-based execution with setup steps, scope filtering, and canonical dedup
 - **Visit-driven mapping** — scenarios specify exact pages via `visit` steps; edges built from actual DOM links between visited pages
 - **Snapshot steps** — `snapshot` captures session-dependent pages after interactive navigation (click, fill, check, select)
+- **Sequential navigation edges** — automatic edges between consecutive snapshot pages, even through server-side redirects (e.g. clicking "Start this appointment" navigates via `/start` redirect to `/confirm-identity`)
+- **Interactive workflow mapping** — walk through multi-step forms with `check`, `fill`, `select` steps; supports expandable sections, radio buttons, checkboxes, and conditional form fields
 - **Redirect resolution** — probes unresolved link targets to discover redirects (e.g. `/clinics` → `/clinics/today`)
 - **Layout ranks** — layer-cake arrangement with tab siblings side-by-side and flow progressing top to bottom
 - **Combined scenario maps** — merges multiple scenarios into side-by-side view with shared nodes and per-scenario row heights
