@@ -294,13 +294,19 @@ function generateMethod(nodeId, taps, screenshotsDir) {
     return `        guard tapElement(matching: [${candidatesLiteral}], in: app) else { print("⚠️ [flow-map] tapElement failed: [${candidatesPrint}]"); return }`;
   });
 
+  // When there are no taps (e.g. the home screen / default tab), the app
+  // launches directly to that screen. We need a longer initial wait to let
+  // the splash screen dismiss and content load. Other screens already get
+  // this delay via tapTab()'s built-in 2.5s splash wait.
+  const preSleepTime = taps.length === 0 ? "5.0" : "2.0";
+
   return `
     func testCapture_${safeName}() {
         print("📸 [flow-map] Capturing: ${safeName}")
         let app = XCUIApplication()
         app.launch()
 ${tapLines.join("\n")}
-        Thread.sleep(forTimeInterval: 2.0)
+        Thread.sleep(forTimeInterval: ${preSleepTime})
         writeScreenshot(name: "${escapedName}", to: "${escapedDir}")
         print("✅ [flow-map] Captured: ${safeName}")
     }`;
