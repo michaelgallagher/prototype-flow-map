@@ -126,7 +126,25 @@ function buildSwiftGraph(parsedViews) {
     }
   }
 
+  // --- Pass 4: add lateral edges between tab siblings ---
+  // In iOS, users can tap any tab from any other tab, so tab siblings
+  // should have bidirectional edges showing top-level navigation paths.
+  for (const view of parsedViews) {
+    if (view.tabChildren.length < 2) continue;
+    const tabTargets = view.tabChildren.map((t) => t.target);
+    for (let i = 0; i < tabTargets.length; i++) {
+      for (let j = i + 1; j < tabTargets.length; j++) {
+        addEdge(edges, tabTargets[i], tabTargets[j], { type: "tab", label: "" });
+        addEdge(edges, tabTargets[j], tabTargets[i], { type: "tab", label: "" });
+      }
+    }
+  }
+
+  // --- Pass 5: assign layoutRank via BFS so the viewer can stack nodes ---
+  // Tab children share the same rank (one below their TabView parent),
+  // placing them side-by-side near the top of the map.
   const uniqueEdges = deduplicateEdges(edges);
+  assignLayoutRanks(nodes, uniqueEdges, parsedViews);
   return { nodes, edges: uniqueEdges };
 }
 
@@ -158,6 +176,89 @@ function deduplicateEdges(edges) {
     seen.add(key);
     return true;
   });
+}
+
+/**
+ * Assign layoutRank to each node via BFS from root nodes.
+ * Tab children all receive the same rank (one below their TabView parent)
+ * so the viewer arranges them side-by-side near the top of the map.
+ */
+function assignLayoutRanks(nodes, edges, parsedViews) {
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
+  // Build adjacency list from forward edges (exclude lateral tab-sibling edges)
+  const tabSiblingPairs = new Set();
+  for (const view of parsedViews) {
+    if (view.tabChildren.length < 2) continue;
+    const targets = view.tabChildren.map((t) => t.target);
+    for (let i = 0; i < targets.length; i++) {
+      for (let j = i + 1; j < targets.length; j++) {
+        tabSiblingPairs.add(`${targets[i]}|${targets[j]}`);
+        tabSiblingPairs.add(`${targets[j]}|${targets[i]}`);
+      }
+    }
+  }
+
+  const children = new Map(); // parent → [child]
+  const inDegree = new Map();
+  for (const id of nodeIds) {
+    children.set(id, []);
+    inDegree.set(id, 0);
+  }
+
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    // Skip tab-sibling lateral edges for rank computation
+    if (tabSiblingPairs.has(`${e.source}|${e.target}`)) continue;
+    children.get(e.source).push(e.target);
+    inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
+  }
+
+  // Find roots (no incoming edges)
+  const roots = [];
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) roots.push(id);
+  }
+
+  // BFS to assign ranks
+  const rankOf = new Map();
+  const queue = [];
+  for (const r of roots) {
+    rankOf.set(r, 0);
+    queue.push(r);
+  }
+
+  let head = 0;
+  while (head < queue.length) {
+    const current = queue[head++];
+    const currentRank = rankOf.get(current);
+    for (const child of children.get(current) || []) {
+      const existingRank = rankOf.get(child);
+      const newRank = currentRank + 1;
+      if (existingRank === undefined || newRank > existingRank) {
+        rankOf.set(child, newRank);
+        queue.push(child);
+      }
+    }
+  }
+
+  // Force tab siblings to share the same rank (use the minimum among them)
+  for (const view of parsedViews) {
+    if (view.tabChildren.length < 2) continue;
+    const targets = view.tabChildren.map((t) => t.target).filter((t) => rankOf.has(t));
+    if (targets.length === 0) continue;
+    const sharedRank = Math.min(...targets.map((t) => rankOf.get(t)));
+    for (const t of targets) {
+      rankOf.set(t, sharedRank);
+    }
+  }
+
+  // Apply ranks to nodes
+  for (const [id, rank] of rankOf) {
+    const node = nodeById.get(id);
+    if (node) node.layoutRank = rank;
+  }
 }
 
 module.exports = { buildSwiftGraph };

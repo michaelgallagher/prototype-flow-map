@@ -983,7 +983,7 @@ function generateViewerJs() {
 
     // Add defs for arrowheads
     const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    ['link', 'form', 'conditional', 'redirect', 'render', 'nav'].forEach(type => {
+    ['link', 'form', 'conditional', 'redirect', 'render', 'nav', 'tab', 'sheet', 'full-screen', 'web-view', 'safari'].forEach(type => {
       const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
       marker.setAttribute('id', 'arrow-' + type);
       marker.setAttribute('viewBox', '0 0 10 10');
