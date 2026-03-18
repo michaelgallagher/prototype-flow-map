@@ -7,9 +7,11 @@ Tags entry core
 Limit pages 20
 Limit depth 4
 
-Setup:
-  Goto /
+--- Setup ---
 
-Map:
-  Click "a[href='/start']"
-  WaitForUrl /start
+Goto /
+
+--- Map ---
+
+Click "a[href='/start']"
+WaitForUrl /start

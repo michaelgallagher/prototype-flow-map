@@ -7,8 +7,10 @@ Tags reporting core
 Limit pages 40
 Limit depth 8
 
-Setup:
-  Use setup.admin
+--- Setup ---
 
-Map:
-  # BFS crawl — no visit steps, follows links from startUrl
+Use setup.admin
+
+--- Map ---
+
+# BFS crawl — no visit steps, follows links from startUrl

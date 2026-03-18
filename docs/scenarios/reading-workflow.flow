@@ -8,51 +8,53 @@ Tags reading core
 Limit pages 80
 Limit depth 12
 
-Setup:
-  Use setup.clinician
+--- Setup ---
 
-Map:
-  # Static pages
-  Visit /dashboard
-  Visit /reading
+Use setup.clinician
 
-  # Interactive flow: click through batch creation and opinions
-  Click "a[href*='/create-batch']"
-  Snapshot
-  Click "button:has-text('Normal')"
-  Wait 1000
-  Snapshot
-  Click "button:has-text('Technical recall')"
-  Wait 1000
-  Snapshot
+--- Map ---
 
-  # Form interaction: select radio, click button
-  Click "input[value='keep']"
-  Click "button:has-text('Continue')"
-  Wait 1000
-  Snapshot
+# Static pages
+Visit /dashboard
+Visit /reading
 
-  # Checkbox + dropdown interaction
-  Check "input[value='RCC']"
-  Wait 500
-  Select "#technicalRecall-RCC-reason" "Image obscured"
-  Click "button:has-text('Continue')"
-  Wait 1000
-  Snapshot
-  Click "button:has-text('Confirm and save')"
-  Wait 1000
-  Snapshot
-  Click ".nhsuk-forward-link"
-  Wait 1000
-  Snapshot
+# Interactive flow: click through batch creation and opinions
+Click "a[href*='/create-batch']"
+Snapshot
+Click "button:has-text('Normal')"
+Wait 1000
+Snapshot
+Click "button:has-text('Technical recall')"
+Wait 1000
+Snapshot
 
-  # More static pages
-  Visit /reading/create-custom-batch
-  Visit /reading/clinics/mine
-  Visit /reading/clinics/all
-  Visit /reading/history/mine
-  Visit /reading/history/all
-  Visit /reading/priors
-  Visit /reading/priors/not-requested
-  Visit /reading/priors/requested
-  Visit /reading/priors/resolved
+# Form interaction: select radio, click button
+Click "input[value='keep']"
+Click "button:has-text('Continue')"
+Wait 1000
+Snapshot
+
+# Checkbox + dropdown interaction
+Check "input[value='RCC']"
+Wait 500
+Select "#technicalRecall-RCC-reason" "Image obscured"
+Click "button:has-text('Continue')"
+Wait 1000
+Snapshot
+Click "button:has-text('Confirm and save')"
+Wait 1000
+Snapshot
+Click ".nhsuk-forward-link"
+Wait 1000
+Snapshot
+
+# More static pages
+Visit /reading/create-custom-batch
+Visit /reading/clinics/mine
+Visit /reading/clinics/all
+Visit /reading/history/mine
+Visit /reading/history/all
+Visit /reading/priors
+Visit /reading/priors/not-requested
+Visit /reading/priors/requested
+Visit /reading/priors/resolved

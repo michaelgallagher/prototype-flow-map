@@ -15,21 +15,21 @@ const path = require("path");
  *   Limit depth 12
  *   Disabled
  *
- *   Setup:
- *     Use setup.clinician
- *     Goto /choose-user
- *     Click "text=Receptionist"
- *     WaitForUrl /dashboard
+ *   --- Setup ---
+ *   Use setup.clinician
+ *   Goto /choose-user
+ *   Click "text=Receptionist"
+ *   WaitForUrl /dashboard
  *
- *   Map:
- *     Visit /dashboard
- *     Visit /clinics/today
- *     Click "a:has-text('View appointment')"
- *     Snapshot
- *     Wait 1000
- *     Fill "input[name='search']" "HITCHIN"
- *     Check "#cancerLocationRightBreast"
- *     Select "#dropdown" "Image obscured"
+ *   --- Map ---
+ *   Visit /dashboard
+ *   Visit /clinics/today
+ *   Click "a:has-text('View appointment')"
+ *   Snapshot
+ *   Wait 1000
+ *   Fill "input[name='search']" "HITCHIN"
+ *   Check "#cancerLocationRightBreast"
+ *   Select "#dropdown" "Image obscured"
  */
 function parseFlowFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf-8");
@@ -97,14 +97,13 @@ function parseFlowText(text, name) {
     // Skip blank lines and comments
     if (trimmed === "" || trimmed.startsWith("#")) continue;
 
-    // Block markers
-    if (/^setup\s*:/i.test(trimmed)) {
+    // Block markers: "--- Setup ---" or "Setup:"
+    if (/^-{3,}\s*setup\s*-{3,}$/i.test(trimmed) || /^setup\s*:$/i.test(trimmed)) {
       currentBlock = "setup";
       continue;
     }
-    if (/^map\s*:/i.test(trimmed)) {
+    if (/^-{3,}\s*map\s*-{3,}$/i.test(trimmed) || /^map\s*:$/i.test(trimmed)) {
       currentBlock = "map";
-      // Insert beginMap marker
       scenario.steps.push({ type: "beginMap" });
       continue;
     }
