@@ -72,14 +72,145 @@ npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
 npx prototype-flow-map /path/to/prototype --list-scenarios
 ```
 
-#### Writing a scenario config
+#### Writing scenarios
 
-Create a `flow-map.config.yml` file in your prototype's root directory:
+Scenarios can be defined in two formats: `.flow` files (recommended) or inline YAML in the config file.
+
+##### `.flow` files (recommended)
+
+Create a `scenarios/` directory in your prototype root. Each `.flow` file defines one scenario using a simple, readable format:
+
+```
+# Reception/clinic operational flow
+# Appointments, events, check-in
+
+Start /clinics
+Scope /dashboard /clinics /events /reports
+Exclude /prototype-admin /api /assets /settings /participants
+Tags clinic appointment core
+Limit pages 120
+Limit depth 12
+
+--- Setup ---
+
+Use setup.clinician
+
+--- Map ---
+
+# Dashboard
+Visit /dashboard
+
+# Clinic tabs
+Visit /clinics/today
+Visit /clinics/upcoming
+Visit /clinics/completed
+Visit /clinics/all
+
+# Navigate into an event dynamically
+Goto /clinics/wtrl7jud/all
+Click "a:has-text('View appointment')"
+Snapshot
+
+# Event detail tabs
+Click "a[href*='/participant']"
+Snapshot
+Click "a[href*='/medical-information']"
+Snapshot
+```
+
+The filename becomes the scenario name (e.g. `clinic-workflow.flow` → scenario `clinic-workflow`).
+
+Here's a more complex example showing interactive form steps:
+
+```
+# Full check-in workflow
+# Identity confirmation, medical history, imaging, completion
+
+Start /clinics/wtrl7jud
+Scope /clinics
+Exclude /prototype-admin /api /assets
+Tags clinic check-in workflow
+Limit pages 30
+Limit depth 15
+
+--- Setup ---
+
+Use setup.clinician
+
+--- Map ---
+
+Visit /clinics/wtrl7jud
+
+# Navigate into event and start appointment
+Goto /clinics/wtrl7jud
+Click "a:has-text('View appointment')"
+WaitForSelector "a:has-text('Start this appointment')"
+Snapshot
+
+Click "a:has-text('Start this appointment')"
+Wait 1000
+Snapshot
+
+# Confirm identity
+Click "button:has-text('Confirm identity')"
+Wait 1000
+Snapshot
+
+# Fill breast cancer form
+Check "#cancerLocationRightBreast"
+Check "#proceduresRightBreast"
+Fill "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']" "Unknown"
+Click "button[value='save']"
+Wait 1000
+Snapshot
+```
+
+##### `.flow` file format reference
+
+**Header section** (before `--- Setup ---`):
+
+| Directive | Example | Description |
+|---|---|---|
+| `Start` | `Start /clinics` | Start URL for the scenario |
+| `Scope` | `Scope /dashboard /clinics` | Only follow links matching these path prefixes |
+| `Exclude` | `Exclude /api /assets` | Never follow links matching these prefixes |
+| `Tags` | `Tags clinic core` | Grouping labels |
+| `Limit pages` | `Limit pages 120` | Maximum pages to visit |
+| `Limit depth` | `Limit depth 12` | Maximum link depth |
+| `Disabled` | `Disabled` | Skip this scenario when running all scenarios |
+
+**Blocks:**
+
+- `--- Setup ---` — steps that establish context (login, navigate to section). Not included in the map.
+- `--- Map ---` — steps that contribute to the mapped journey. Everything after this marker appears in the output.
+
+**Step types:**
+
+| Step | Example | Description |
+|---|---|---|
+| `Goto` | `Goto /choose-user` | Navigate directly to a URL |
+| `Click` | `Click "a:has-text('View')"` | Click an element by CSS selector |
+| `Fill` | `Fill "#search" "HITCHIN"` | Fill an input field |
+| `Select` | `Select "#dropdown" "Option"` | Choose a select option |
+| `Check` | `Check "#myCheckbox"` | Check a checkbox or radio |
+| `Submit` | `Submit form` | Submit a form by selector |
+| `WaitForUrl` | `WaitForUrl /dashboard` | Wait for navigation to a URL |
+| `WaitForSelector` | `WaitForSelector "text=Done"` | Wait until a selector appears |
+| `Wait` | `Wait 1000` | Wait a number of milliseconds |
+| `Visit` | `Visit /clinics/today` | Visit a page and add it to the map |
+| `Snapshot` | `Snapshot` | Capture the current page as a map node |
+| `Use` | `Use setup.clinician` | Include a reusable fragment |
+
+Values containing spaces or special characters should be quoted: `Click "a:has-text('View')"`. Simple values like URLs and IDs don't need quotes: `Visit /dashboard`, `Check #myCheckbox`.
+
+##### YAML config
+
+You still need a `flow-map.config.yml` for global settings — fragments, scenario sets, and runtime mapping options. Scenarios can also be defined inline in YAML if preferred.
 
 ```yaml
 mode: scenario
 
-# Reusable setup sequences
+# Reusable setup sequences (referenced by .flow files via "Use")
 fragments:
   setup.clinician:
     - type: goto
@@ -89,137 +220,19 @@ fragments:
     - type: waitForUrl
       url: /dashboard
 
-# Scenario definitions
-scenarios:
-  # Visit-driven: explicit list of pages to map
-  - name: clinic-workflow
-    description: Reception/clinic operational flow
-    startUrl: /clinics
-    scope:
-      includePrefixes: [/dashboard, /clinics, /events, /reports]
-      excludePrefixes: [/prototype-admin, /api, /assets]
-    limits:
-      maxPages: 120
-      maxDepth: 12
-    steps:
-      - use: setup.clinician
-      - type: beginMap
-      - type: visit
-        url: /dashboard
-      - type: visit
-        url: /clinics/today
-      - type: visit
-        url: /clinics/upcoming
-      # ... more visit steps
-      - type: endMap
-
-  # Interactive: click/snapshot for session-dependent pages
-  - name: reading-workflow
-    description: Image reading — batch creation, mammogram review, opinions
-    startUrl: /reading
-    scope:
-      includePrefixes: [/reading, /dashboard]
-      excludePrefixes: [/prototype-admin, /api, /assets]
-    steps:
-      - use: setup.clinician
-      - type: beginMap
-      - type: visit
-        url: /reading
-      - type: click
-        selector: "a[href*='/create-batch']"
-      - type: snapshot    # captures the page the browser landed on
-      - type: click
-        selector: "button:has-text('Normal')"
-      - type: wait
-        ms: 1000
-      - type: snapshot
-      # ... more interactive steps
-      - type: endMap
-
-  # Workflow: click through multi-step forms with checkboxes, radios, text inputs
-  - name: check-in-workflow
-    description: Full check-in workflow with form interactions
-    startUrl: /clinics/wtrl7jud
-    scope:
-      includePrefixes: [/clinics]
-      excludePrefixes: [/prototype-admin, /api, /assets]
-    steps:
-      - use: setup.clinician
-      - type: beginMap
-      - type: visit
-        url: /clinics/wtrl7jud
-      # Navigate into a dynamic event via click + snapshot
-      - type: goto
-        url: /clinics/wtrl7jud
-      - type: click
-        selector: "a:has-text('View appointment')"
-      - type: waitForSelector
-        selector: "a:has-text('Start this appointment')"
-      - type: snapshot
-      # Walk through the check-in workflow
-      - type: click
-        selector: "a:has-text('Start this appointment')"
-      - type: wait
-        ms: 1000
-      - type: snapshot    # confirm-identity page
-      - type: click
-        selector: "button:has-text('Confirm identity')"
-      - type: wait
-        ms: 1000
-      - type: snapshot    # review-medical-information page
-      # Interact with expandable section and fill a form
-      - type: click
-        selector: "details#medical-history > summary"
-      - type: click
-        selector: "a:has-text('Breast cancer')"
-      - type: wait
-        ms: 1000
-      - type: snapshot    # breast cancer form
-      - type: check
-        selector: "#cancerLocationRightBreast"
-      - type: check
-        selector: "#proceduresRightBreast"
-      - type: fill
-        selector: "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']"
-        value: "Unknown"
-      - type: click
-        selector: "button[value='save']"
-      - type: wait
-        ms: 1000
-      - type: snapshot    # back to review page with saved data
-      - type: endMap
-
 # Named groups of scenarios to run together
 scenarioSets:
   core-user-journeys:
     - clinic-workflow
     - reading-workflow
+    - reporting
 ```
 
-#### Scenario step types
-
-Steps before `beginMap` are setup-only — they establish context but don't appear in the map. Steps after `beginMap` contribute to the mapped journey.
-
-| Step type | Fields | Description |
-|---|---|---|
-| `goto` | `url` | Navigate directly to a URL |
-| `click` | `selector` | Click an element by CSS selector |
-| `fill` | `selector`, `value` | Fill an input field |
-| `select` | `selector`, `value` | Choose an option in a select element |
-| `check` | `selector` | Check a checkbox or radio button |
-| `submit` | `selector` | Submit a form by selector |
-| `waitForUrl` | `url` | Wait for navigation to a URL (prefix match) |
-| `waitForSelector` | `selector` | Wait until a selector appears |
-| `wait` | `ms` | Wait a fixed number of milliseconds |
-| `visit` | `url` | Visit a page and add it to the map (visit-driven mode) |
-| `snapshot` | — | Capture the current page as a map node (for session-dependent pages after click/navigation) |
-| `beginMap` | — | Mark where the map starts (steps before this are setup-only) |
-| `endMap` | — | Optional stop marker |
-| `use` | fragment name | Include a reusable fragment (e.g. `use: setup.clinician`) |
+Scenarios defined in `.flow` files override YAML-defined scenarios with the same name.
 
 #### Fragments
 
-Fragments let you share common setup sequences across scenarios. Define them under the `fragments` key and reference them with `use`:
+Fragments let you share common setup sequences across scenarios. Define them in `flow-map.config.yml` under the `fragments` key and reference them with `Use` in `.flow` files:
 
 ```yaml
 fragments:
@@ -230,12 +243,16 @@ fragments:
       selector: "a[href='/dashboard?currentUserId=e1945412']"
     - type: waitForUrl
       url: /dashboard
+```
 
-scenarios:
-  - name: reporting
-    steps:
-      - use: setup.admin
-      - type: beginMap
+```
+--- Setup ---
+
+Use setup.admin
+
+--- Map ---
+
+# BFS crawl from startUrl
 ```
 
 #### Visit-driven vs BFS crawl mode
@@ -249,18 +266,15 @@ Visit-driven mode is recommended for prototypes with complex routing, tabs, or p
 
 #### Snapshot steps
 
-For pages that depend on session state (e.g. a batch reading page created by clicking "Start session"), you can't use `visit` because the URL is dynamic. Instead, use `click` to trigger navigation, then `snapshot` to capture whatever page the browser landed on:
+For pages that depend on session state (e.g. a batch reading page created by clicking "Start session"), you can't use `Visit` because the URL is dynamic. Instead, use `Click` to trigger navigation, then `Snapshot` to capture whatever page the browser landed on:
 
-```yaml
-steps:
-  - type: click
-    selector: "a[href*='/create-batch']"
-  - type: snapshot    # captures the dynamically-created batch page
-  - type: click
-    selector: "button:has-text('Normal')"
-  - type: wait
-    ms: 1000
-  - type: snapshot    # captures the next opinion page
+```
+Click "a[href*='/create-batch']"
+Snapshot
+
+Click "button:has-text('Normal')"
+Wait 1000
+Snapshot
 ```
 
 #### Sequential navigation edges
@@ -279,7 +293,7 @@ Each scenario's pages are laid out independently in the merged map, so tall page
 
 #### Scenario sets
 
-Group scenarios together so you can run them all with one command:
+Group scenarios together in `flow-map.config.yml` so you can run them all with one command:
 
 ```yaml
 scenarioSets:
@@ -293,7 +307,7 @@ scenarioSets:
 npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
 ```
 
-Each scenario produces its own map with screenshots, viewer, and metadata.
+Each scenario produces its own map with screenshots, viewer, and metadata. Scenario names must match the `.flow` filenames (without the extension).
 
 #### Scope and limits
 
@@ -470,7 +484,7 @@ A map of view name to custom test steps. Each step is a string in the format `co
 
 ### Web prototypes (scenario mode)
 
-1. **Loads scenario config** from `flow-map.config.yml` in the prototype root
+1. **Loads scenario config** from `flow-map.config.yml` and `.flow` files in `scenarios/`
 2. **Runs static analysis** — scans templates and route handlers for enrichment metadata
 3. **Starts the prototype server** and launches a headless browser
 4. **For each scenario:**

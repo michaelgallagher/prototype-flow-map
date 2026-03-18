@@ -75,21 +75,31 @@ Proceed with a **hybrid static + runtime architecture**, but make **scenario-fir
 The first implementation should use a simple, explicit scenario format that is easy to author by hand and easy to run deterministically.
 
 ### Format decision
-Use **YAML** for scenario definitions.
+Use **`.flow` files** as the primary scenario authoring format, with YAML config for global settings.
 
-Why YAML:
-- more human-readable than JSON
-- easier to scan and review
-- better for ordered step lists
-- better for reusable fragments
-- a cleaner bridge toward a future lightweight scripting syntax if needed
+The `.flow` format is a plain-text DSL (one file per scenario) that is:
+- flat — no indentation required
+- readable — action words followed by arguments, with `--- Setup ---` / `--- Map ---` separators
+- version-control friendly — easy to scan and review in diffs
 
-### Preferred config file
-Use:
+YAML config (`flow-map.config.yml`) remains for:
+- global settings (runtime mapping, canonicalization, filters)
+- reusable fragments
+- scenario sets
+- inline scenario definitions (as a fallback)
 
-- `flow-map.config.yml`
+### Preferred file layout
 
-You may still support older JSON config files for legacy/basic configuration, but the scenario system should be designed **YAML-first**.
+```
+my-prototype/
+  flow-map.config.yml       # global settings, fragments, scenario sets
+  scenarios/
+    clinic-workflow.flow     # one file per scenario
+    check-in-workflow.flow
+    reading-workflow.flow
+```
+
+JSON config files are still supported for legacy/basic configuration.
 
 ### Proposed config shape
 
@@ -179,33 +189,23 @@ The setup phase should be intentionally small and composable.
 - `endMap`
 - `use`
 
-### Example action shapes
+### Example action shapes (`.flow` format)
 
-```/dev/null/scenario-actions.yml#L1-19
-steps:
-  - type: goto
-    url: /choose-user
-
-  - type: click
-    selector: "text=Receptionist"
-
-  - type: fill
-    selector: "input[name='search']"
-    value: HITCHIN
-
-  - type: submit
-    selector: form
-
-  - type: waitForUrl
-    url: /dashboard
-
-  - type: waitForSelector
-    selector: "text=Reports"
+```
+Goto /choose-user
+Click "text=Receptionist"
+Fill "input[name='search']" "HITCHIN"
+Submit form
+WaitForUrl /dashboard
+WaitForSelector "text=Reports"
 ```
 
 ### Reusable fragment example
 
-```/dev/null/scenario-fragments.yml#L1-21
+Fragments are defined in YAML config and referenced from `.flow` files:
+
+```yaml
+# flow-map.config.yml
 fragments:
   setup.receptionist:
     - type: goto
@@ -214,14 +214,21 @@ fragments:
       selector: "text=Receptionist"
     - type: waitForUrl
       url: /dashboard
+```
 
-scenarios:
-  - name: clinic-workflow
-    description: Reception/clinic operational journey
-    startUrl: /dashboard
-    steps:
-      - use: setup.receptionist
-      - type: beginMap
+```
+# clinic-workflow.flow
+# Reception/clinic operational journey
+
+Start /dashboard
+
+--- Setup ---
+
+Use setup.receptionist
+
+--- Map ---
+
+Visit /dashboard
 ```
 
 ### Rules for setup actions
@@ -309,7 +316,8 @@ Crawl only from realistic user states, not from every known route.
 - [x] Scenario runner (`src/scenario-runner.js`) with isolated browser/session context
 - [x] All setup actions: goto, click, fill, select, check, submit, waitForUrl, waitForSelector, wait
 - [x] Reusable `use` fragments with recursive resolution
-- [x] `beginMap` / `endMap` boundaries separating setup from mapped journey
+- [x] `beginMap` / `endMap` boundaries separating setup from mapped journey (in `.flow` files: `--- Setup ---` / `--- Map ---`)
+- [x] `.flow` DSL parser (`src/flow-parser.js`) — plain-text scenario format, one file per scenario, auto-discovered from `scenarios/` directory
 - [x] Visit-driven mode: `visit` steps specify exact pages; `snapshot` captures session-dependent pages
 - [x] BFS crawl mode: automatic when no visit/snapshot steps present
 - [x] Redirect resolution: probes unresolved link targets to discover redirects
@@ -425,7 +433,7 @@ Do not prioritize:
 - [x] Suppressed global-nav links are hidden by default in the viewer (toggle available)
 - [x] Canonicalization collapses to `:id` (not semantic names) — simpler and sufficient
 - [x] Screenshots from redirected/invalid pages are skipped automatically
-- [x] Scenario setup lives in `flow-map.config.yml` (YAML config, not code)
+- [x] Scenario definitions use `.flow` DSL files (one per scenario in `scenarios/` directory); YAML config for global settings
 - [x] Setup prefers UI-driven steps; `visit` and `snapshot` provide flexible alternatives
 
 ## Open design questions
@@ -452,12 +460,12 @@ This strategy is successful if:
 
 - [x] Update planning docs to make scenario-first mapping the primary recommendation
 - [x] Stop treating broad runtime crawl as the default success metric
-- [x] Finalise the YAML scenario definition format
+- [x] Finalise the scenario definition format (`.flow` DSL, evolved from initial YAML-only approach)
 - [x] Implement 5 real scenarios for `manage-breast-screening-prototype`
 - [x] Validate that scenario maps are more representative than broad crawl output
 
 ### Future work
-- [ ] Add tests for scenario runner and config validation
+- [ ] Add tests for scenario runner, config validation, and `.flow` parser
 - [ ] Improve error recovery when interactive steps fail mid-scenario
-- [ ] Consider a scenario recorder that watches user interaction and generates YAML
+- [ ] Consider a scenario recorder that watches user interaction and generates `.flow` files
 - [ ] Explore cross-prototype stitching (iOS native → web prototype handoff)
