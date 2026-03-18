@@ -301,4 +301,108 @@ function loadFlowScenarios(prototypePath) {
   return scenarios;
 }
 
-module.exports = { parseFlowFile, parseFlowText, loadFlowScenarios, tokenize };
+/**
+ * Scan scenarios/fragments/ for .flow files and parse them as step sequences.
+ * Each file becomes a named fragment — filename (minus .flow) is the name.
+ * e.g. fragments/setup.clinician.flow → fragment "setup.clinician"
+ *
+ * Returns an object: { "setup.clinician": [step, step, ...], ... }
+ */
+function loadFlowFragments(prototypePath) {
+  const fragmentsDir = path.join(prototypePath, "scenarios", "fragments");
+  if (!fs.existsSync(fragmentsDir)) return {};
+
+  const files = fs
+    .readdirSync(fragmentsDir)
+    .filter((f) => f.endsWith(".flow"))
+    .sort();
+
+  const fragments = {};
+  for (const file of files) {
+    try {
+      const filePath = path.join(fragmentsDir, file);
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const name = path.basename(file, ".flow");
+      const steps = parseFragmentText(raw);
+      if (steps.length > 0) {
+        fragments[name] = steps;
+      }
+    } catch (err) {
+      console.warn(`   ⚠️  Failed to parse fragment ${file}: ${err.message}`);
+    }
+  }
+
+  return fragments;
+}
+
+/**
+ * Parse a fragment .flow file into an array of steps.
+ * Fragments are simpler than scenarios — just step lines and comments.
+ * No header directives, no Setup:/Map: blocks needed.
+ */
+function parseFragmentText(text) {
+  const lines = text.split("\n");
+  const steps = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    // Skip block markers if someone includes them
+    if (/^-{3,}\s*\w+\s*-{3,}$/i.test(trimmed)) continue;
+    if (/^\w+\s*:$/i.test(trimmed)) continue;
+
+    const step = parseStepLine(trimmed);
+    if (step) {
+      steps.push(step);
+    }
+  }
+
+  return steps;
+}
+
+/**
+ * Scan scenarios/ for .set files and parse them as scenario set definitions.
+ * Each file is a list of scenario names, one per line. Comments with #.
+ * Filename (minus .set) becomes the set name.
+ * e.g. core-user-journeys.set → set "core-user-journeys"
+ *
+ * Returns an object: { "core-user-journeys": ["clinic-workflow", ...], ... }
+ */
+function loadFlowScenarioSets(prototypePath) {
+  const scenariosDir = path.join(prototypePath, "scenarios");
+  if (!fs.existsSync(scenariosDir)) return {};
+
+  const files = fs
+    .readdirSync(scenariosDir)
+    .filter((f) => f.endsWith(".set"))
+    .sort();
+
+  const sets = {};
+  for (const file of files) {
+    try {
+      const filePath = path.join(scenariosDir, file);
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const name = path.basename(file, ".set");
+      const names = raw
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#"));
+      if (names.length > 0) {
+        sets[name] = names;
+      }
+    } catch (err) {
+      console.warn(`   ⚠️  Failed to parse set ${file}: ${err.message}`);
+    }
+  }
+
+  return sets;
+}
+
+module.exports = {
+  parseFlowFile,
+  parseFlowText,
+  loadFlowScenarios,
+  loadFlowFragments,
+  loadFlowScenarioSets,
+  tokenize,
+};

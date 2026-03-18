@@ -1,7 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 const YAML = require("yaml");
-const { loadFlowScenarios } = require("./flow-parser");
+const {
+  loadFlowScenarios,
+  loadFlowFragments,
+  loadFlowScenarioSets,
+} = require("./flow-parser");
 
 const JSON_CONFIG_FILENAMES = [".flow-map.json", "flow-map.config.json"];
 const YAML_CONFIG_FILENAMES = ["flow-map.config.yml", "flow-map.config.yaml"];
@@ -57,17 +61,40 @@ function loadConfig(prototypePath) {
 
   if (!config) config = defaultConfig();
 
+  // Load .flow fragments from scenarios/fragments/ directory.
+  // These merge with (and override) any YAML-defined fragments.
+  const flowFragments = loadFlowFragments(prototypePath);
+  const fragmentCount = Object.keys(flowFragments).length;
+  if (fragmentCount > 0) {
+    Object.assign(config.fragments, flowFragments);
+    console.log(
+      `   Loaded ${fragmentCount} .flow fragment(s): ${Object.keys(flowFragments).join(", ")}`,
+    );
+  }
+
+  // Load .set files from scenarios/ directory.
+  // These merge with (and override) any YAML-defined scenario sets.
+  const flowSets = loadFlowScenarioSets(prototypePath);
+  const setCount = Object.keys(flowSets).length;
+  if (setCount > 0) {
+    Object.assign(config.scenarioSets, flowSets);
+    console.log(
+      `   Loaded ${setCount} .set file(s): ${Object.keys(flowSets).join(", ")}`,
+    );
+  }
+
   // Load .flow scenario files from scenarios/ directory.
   // These merge with (and override) any YAML-defined scenarios.
   const flowScenarios = loadFlowScenarios(prototypePath);
   if (flowScenarios.length > 0) {
     const yamlNames = new Set(config.scenarios.map((s) => s.name));
-    for (const fs of flowScenarios) {
-      if (yamlNames.has(fs.name)) {
-        // .flow file overrides the YAML-defined scenario
-        config.scenarios = config.scenarios.filter((s) => s.name !== fs.name);
+    for (const flowScenario of flowScenarios) {
+      if (yamlNames.has(flowScenario.name)) {
+        config.scenarios = config.scenarios.filter(
+          (s) => s.name !== flowScenario.name,
+        );
       }
-      config.scenarios.push(fs);
+      config.scenarios.push(flowScenario);
     }
     console.log(
       `   Loaded ${flowScenarios.length} .flow scenario(s): ${flowScenarios.map((s) => s.name).join(", ")}`,

@@ -10,7 +10,7 @@
 Scenario-first mapping is now the primary mode for complex, seed-data-driven prototypes. See the README for full usage documentation.
 
 ### What's been built
-- **`.flow` scenario DSL** (`src/flow-parser.js`) — plain-text scenario format that's easier to read and write than YAML. One file per scenario in a `scenarios/` directory. Flat structure with `--- Setup ---` / `--- Map ---` separators, no indentation required
+- **`.flow` scenario DSL** (`src/flow-parser.js`) — plain-text scenario format that's easier to read and write than YAML. One file per scenario in a `scenarios/` directory. Flat structure with `--- Setup ---` / `--- Map ---` separators, no indentation required. Fragments in `scenarios/fragments/*.flow`, scenario sets in `scenarios/*.set`. No YAML config required.
 - **Scenario runner** (`src/scenario-runner.js`) — Playwright-based execution with setup steps, scope filtering, and canonical dedup
 - **Visit-driven mapping** — scenarios specify exact pages via `visit` steps; edges built from actual DOM links between visited pages
 - **Snapshot steps** — `snapshot` captures session-dependent pages after interactive navigation (click, fill, check, select)
@@ -580,8 +580,8 @@ All five phases of the original delivery plan have been completed:
 - `src/scenario-runner.js` — Playwright-based scenario execution: setup steps, visit-driven mapping, snapshot, BFS crawl, redirect resolution, layout rank computation
 - `src/crawler.js` — DOM link extraction, canonicalization, global nav classification, screenshot capture, modal dismissal
 - `src/static-enrichment.js` — enriches runtime graphs with static template metadata (titles, file paths, node types)
-- `src/flow-parser.js` — `.flow` DSL parser: converts plain-text scenario files into internal scenario objects
-- `src/flow-map-config.js` — YAML/JSON config loading, `.flow` file discovery, scenario/fragment/step validation
+- `src/flow-parser.js` — `.flow` DSL parser: scenarios, fragments (`scenarios/fragments/*.flow`), and scenario sets (`scenarios/*.set`)
+- `src/flow-map-config.js` — config loading (YAML/JSON + `.flow` files), scenario/fragment/step validation
 - `src/index.js` — orchestration: scenario pipeline, multi-scenario merging, output generation
 - `src/build-viewer.js` — HTML viewer with dagre layout, rank-based positioning, per-scenario row heights, edge filtering
 - `src/graph-builder.js` — static graph construction, provenance metadata

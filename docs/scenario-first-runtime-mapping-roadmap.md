@@ -92,12 +92,18 @@ YAML config (`flow-map.config.yml`) remains for:
 
 ```
 my-prototype/
-  flow-map.config.yml       # global settings, fragments, scenario sets
   scenarios/
-    clinic-workflow.flow     # one file per scenario
+    fragments/
+      setup.clinician.flow       # reusable login/setup steps
+      setup.admin.flow
+    clinic-workflow.flow          # one file per scenario
     check-in-workflow.flow
     reading-workflow.flow
+    core-user-journeys.set        # scenario set definitions
+    clinic-full.set
 ```
+
+No YAML config file is required — the `scenarios/` directory is self-contained. A `flow-map.config.yml` can optionally override runtime mapping defaults (canonicalization, filters).
 
 JSON config files are still supported for legacy/basic configuration.
 
@@ -202,22 +208,22 @@ WaitForSelector "text=Reports"
 
 ### Reusable fragment example
 
-Fragments are defined in YAML config and referenced from `.flow` files:
-
-```yaml
-# flow-map.config.yml
-fragments:
-  setup.receptionist:
-    - type: goto
-      url: /choose-user
-    - type: click
-      selector: "text=Receptionist"
-    - type: waitForUrl
-      url: /dashboard
-```
+Fragments are `.flow` files in `scenarios/fragments/`. The filename becomes the fragment name:
 
 ```
-# clinic-workflow.flow
+# scenarios/fragments/setup.receptionist.flow
+
+# Log in as a receptionist user
+
+Goto /choose-user
+Click "text=Receptionist"
+WaitForUrl /dashboard
+```
+
+Reference from any scenario with `Use`:
+
+```
+# scenarios/clinic-workflow.flow
 # Reception/clinic operational journey
 
 Start /dashboard
@@ -433,7 +439,7 @@ Do not prioritize:
 - [x] Suppressed global-nav links are hidden by default in the viewer (toggle available)
 - [x] Canonicalization collapses to `:id` (not semantic names) — simpler and sufficient
 - [x] Screenshots from redirected/invalid pages are skipped automatically
-- [x] Scenario definitions use `.flow` DSL files (one per scenario in `scenarios/` directory); YAML config for global settings
+- [x] Scenario definitions use `.flow` DSL files (one per scenario in `scenarios/` directory); fragments in `scenarios/fragments/*.flow`; scenario sets in `scenarios/*.set`; YAML config optional
 - [x] Setup prefers UI-driven steps; `visit` and `snapshot` provide flexible alternatives
 
 ## Open design questions

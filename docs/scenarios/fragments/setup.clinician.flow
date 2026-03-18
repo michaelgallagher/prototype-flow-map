@@ -1,0 +1,5 @@
+# Log in as a clinician user
+
+Goto /choose-user
+Click "a[href*='ae7537b3']"
+WaitForUrl /dashboard

@@ -1,0 +1,5 @@
+# Log in as an admin user
+
+Goto /choose-user
+Click "a[href*='e1945412']"
+WaitForUrl /dashboard

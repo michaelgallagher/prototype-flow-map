@@ -203,57 +203,73 @@ Snapshot
 
 Values containing spaces or special characters should be quoted: `Click "a:has-text('View')"`. Simple values like URLs and IDs don't need quotes: `Visit /dashboard`, `Check #myCheckbox`.
 
-##### YAML config
+##### Fragments
 
-You still need a `flow-map.config.yml` for global settings — fragments, scenario sets, and runtime mapping options. Scenarios can also be defined inline in YAML if preferred.
+Fragments are reusable step sequences shared across scenarios. Place them in `scenarios/fragments/` — the filename becomes the fragment name:
 
-```yaml
-mode: scenario
+```
+# scenarios/fragments/setup.clinician.flow
 
-# Reusable setup sequences (referenced by .flow files via "Use")
-fragments:
-  setup.clinician:
-    - type: goto
-      url: /choose-user
-    - type: click
-      selector: "a[href*='ae7537b3']"
-    - type: waitForUrl
-      url: /dashboard
+# Log in as a clinician user
 
-# Named groups of scenarios to run together
-scenarioSets:
-  core-user-journeys:
-    - clinic-workflow
-    - reading-workflow
-    - reporting
+Goto /choose-user
+Click "a[href*='ae7537b3']"
+WaitForUrl /dashboard
 ```
 
-Scenarios defined in `.flow` files override YAML-defined scenarios with the same name.
-
-#### Fragments
-
-Fragments let you share common setup sequences across scenarios. Define them in `flow-map.config.yml` under the `fragments` key and reference them with `Use` in `.flow` files:
-
-```yaml
-fragments:
-  setup.admin:
-    - type: goto
-      url: /choose-user
-    - type: click
-      selector: "a[href='/dashboard?currentUserId=e1945412']"
-    - type: waitForUrl
-      url: /dashboard
-```
+Reference them in any scenario with `Use`:
 
 ```
 --- Setup ---
 
-Use setup.admin
+Use setup.clinician
 
 --- Map ---
 
-# BFS crawl from startUrl
+Visit /dashboard
 ```
+
+##### Scenario sets
+
+Group scenarios together in `.set` files — one scenario name per line:
+
+```
+# scenarios/core-user-journeys.set
+
+# All core user journey scenarios
+login-and-dashboard
+clinic-workflow
+check-in-workflow
+participant-management
+reading-workflow
+reporting
+```
+
+```bash
+npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
+```
+
+##### Directory layout
+
+Everything lives in the `scenarios/` directory — no YAML config file required:
+
+```
+my-prototype/
+  scenarios/
+    fragments/
+      setup.clinician.flow     # reusable login/setup steps
+      setup.admin.flow
+    clinic-workflow.flow        # scenario definitions
+    check-in-workflow.flow
+    reading-workflow.flow
+    reporting.flow
+    core-user-journeys.set      # scenario set definitions
+    clinic-full.set
+```
+
+##### YAML config (optional)
+
+A `flow-map.config.yml` file is only needed if you want to override runtime mapping defaults (canonicalization rules, filters) or define scenarios/fragments inline in YAML. The `.flow` and `.set` files are sufficient for most prototypes.
 
 #### Visit-driven vs BFS crawl mode
 
@@ -293,21 +309,7 @@ Each scenario's pages are laid out independently in the merged map, so tall page
 
 #### Scenario sets
 
-Group scenarios together in `flow-map.config.yml` so you can run them all with one command:
-
-```yaml
-scenarioSets:
-  core-user-journeys:
-    - clinic-workflow
-    - reading-workflow
-    - reporting
-```
-
-```bash
-npx prototype-flow-map /path/to/prototype --scenario-set core-user-journeys
-```
-
-Each scenario produces its own map with screenshots, viewer, and metadata. Scenario names must match the `.flow` filenames (without the extension).
+Group scenarios into `.set` files in `scenarios/` (see [Scenario sets](#scenario-sets) above). Each scenario produces its own map with screenshots, viewer, and metadata. Scenario names must match the `.flow` filenames (without the extension).
 
 #### Scope and limits
 
@@ -484,7 +486,7 @@ A map of view name to custom test steps. Each step is a string in the format `co
 
 ### Web prototypes (scenario mode)
 
-1. **Loads scenario config** from `flow-map.config.yml` and `.flow` files in `scenarios/`
+1. **Loads scenario config** from `scenarios/` directory (`.flow` scenarios, `fragments/` for shared steps, `.set` files for groups) and optional `flow-map.config.yml`
 2. **Runs static analysis** — scans templates and route handlers for enrichment metadata
 3. **Starts the prototype server** and launches a headless browser
 4. **For each scenario:**
