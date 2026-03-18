@@ -1,0 +1,14 @@
+# Participant lookup, details, medical history, and questionnaire flows
+
+Start /participants
+Scope /dashboard /participants
+Exclude /prototype-admin /api /assets /settings /clinics /reading /reports
+Tags participant core
+Limit pages 80
+Limit depth 10
+
+Setup:
+  Use setup.admin
+
+Map:
+  # BFS crawl — no visit steps, follows links from startUrl

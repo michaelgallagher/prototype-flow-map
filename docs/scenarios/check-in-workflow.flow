@@ -1,0 +1,67 @@
+# Full check-in workflow
+# Identity confirmation, medical history, imaging, completion
+
+Start /clinics/wtrl7jud
+Scope /clinics
+Exclude /prototype-admin /api /assets /settings /participants /reading /reports
+Tags clinic check-in workflow
+Limit pages 30
+Limit depth 15
+
+Setup:
+  Use setup.clinician
+
+Map:
+  # Start on the clinic page
+  Visit /clinics/wtrl7jud
+
+  # Navigate into a not-started event
+  Goto /clinics/wtrl7jud
+  Click "a:has-text('View appointment')"
+  WaitForSelector "a:has-text('Start this appointment')"
+  Snapshot
+
+  # Start the appointment (redirects via ./start to /confirm-identity)
+  Click "a:has-text('Start this appointment')"
+  Wait 1000
+  Snapshot
+
+  # Confirm identity
+  Click "button:has-text('Confirm identity')"
+  Wait 1000
+  Snapshot
+
+  # Review medical information — expand and add breast cancer
+  Click "details#medical-history > summary"
+  Wait 500
+  Click "a:has-text('Breast cancer')"
+  Wait 1000
+  Snapshot
+
+  # Fill breast cancer form
+  Check "#cancerLocationRightBreast"
+  Check "#proceduresRightBreast"
+  Check "#otherSurgeryRightBreast"
+  Check "#treatmentRightBreast"
+  Check "#location"
+  Wait 500
+  Fill "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']" "Unknown"
+  Click "button[value='save']"
+  Wait 1000
+  Snapshot
+
+  # Complete all sections and continue to imaging
+  Click "button.js-complete-all-sections"
+  Wait 1000
+  Snapshot
+
+  # Take images — select standard set, click Continue
+  Check "#imagingComplete"
+  Click "button:has-text('Continue')"
+  Wait 1000
+  Snapshot
+
+  # Complete screening
+  Click "button:has-text('Complete screening and return to clinic')"
+  Wait 1000
+  Snapshot

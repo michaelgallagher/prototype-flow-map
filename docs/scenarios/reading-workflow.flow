@@ -1,0 +1,58 @@
+# Image reading workflow
+# Batch creation, mammogram review, opinions
+
+Start /reading
+Scope /dashboard /reading
+Exclude /prototype-admin /api /assets /settings /clinics /participants /reports
+Tags reading core
+Limit pages 80
+Limit depth 12
+
+Setup:
+  Use setup.clinician
+
+Map:
+  # Static pages
+  Visit /dashboard
+  Visit /reading
+
+  # Interactive flow: click through batch creation and opinions
+  Click "a[href*='/create-batch']"
+  Snapshot
+  Click "button:has-text('Normal')"
+  Wait 1000
+  Snapshot
+  Click "button:has-text('Technical recall')"
+  Wait 1000
+  Snapshot
+
+  # Form interaction: select radio, click button
+  Click "input[value='keep']"
+  Click "button:has-text('Continue')"
+  Wait 1000
+  Snapshot
+
+  # Checkbox + dropdown interaction
+  Check "input[value='RCC']"
+  Wait 500
+  Select "#technicalRecall-RCC-reason" "Image obscured"
+  Click "button:has-text('Continue')"
+  Wait 1000
+  Snapshot
+  Click "button:has-text('Confirm and save')"
+  Wait 1000
+  Snapshot
+  Click ".nhsuk-forward-link"
+  Wait 1000
+  Snapshot
+
+  # More static pages
+  Visit /reading/create-custom-batch
+  Visit /reading/clinics/mine
+  Visit /reading/clinics/all
+  Visit /reading/history/mine
+  Visit /reading/history/all
+  Visit /reading/priors
+  Visit /reading/priors/not-requested
+  Visit /reading/priors/requested
+  Visit /reading/priors/resolved

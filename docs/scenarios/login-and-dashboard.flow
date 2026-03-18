@@ -1,0 +1,15 @@
+# Entry flow from start page through user selection to dashboard
+
+Start /dashboard
+Scope / /start /cis2 /choose-user /dashboard
+Exclude /prototype-admin /api /assets
+Tags entry core
+Limit pages 20
+Limit depth 4
+
+Setup:
+  Goto /
+
+Map:
+  Click "a[href='/start']"
+  WaitForUrl /start

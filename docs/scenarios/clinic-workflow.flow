@@ -1,0 +1,46 @@
+# Reception/clinic operational flow
+# Appointments, events, check-in
+
+Start /clinics
+Scope /dashboard /clinics /events /reports
+Exclude /prototype-admin /api /assets /settings /participants
+Tags clinic appointment core
+Limit pages 120
+Limit depth 12
+
+Setup:
+  Use setup.clinician
+
+Map:
+  # Dashboard
+  Visit /dashboard
+
+  # Clinic tabs
+  Visit /clinics/today
+  Visit /clinics/upcoming
+  Visit /clinics/completed
+  Visit /clinics/all
+
+  # A specific clinic and its tabs
+  Visit /clinics/wtrl7jud
+  Visit /clinics/wtrl7jud/checked-in
+  Visit /clinics/wtrl7jud/in-progress
+  Visit /clinics/wtrl7jud/complete
+  Visit /clinics/wtrl7jud/all
+
+  # Clinic report
+  Visit /reports/wtrl7jud
+
+  # Navigate into an event (click first "View appointment" link)
+  # Uses click+snapshot because event IDs are dynamic from seed data
+  Goto /clinics/wtrl7jud/all
+  Click "a:has-text('View appointment')"
+  Snapshot
+
+  # Event detail tabs
+  Click "a[href*='/participant']"
+  Snapshot
+  Click "a[href*='/medical-information']"
+  Snapshot
+  Click "a[href*='/appointment']"
+  Snapshot

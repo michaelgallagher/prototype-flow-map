@@ -1,0 +1,14 @@
+# Reports and data exports
+
+Start /reports
+Scope /dashboard /reports
+Exclude /prototype-admin /api /assets /settings /clinics /participants /reading
+Tags reporting core
+Limit pages 40
+Limit depth 8
+
+Setup:
+  Use setup.admin
+
+Map:
+  # BFS crawl — no visit steps, follows links from startUrl

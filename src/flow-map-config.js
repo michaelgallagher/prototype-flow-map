@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const YAML = require("yaml");
+const { loadFlowScenarios } = require("./flow-parser");
 
 const JSON_CONFIG_FILENAMES = [".flow-map.json", "flow-map.config.json"];
 const YAML_CONFIG_FILENAMES = ["flow-map.config.yml", "flow-map.config.yaml"];
@@ -34,22 +35,50 @@ const VALID_STEP_TYPES = [
  * Returns a validated config object, or an empty default if no file found.
  */
 function loadConfig(prototypePath) {
+  let config;
+
   for (const filename of ALL_CONFIG_FILENAMES) {
     const configPath = path.join(prototypePath, filename);
     if (fs.existsSync(configPath)) {
       try {
         const raw = fs.readFileSync(configPath, "utf-8");
         const isYaml = YAML_CONFIG_FILENAMES.includes(filename);
-        const config = isYaml ? YAML.parse(raw) : JSON.parse(raw);
+        const parsed = isYaml ? YAML.parse(raw) : JSON.parse(raw);
         console.log(`   Config: ${filename}`);
-        return validateConfig(config);
+        config = validateConfig(parsed);
+        break;
       } catch (err) {
         console.warn(`   ⚠️  Failed to parse ${filename}: ${err.message}`);
-        return defaultConfig();
+        config = defaultConfig();
+        break;
       }
     }
   }
-  return defaultConfig();
+
+  if (!config) config = defaultConfig();
+
+  // Load .flow scenario files from scenarios/ directory.
+  // These merge with (and override) any YAML-defined scenarios.
+  const flowScenarios = loadFlowScenarios(prototypePath);
+  if (flowScenarios.length > 0) {
+    const yamlNames = new Set(config.scenarios.map((s) => s.name));
+    for (const fs of flowScenarios) {
+      if (yamlNames.has(fs.name)) {
+        // .flow file overrides the YAML-defined scenario
+        config.scenarios = config.scenarios.filter((s) => s.name !== fs.name);
+      }
+      config.scenarios.push(fs);
+    }
+    console.log(
+      `   Loaded ${flowScenarios.length} .flow scenario(s): ${flowScenarios.map((s) => s.name).join(", ")}`,
+    );
+    // If we have scenarios, default to scenario mode
+    if (config.mode === "static" && config.scenarios.length > 0) {
+      config.mode = "scenario";
+    }
+  }
+
+  return config;
 }
 
 function defaultConfig() {
