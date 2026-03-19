@@ -330,7 +330,10 @@ Crawl only from realistic user states, not from every known route.
 - [x] Modal/overlay dismissal before screenshots
 - [x] Dynamic screenshot heights based on actual page content
 - [x] Desktop viewport support (`--desktop` flag, 1280x800)
-- [x] Layout rank computation with tab sibling detection for layer-cake arrangement
+- [x] Layout rank computation with tab sibling detection (all-to-all mutual links) for layer-cake arrangement
+- [x] BFS rank propagation: unvisited nodes discovered via crawl inherit rank from their parent + 1
+- [x] Start node marking: first visited node is flagged as `isStartNode` so the viewer pins it to the top
+- [x] Grid-based layout: when rank data is available, both X and Y positions are computed directly (not via dagre) — rows centred on a common axis, no overlapping
 - [x] Per-scenario provenance on edges/nodes
 
 ### Acceptance criteria
@@ -348,10 +351,10 @@ Make scenario maps easy to inspect and compare.
 ### Tasks
 - [x] Output one graph per scenario with viewer, Mermaid sitemap, and metadata
 - [x] Merged graph across selected scenarios (via `--scenario-set`)
-- [x] Combined maps with shared nodes (e.g. `/dashboard`) and per-scenario layout
-- [x] Per-scenario y-positioning in merged maps (tall pages in one scenario don't affect the other)
-- [x] Layer-cake layout: tab siblings side-by-side, flow top to bottom
-- [x] Forward edges routed through dagre; lateral and backward edges rendered as visual-only lines
+- [x] Combined maps with shared nodes (e.g. `/clinics/wtrl7jud`) and per-scenario layout
+- [x] Per-scenario rank ranges in merged maps: each scenario gets its own rank range so flows don't interleave; order preserved from `.set` file
+- [x] Grid-based layout: tab siblings side-by-side, flow top to bottom, all rows centred on a common axis
+- [x] Lateral and backward edges rendered as visual-only lines (not fed to dagre)
 - [x] Provenance filter in viewer (runtime/static/both)
 - [x] Global nav toggle (hidden by default in scenario mode)
 
@@ -396,9 +399,10 @@ Six scenarios have been defined in the prototype’s `flow-map.config.yml`:
 6. **`reporting`** — Reports and data exports
 
 ### Combined maps
-- `clinic-and-reading` scenario set produces a merged side-by-side view with `/dashboard` as a shared node
-- `clinic-full` set combines clinic-workflow + check-in-workflow
+- `clinic-and-reading` scenario set produces a merged view with `/dashboard` as a shared node
+- `clinic-full` set combines clinic-workflow + check-in-workflow (in that order, as specified in the `.set` file)
 - `core-user-journeys` set runs all six scenarios
+- Scenario set order is preserved from the `.set` file — the first listed scenario's flow appears directly below shared nodes
 
 ### Results
 - clinic-workflow: 15 nodes, 46 edges (visit-driven + click/snapshot for dynamic events)
@@ -475,3 +479,4 @@ This strategy is successful if:
 - [ ] Improve error recovery when interactive steps fail mid-scenario
 - [ ] Consider a scenario recorder that watches user interaction and generates `.flow` files
 - [ ] Explore cross-prototype stitching (iOS native → web prototype handoff)
+- [ ] Consider side-by-side layout for merged multi-scenario maps (currently stacked vertically)

@@ -17,8 +17,8 @@ Scenario-first mapping is now the primary mode for complex, seed-data-driven pro
 - **Sequential navigation edges** — automatic edges between consecutive snapshot pages, even through server-side redirects (e.g. clicking "Start this appointment" navigates via `/start` redirect to `/confirm-identity`)
 - **Interactive workflow mapping** — walk through multi-step forms with `check`, `fill`, `select` steps; supports expandable sections, radio buttons, checkboxes, and conditional form fields
 - **Redirect resolution** — probes unresolved link targets to discover redirects (e.g. `/clinics` → `/clinics/today`)
-- **Layout ranks** — layer-cake arrangement with tab siblings side-by-side and flow progressing top to bottom
-- **Combined scenario maps** — merges multiple scenarios into side-by-side view with shared nodes and per-scenario row heights
+- **Layout ranks** — layer-cake arrangement with tab siblings side-by-side and flow progressing top to bottom; grid-based X/Y positioning computed independently of dagre, with all rows centred on a common axis
+- **Combined scenario maps** — merges multiple scenarios with shared nodes at the top and each scenario's flow stacked below in separate rank ranges (preserving the order specified in `.set` files)
 - **Desktop viewport** — `--desktop` flag for 1280x800 screenshots
 - **Dynamic screenshot heights** — each node sized based on actual page height
 - **Modal dismissal** — removes overlays before screenshots
@@ -565,13 +565,13 @@ All five phases of the original delivery plan have been completed:
 1. ✓ **Runtime extraction** — DOM link extraction, runtime-discovered edges, static metadata merge
 2. ✓ **Canonicalization and filtering** — ID/UUID/date collapse, global nav classification, edge upgrading
 3. ✓ **Scenario-first crawling** — YAML config, setup steps, visit-driven and BFS modes, snapshot steps
-4. ✓ **Viewer experience** — layer-cake layout, per-scenario positioning, combined maps, nav toggles
+4. ✓ **Viewer experience** — grid-based layout with rank stacking, per-scenario positioning, combined maps, nav toggles
 5. ✓ **Validation** — tested with 5 scenarios against `manage-breast-screening-prototype`
 
 ### Remaining work
 - Add automated tests for scenario runner and config validation
 - Improve error recovery for interactive step failures
-- Consider scenario recorder for generating YAML from user interaction
+- Consider scenario recorder for generating `.flow` files from user interaction
 
 ---
 
@@ -583,7 +583,7 @@ All five phases of the original delivery plan have been completed:
 - `src/flow-parser.js` — `.flow` DSL parser: scenarios, fragments (`scenarios/fragments/*.flow`), and scenario sets (`scenarios/*.set`)
 - `src/flow-map-config.js` — config loading (YAML/JSON + `.flow` files), scenario/fragment/step validation
 - `src/index.js` — orchestration: scenario pipeline, multi-scenario merging, output generation
-- `src/build-viewer.js` — HTML viewer with dagre layout, rank-based positioning, per-scenario row heights, edge filtering
+- `src/build-viewer.js` — HTML viewer with grid-based layout for ranked nodes (dagre used only for unranked/static maps), per-scenario row heights, edge filtering
 - `src/graph-builder.js` — static graph construction, provenance metadata
 - `bin/cli.js` — CLI with `--scenario`, `--scenario-set`, `--desktop`, `--list-scenarios`
 

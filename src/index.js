@@ -596,9 +596,8 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
 
   // Recompute layout ranks for the combined graph.
   // Strategy: shared nodes get rank 0. Each scenario's non-shared nodes
-  // keep their relative rank ordering, offset by 1 (after the shared rank).
-  // Scenarios run in PARALLEL (same rank numbers), so they appear side-by-side
-  // rather than stacked vertically.
+  // keep their relative rank ordering, offset so scenarios don't collide.
+  // Each scenario gets its own rank range so their flows remain separate.
   const nodes = Array.from(nodeMap.values());
   const sharedNodes = nodes.filter((n) => n.scenarios && n.scenarios.length > 1);
   const sharedIds = new Set(sharedNodes.map((n) => n.id));
@@ -606,8 +605,8 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
   // Give shared nodes rank 0
   sharedNodes.forEach((n) => { n.layoutRank = 0; });
 
-  // For each scenario, map its original ranks to combined ranks starting at 1.
-  // All scenarios start at rank 1, so they sit side-by-side below the shared nodes.
+  // Assign each scenario its own rank range so flows don't interleave.
+  let nextRank = 1;
   for (const result of results) {
     const scenarioNodes = result.graph.nodes
       .filter((n) => !sharedIds.has(n.id) && n.layoutRank !== undefined)
@@ -617,16 +616,18 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
 
     // Get the distinct ranks used by this scenario's non-shared nodes
     const origRanks = [...new Set(scenarioNodes.map((n) => n.layoutRank))].sort((a, b) => a - b);
-    // Map each original rank to a combined rank (1-based)
+    // Map each original rank to a combined rank, starting after the previous scenario
     const rankMapping = new Map();
     origRanks.forEach((origRank, idx) => {
-      rankMapping.set(origRank, idx + 1);
+      rankMapping.set(origRank, nextRank + idx);
     });
 
     for (const n of scenarioNodes) {
       const merged = nodeMap.get(n.id);
       if (merged) merged.layoutRank = rankMapping.get(n.layoutRank);
     }
+
+    nextRank += origRanks.length;
   }
 
   return { nodes, edges };

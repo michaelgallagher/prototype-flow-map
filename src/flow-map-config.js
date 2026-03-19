@@ -408,7 +408,10 @@ function getScenarios(config, { scenario: scenarioName, scenarioSet } = {}) {
       );
     }
     const nameSet = new Set(setNames);
-    const matched = enabledScenarios.filter((s) => nameSet.has(s.name));
+    // Preserve the order from the .set file, not the alphabetical load order
+    const matched = setNames
+      .map((name) => enabledScenarios.find((s) => s.name === name))
+      .filter(Boolean);
     if (matched.length === 0) {
       throw new Error(
         `No enabled scenarios found in set "${scenarioSet}". Set contains: ${setNames.join(", ")}`,

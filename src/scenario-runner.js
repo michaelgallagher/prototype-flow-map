@@ -407,17 +407,23 @@ async function visitDrivenMap(options) {
   // same rank layer, then assign incrementing ranks following visit order.
   // This produces a "layer cake" layout: sibling tabs side-by-side, with
   // each journey step progressing downward.
+  //
+  // Sibling detection: two pages are siblings if they ALL have mutual links
+  // (bidirectional edges) with each other AND share a common URL parent.
+  // This strict all-to-all requirement prevents false grouping — e.g. a
+  // detail page that links back to one tab won't get merged into the tab group.
   const edgeLookup = new Set(edges.map((e) => `${e.source}→${e.target}`));
-  function areMutuallyLinked(a, b) {
-    if (!edgeLookup.has(`${a}→${b}`) || !edgeLookup.has(`${b}→${a}`)) return false;
-    // Only treat as siblings if they share a common URL parent.
-    // This avoids grouping /dashboard with /clinics/today just because
-    // they're mutually linked via breadcrumb "Home" links.
-    const parentA = a.substring(0, a.lastIndexOf("/")) || "/";
-    const parentB = b.substring(0, b.lastIndexOf("/")) || "/";
-    return parentA === parentB;
+
+  function urlParent(p) {
+    return p.substring(0, p.lastIndexOf("/")) || "/";
   }
 
+  function areMutuallyLinked(a, b) {
+    if (!edgeLookup.has(`${a}→${b}`) || !edgeLookup.has(`${b}→${a}`)) return false;
+    return urlParent(a) === urlParent(b);
+  }
+
+  // Group consecutive visits where ALL members are mutually linked.
   const assigned = new Set();
   const rankGroups = []; // array of arrays — each sub-array is one rank layer
 
@@ -425,17 +431,16 @@ async function visitDrivenMap(options) {
     const nodeId = visitOrder[i];
     if (assigned.has(nodeId)) continue;
 
-    // Start a new group with this node
     const group = [nodeId];
     assigned.add(nodeId);
 
-    // Extend the group with consecutive nodes that are mutual siblings
-    // of ALL current group members
+    // Extend the group with consecutive visits that are mutually linked
+    // with ALL existing members of the group.
     for (let j = i + 1; j < visitOrder.length; j++) {
       const candidate = visitOrder[j];
       if (assigned.has(candidate)) continue;
-      const isSiblingOfAll = group.every((g) => areMutuallyLinked(g, candidate));
-      if (isSiblingOfAll) {
+      const fitsGroup = group.every((m) => areMutuallyLinked(m, candidate));
+      if (fitsGroup) {
         group.push(candidate);
         assigned.add(candidate);
       } else {
@@ -446,13 +451,51 @@ async function visitDrivenMap(options) {
     rankGroups.push(group);
   }
 
-  // Stamp visitOrder and layoutRank onto nodes
+  // Stamp visitOrder and layoutRank onto visited nodes
   for (let rank = 0; rank < rankGroups.length; rank++) {
     for (const nodeId of rankGroups[rank]) {
       const node = nodes.get(nodeId);
       if (node) {
         node.visitOrder = visitOrder.indexOf(nodeId);
         node.layoutRank = rank;
+      }
+    }
+  }
+
+  // Mark the first visited node as the start node so the viewer pins it to the top
+  if (visitOrder.length > 0) {
+    const firstNode = nodes.get(visitOrder[0]);
+    if (firstNode) {
+      firstNode.isStartNode = true;
+    }
+  }
+
+  // Assign ranks to unvisited nodes via BFS from visited nodes.
+  // Each unvisited node gets rank = parent's rank + 1, following forward edges.
+  const maxVisitedRank = rankGroups.length - 1;
+  const forwardEdgeMap = new Map(); // source → [target, ...]
+  for (const e of edges) {
+    if (!forwardEdgeMap.has(e.source)) forwardEdgeMap.set(e.source, []);
+    forwardEdgeMap.get(e.source).push(e.target);
+  }
+
+  const bfsQueue = [];
+  for (const [nodeId, node] of nodes) {
+    if (node.layoutRank !== undefined) {
+      bfsQueue.push(nodeId);
+    }
+  }
+
+  while (bfsQueue.length > 0) {
+    const current = bfsQueue.shift();
+    const currentNode = nodes.get(current);
+    const currentRank = currentNode.layoutRank;
+    const targets = forwardEdgeMap.get(current) || [];
+    for (const target of targets) {
+      const targetNode = nodes.get(target);
+      if (targetNode && targetNode.layoutRank === undefined) {
+        targetNode.layoutRank = currentRank + 1;
+        bfsQueue.push(target);
       }
     }
   }

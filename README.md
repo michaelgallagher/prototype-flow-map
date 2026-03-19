@@ -19,7 +19,7 @@ Analyses your prototype's templates, routes, and conditional logic to produce a 
 - **Screenshots every page** using Playwright (headless Chromium), with dynamic height based on actual page content
 - **Desktop mode** — capture screenshots at 1280x800 desktop viewport instead of mobile
 - **Interactive web viewer** — pan, zoom, click nodes for detail, filter by provenance, toggle global nav, search
-- **Layer-cake layout** — tab groups are arranged side-by-side at each level, with the flow progressing top to bottom following visit order
+- **Grid layout** — tab groups are arranged side-by-side at each level, with the flow progressing top to bottom following visit order; merged scenario maps stack each scenario's flow below shared nodes in the order specified by the `.set` file
 - **Shareable output** — a static HTML site you can open locally or deploy anywhere
 - **PDF export** — optional `map.pdf`, with full-canvas layout as default
 
