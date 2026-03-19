@@ -71,6 +71,8 @@ Click "a[href*='/medical-information']"
 Snapshot
 ```
 
+For more detailed examples, you can read the [example scenario files](./docs/example-scenarios/).
+
 ### Header directives
 
 | Directive | Example | Description |
