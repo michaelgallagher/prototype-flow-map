@@ -99,10 +99,6 @@ function loadConfig(prototypePath) {
     console.log(
       `   Loaded ${flowScenarios.length} .flow scenario(s): ${flowScenarios.map((s) => s.name).join(", ")}`,
     );
-    // If we have scenarios, default to scenario mode
-    if (config.mode === "static" && config.scenarios.length > 0) {
-      config.mode = "scenario";
-    }
   }
 
   return config;
