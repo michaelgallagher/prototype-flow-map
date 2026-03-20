@@ -1,0 +1,5 @@
+name = "Flow Scenario"
+grammar = "flow_scenario"
+path_suffixes = ["flow"]
+line_comments = ["# "]
+tab_size = 2

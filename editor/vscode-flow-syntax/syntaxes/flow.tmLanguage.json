@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Flow Scenario",
+  "scopeName": "source.flow",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#divider" },
+    { "include": "#header-directive" },
+    { "include": "#step-keyword" },
+    { "include": "#string" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.flow"
+    },
+    "divider": {
+      "match": "-{3,}\\s*.+?\\s*-{3,}",
+      "name": "constant.language.divider.flow"
+    },
+    "header-directive": {
+      "match": "(?i)\\b(Start|Scope|Exclude|Tags|Limit|Disabled)\\b",
+      "captures": {
+        "1": { "name": "entity.name.function.directive.flow" }
+      }
+    },
+    "step-keyword": {
+      "match": "(?i)^(Visit|Goto|Click|Fill|Select|Check|Submit|WaitForUrl|WaitForSelector|Wait|Snapshot|Use)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.step.flow" }
+      }
+    },
+    "string": {
+      "match": "\"[^\"]*\"",
+      "name": "string.quoted.double.flow"
+    }
+  }
+}

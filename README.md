@@ -62,6 +62,7 @@ Scenarios are defined as `.flow` files in a `scenarios/` directory in your proto
 | [Writing scenarios](docs/scenarios.md) | `.flow` file format, fragments, scenario sets, visit-driven vs BFS modes |
 | [iOS/SwiftUI support](docs/ios-support.md) | Setup, navigation patterns detected, config overrides |
 | [How it works](docs/how-it-works.md) | Architecture overview for each mode (scenario, static, iOS) |
+| [Editor support](editor/README.md) | Syntax highlighting for `.flow` files in VS Code, Zed, Sublime Text, and others |
 
 ## Planning and design
 

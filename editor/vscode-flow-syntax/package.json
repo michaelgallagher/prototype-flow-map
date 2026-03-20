@@ -1,0 +1,28 @@
+{
+  "name": "flow-scenario-syntax",
+  "displayName": "Flow Scenario Syntax",
+  "description": "Syntax highlighting for .flow scenario files (prototype-flow-map)",
+  "version": "0.1.0",
+  "publisher": "prototype-flow-map",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "flow",
+        "aliases": ["Flow Scenario"],
+        "extensions": [".flow"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flow",
+        "scopeName": "source.flow",
+        "path": "./syntaxes/flow.tmLanguage.json"
+      }
+    ]
+  }
+}

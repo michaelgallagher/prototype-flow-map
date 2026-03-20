@@ -3,3 +3,4 @@ flow-map-output/
 .cache/
 *.log
 .DS_Store
+editor/zed-flow-syntax/grammars/

@@ -1,0 +1,10 @@
+id = "flow-scenario-syntax"
+name = "Flow Scenario Syntax"
+description = "Syntax highlighting for .flow scenario files"
+version = "0.1.0"
+schema_version = 1
+authors = ["prototype-flow-map"]
+
+[grammars.flow_scenario]
+repository = "https://github.com/michaelgallagher/tree-sitter-flow-scenario"
+rev = "a38abd007fc7e751ca8f59f8e5e5124a8f7372c1"
