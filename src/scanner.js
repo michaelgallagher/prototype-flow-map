@@ -20,7 +20,15 @@ function scanTemplates(prototypePath) {
     absolute: true,
   });
 
-  return allFiles;
+  // Skip templates where the filename starts with an underscore,
+  // as by convention these are included in other pages rather than
+  // being standalone pages themselves.
+  const filteredFiles = allFiles.filter((filePath) => {
+    const fileName = path.basename(filePath);
+    return !fileName.startsWith("_");
+  });
+
+  return filteredFiles;
 }
 
 /**
