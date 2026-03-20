@@ -105,7 +105,10 @@ async function crawlAndScreenshot(graph, options) {
   const screenshotsDir = path.join(outputDir, "screenshots");
   fs.mkdirSync(screenshotsDir, { recursive: true });
 
-  const server = await startServer(prototypePath, port);
+  const { child: server, port: actualPort } = await startServer(prototypePath, port);
+  if (actualPort !== port) {
+    console.log(`   Server started on port ${actualPort} (requested ${port})`);
+  }
 
   let browser;
   const runtimeEdges = [];
@@ -682,15 +685,25 @@ function startServer(prototypePath, port) {
     });
 
     let started = false;
+    let detectedPort = port;
 
     const onData = (data) => {
       const output = data.toString();
-      if (
-        !started &&
-        (output.includes("Running at") || output.includes("localhost"))
-      ) {
-        started = true;
-        setTimeout(() => resolve(child), 1000);
+      if (!started) {
+        // Try to detect the actual port from server output
+        // Matches patterns like "localhost:3000", "Running at http://localhost:3000",
+        // "port 3000", "listening on 3000", etc.
+        const portMatch = output.match(
+          /(?:localhost|127\.0\.0\.1):(\d{4,5})|(?:port|listening\s+on)\s+(\d{4,5})/i,
+        );
+        if (portMatch) {
+          detectedPort = parseInt(portMatch[1] || portMatch[2], 10);
+        }
+
+        if (output.includes("Running at") || output.includes("localhost")) {
+          started = true;
+          setTimeout(() => resolve({ child, port: detectedPort }), 1000);
+        }
       }
     };
 
@@ -702,7 +715,7 @@ function startServer(prototypePath, port) {
     setTimeout(() => {
       if (!started) {
         started = true;
-        resolve(child);
+        resolve({ child, port: detectedPort });
       }
     }, 15000);
   });

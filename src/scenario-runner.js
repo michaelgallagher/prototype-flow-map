@@ -35,8 +35,11 @@ async function runScenarios(scenarios, options) {
     resolvedStepsMap,
   } = options;
 
-  const server = await startServer(prototypePath, port);
-  const baseUrl = `http://localhost:${port}`;
+  const { child: server, port: actualPort } = await startServer(prototypePath, port);
+  if (actualPort !== port) {
+    console.log(`   Server started on port ${actualPort} (requested ${port})`);
+  }
+  const baseUrl = `http://localhost:${actualPort}`;
   let browser;
 
   try {
