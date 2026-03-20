@@ -179,6 +179,12 @@ function parseStepLine(line) {
     case "click":
       return args[1] ? { type: "click", selector: args[1] } : null;
 
+    case "clicklink":
+      return args[1] ? { type: "clickLink", text: args[1] } : null;
+
+    case "clickbutton":
+      return args[1] ? { type: "clickButton", text: args[1] } : null;
+
     case "fill":
       return args[1] && args[2]
         ? { type: "fill", selector: args[1], value: args[2] }
