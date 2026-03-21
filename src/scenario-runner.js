@@ -567,6 +567,40 @@ async function executeStep(page, step, baseUrl) {
         break;
       }
 
+      case "clickLink": {
+        // Find the first <a> link with the given text (substring match, ignores whitespace)
+        const linkText = step.text.trim();
+        const linkLocator = page.getByRole("link", { name: linkText, exact: false }).first();
+        if (await linkLocator.count() === 0) {
+          console.error(`   ❌ No link found with text: "${step.text}"`);
+          throw new Error(`No link found with text: "${step.text}"`);
+        }
+        await linkLocator.waitFor({ state: "visible", timeout: 10000 });
+        await linkLocator.click({ timeout: 10000, noWaitAfter: true });
+        await Promise.race([
+          page.waitForLoadState("networkidle").catch(() => {}),
+          page.waitForTimeout(3000),
+        ]);
+        break;
+      }
+
+      case "clickButton": {
+        // Find a <button> with the given text, or <input type="button"> with the given value
+        const buttonSelector = `button:has-text("${step.text}"), input[type="button"][value="${step.text}"], input[type="submit"][value="${step.text}"]`;
+        const buttonLocator = page.locator(buttonSelector).first();
+        if (await buttonLocator.count() === 0) {
+          console.error(`   ❌ No button found with text: "${step.text}"`);
+          throw new Error(`No button found with text: "${step.text}"`);
+        }
+        await buttonLocator.waitFor({ state: "visible", timeout: 10000 });
+        await buttonLocator.click({ timeout: 10000, noWaitAfter: true });
+        await Promise.race([
+          page.waitForLoadState("networkidle").catch(() => {}),
+          page.waitForTimeout(3000),
+        ]);
+        break;
+      }
+
       case "fill":
         await page.fill(step.selector, step.value, { timeout: 5000 });
         break;
@@ -624,6 +658,10 @@ function describeStep(step) {
       return `goto ${step.url}`;
     case "click":
       return `click "${step.selector}"`;
+    case "clickLink":
+      return `clickLink "${step.text}"`;
+    case "clickButton":
+      return `clickButton "${step.text}"`;
     case "fill":
       return `fill "${step.selector}" with "${step.value}"`;
     case "select":

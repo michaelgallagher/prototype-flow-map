@@ -91,6 +91,8 @@ For more detailed examples, you can check out the exampoles in `docs/example-sce
 |---|---|---|
 | `Goto` | `Goto /choose-user` | Navigate directly to a URL |
 | `Click` | `Click "a:has-text('View')"` | Click an element by CSS selector |
+| `ClickLink` | `ClickLink "View appointment"` | Click the first link with this text |
+| `ClickButton` | `ClickButton "Continue"` | Click the first button with this text |
 | `Fill` | `Fill "#search" "HITCHIN"` | Fill an input field |
 | `Select` | `Select "#dropdown" "Option"` | Choose a select option |
 | `Check` | `Check "#myCheckbox"` | Check a checkbox or radio |
