@@ -31,6 +31,8 @@ const VALID_STEP_TYPES = [
   "use",
   "visit",
   "snapshot",
+  "clickLink",
+  "clickButton",
 ];
 
 /**
@@ -351,6 +353,11 @@ function validateStep(raw) {
     case "use":
       if (typeof raw.fragment !== "string") return null;
       step.fragment = raw.fragment;
+      break;
+    case "clickLink":
+    case "clickButton":
+      if (typeof raw.text !== "string") return null;
+      step.text = raw.text;
       break;
   }
 
