@@ -31,7 +31,7 @@ const path = require("path");
  *   Check "#cancerLocationRightBreast"
  *   Select "#dropdown" "Image obscured"
  *
- *   # Label-based (Capybara-style):
+ *   # Label-based (preferred):
  *   FillIn "First name" with "Frankie"
  *   Select "Email" from "Contact preference"
  *   Check "Right breast"
@@ -178,7 +178,7 @@ function parseDirective(line, scenario) {
  */
 function looksLikeSelector(str) {
   if (/^[#.\[]/.test(str)) return true;
-  if (/[:>~+]/.test(str)) return true;
+  if (/[:\[\]>~+]/.test(str)) return true;
   return false;
 }
 
