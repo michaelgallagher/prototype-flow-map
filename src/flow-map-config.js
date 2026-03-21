@@ -33,6 +33,10 @@ const VALID_STEP_TYPES = [
   "snapshot",
   "clickLink",
   "clickButton",
+  "fillIn",
+  "selectFrom",
+  "checkByLabel",
+  "choose",
 ];
 
 /**
@@ -358,6 +362,18 @@ function validateStep(raw) {
     case "clickButton":
       if (typeof raw.text !== "string") return null;
       step.text = raw.text;
+      break;
+    case "fillIn":
+    case "selectFrom":
+      if (typeof raw.label !== "string" || typeof raw.value !== "string")
+        return null;
+      step.label = raw.label;
+      step.value = raw.value;
+      break;
+    case "checkByLabel":
+    case "choose":
+      if (typeof raw.label !== "string") return null;
+      step.label = raw.label;
       break;
   }
 

@@ -25,7 +25,7 @@
       }
     },
     "step-keyword": {
-      "match": "(?i)^(Visit|Goto|Click|ClickLink|ClickButton|Fill|Select|Check|Submit|WaitForUrl|WaitForSelector|Wait|Snapshot|Use)\\b",
+      "match": "(?i)^(Visit|Goto|Click|ClickLink|ClickButton|Fill|FillIn|Select|Check|Choose|Submit|WaitForUrl|WaitForSelector|Wait|Snapshot|Use)\\b",
       "captures": {
         "1": { "name": "keyword.control.step.flow" }
       }

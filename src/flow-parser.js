@@ -30,6 +30,12 @@ const path = require("path");
  *   Fill "input[name='search']" "HITCHIN"
  *   Check "#cancerLocationRightBreast"
  *   Select "#dropdown" "Image obscured"
+ *
+ *   # Label-based (Capybara-style):
+ *   FillIn "First name" with "Frankie"
+ *   Select "Email" from "Contact preference"
+ *   Check "Right breast"
+ *   Choose "At an NHS hospital"
  */
 function parseFlowFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf-8");
@@ -166,6 +172,16 @@ function parseDirective(line, scenario) {
  *   Snapshot
  *   Use setup.clinician
  */
+/**
+ * Heuristic: does a string look like a CSS selector?
+ * Returns true if it starts with #, ., [ or contains selector combinator chars.
+ */
+function looksLikeSelector(str) {
+  if (/^[#.\[]/.test(str)) return true;
+  if (/[:>~+]/.test(str)) return true;
+  return false;
+}
+
 function parseStepLine(line) {
   const args = tokenize(line);
   if (args.length === 0) return null;
@@ -190,13 +206,33 @@ function parseStepLine(line) {
         ? { type: "fill", selector: args[1], value: args[2] }
         : null;
 
+    case "fillin":
+      // FillIn "First name" with "Frankie"
+      if (args[1] && args[2]?.toLowerCase() === "with" && args[3]) {
+        return { type: "fillIn", label: args[1], value: args[3] };
+      }
+      return null;
+
     case "select":
+      // Select "Email" from "Contact preference" → label-based selectFrom
+      // Select "#dropdown" "value" → CSS-selector select
+      if (args[1] && args[2]?.toLowerCase() === "from" && args[3]) {
+        return { type: "selectFrom", label: args[3], value: args[1] };
+      }
       return args[1] && args[2]
         ? { type: "select", selector: args[1], value: args[2] }
         : null;
 
     case "check":
-      return args[1] ? { type: "check", selector: args[1] } : null;
+      // Check "#selector" → CSS-selector check
+      // Check "Right breast" → label-based checkByLabel
+      if (args[1] && looksLikeSelector(args[1])) {
+        return { type: "check", selector: args[1] };
+      }
+      return args[1] ? { type: "checkByLabel", label: args[1] } : null;
+
+    case "choose":
+      return args[1] ? { type: "choose", label: args[1] } : null;
 
     case "submit":
       return args[1] ? { type: "submit", selector: args[1] } : null;

@@ -613,6 +613,22 @@ async function executeStep(page, step, baseUrl) {
         await page.check(step.selector, { timeout: 5000 });
         break;
 
+      case "fillIn":
+        await page.getByLabel(step.label).fill(step.value, { timeout: 5000 });
+        break;
+
+      case "selectFrom":
+        await page.getByLabel(step.label).selectOption(step.value, { timeout: 5000 });
+        break;
+
+      case "checkByLabel":
+        await page.getByRole("checkbox", { name: step.label }).check({ timeout: 5000 });
+        break;
+
+      case "choose":
+        await page.getByRole("radio", { name: step.label }).check({ timeout: 5000 });
+        break;
+
       case "submit": {
         const form = await page.waitForSelector(step.selector, {
           timeout: 5000,
@@ -668,6 +684,14 @@ function describeStep(step) {
       return `select "${step.value}" in "${step.selector}"`;
     case "check":
       return `check "${step.selector}"`;
+    case "fillIn":
+      return `fillIn "${step.label}" with "${step.value}"`;
+    case "selectFrom":
+      return `select "${step.value}" from "${step.label}"`;
+    case "checkByLabel":
+      return `check "${step.label}"`;
+    case "choose":
+      return `choose "${step.label}"`;
     case "submit":
       return `submit "${step.selector}"`;
     case "waitForUrl":
