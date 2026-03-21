@@ -146,6 +146,9 @@ function isProbablyAppRoute(urlPath) {
 
   if (!normalized.startsWith("/")) return false;
 
+  // Skip Express-style parameterised routes (e.g. /vaccines/:id/add)
+  if (normalized.includes(":")) return false;
+
   if (INTERNAL_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return false;
   }

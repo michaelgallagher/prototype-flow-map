@@ -124,7 +124,6 @@ async function crawlAndScreenshot(graph, options) {
 
   try {
     browser = await chromium.launch();
-    const context = await browser.newContext({
       viewport,
       deviceScaleFactor: 2,
     });
