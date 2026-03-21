@@ -87,21 +87,37 @@ For more detailed examples, you can check out the exampoles in `docs/example-sce
 
 ### Step types
 
+**Label-based (preferred)** — find elements the way a user would, by visible text or label:
+
+| Step | Example | Description |
+|---|---|---|
+| `ClickLink` | `ClickLink "View appointment"` | Click a link by its visible text |
+| `ClickButton` | `ClickButton "Continue"` | Click a button by its visible text |
+| `FillIn` | `FillIn "First name" with "Frankie"` | Fill a field by its label |
+| `Select … from` | `Select "Email" from "Contact preference"` | Select a dropdown option by label |
+| `Check` | `Check "Right breast"` | Check a checkbox by its label |
+| `Choose` | `Choose "At an NHS hospital"` | Select a radio button by its label |
+
+**CSS-selector (escape hatch)** — use when labels are ambiguous or elements lack accessible names:
+
+| Step | Example | Description |
+|---|---|---|
+| `Click` | `Click "a:has-text('View')"` | Click an element by CSS selector |
+| `Fill` | `Fill "#search" "HITCHIN"` | Fill an input by CSS selector |
+| `Select` | `Select "#dropdown" "Option"` | Select an option by CSS selector (no `from` keyword) |
+| `Check` | `Check "#myCheckbox"` | Check a checkbox by CSS selector (detected by `#`, `.`, `[`, etc.) |
+| `Submit` | `Submit "form"` | Submit a form by selector |
+
+**Navigation and control:**
+
 | Step | Example | Description |
 |---|---|---|
 | `Goto` | `Goto /choose-user` | Navigate directly to a URL |
-| `Click` | `Click "a:has-text('View')"` | Click an element by CSS selector |
-| `ClickLink` | `ClickLink "View appointment"` | Click the first link with this text |
-| `ClickButton` | `ClickButton "Continue"` | Click the first button with this text |
-| `Fill` | `Fill "#search" "HITCHIN"` | Fill an input field |
-| `Select` | `Select "#dropdown" "Option"` | Choose a select option |
-| `Check` | `Check "#myCheckbox"` | Check a checkbox or radio |
-| `Submit` | `Submit form` | Submit a form by selector |
+| `Visit` | `Visit /clinics/today` | Visit a page and add it to the map |
+| `Snapshot` | `Snapshot` | Capture the current page as a map node |
 | `WaitForUrl` | `WaitForUrl /dashboard` | Wait for navigation to a URL |
 | `WaitForSelector` | `WaitForSelector "text=Done"` | Wait until a selector appears |
 | `Wait` | `Wait 1000` | Wait a number of milliseconds |
-| `Visit` | `Visit /clinics/today` | Visit a page and add it to the map |
-| `Snapshot` | `Snapshot` | Capture the current page as a map node |
 | `Use` | `Use setup.clinician` | Include a reusable fragment |
 
 Values containing spaces or special characters should be quoted: `Click "a:has-text('View')"`. Simple values don't need quotes: `Visit /dashboard`.

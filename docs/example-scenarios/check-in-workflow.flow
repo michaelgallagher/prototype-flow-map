@@ -41,13 +41,13 @@ Wait 1000
 Snapshot
 
 # Fill breast cancer form
-Check "#cancerLocationRightBreast"
+Check "Right breast"
 Check "#proceduresRightBreast"
 Check "#otherSurgeryRightBreast"
 Check "#treatmentRightBreast"
-Check "#location"
+Choose "At an NHS hospital"
 Wait 500
-Fill "input[name='event[medicalHistoryTemp][locationNhsHospitalDetails]']" "Unknown"
+FillIn "Provide details" with "Unknown"
 Click "button[value='save']"
 Wait 1000
 Snapshot

@@ -37,7 +37,7 @@ Snapshot
 # Checkbox + dropdown interaction
 Check "input[value='RCC']"
 Wait 500
-Select "#technicalRecall-RCC-reason" "Image obscured"
+Select "Image obscured" from "Reason for recall"
 Click "button:has-text('Continue')"
 Wait 1000
 Snapshot
