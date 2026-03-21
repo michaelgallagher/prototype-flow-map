@@ -104,9 +104,54 @@ program
     "--list-scenarios",
     "List available scenarios from the config file and exit",
   )
+  .option(
+    "--record [filename]",
+    "Record a scenario interactively (opens a browser). Optional filename, default: recorded.flow",
+  )
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
     const prototypeDirName = path.basename(resolvedPath);
+
+    // Handle --record mode
+    if (options.record !== undefined) {
+      // Validate incompatible flags
+      if (options.mode || options.scenario || options.scenarioSet) {
+        console.error(
+          `\n❌ Error: --record cannot be used with --mode, --scenario, or --scenario-set\n`,
+        );
+        process.exit(1);
+      }
+
+      const { startRecording } = require("../src/recorder");
+      const recordFilename =
+        typeof options.record === "string" ? options.record : "recorded.flow";
+      // Ensure filename ends with .flow
+      const outputFilename = recordFilename.endsWith(".flow")
+        ? recordFilename
+        : `${recordFilename}.flow`;
+
+      const recordViewport = options.desktop
+        ? { width: 1280, height: 800 }
+        : { width: parseInt(options.width, 10), height: parseInt(options.height, 10) };
+
+      console.log(`\n📐 Prototype Flow Map — Recorder\n`);
+      console.log(`   Prototype: ${resolvedPath}`);
+      console.log(`   Recording scenario... (browser opened)\n`);
+
+      try {
+        await startRecording({
+          prototypePath: resolvedPath,
+          port: parseInt(options.port, 10),
+          viewport: recordViewport,
+          outputFilename,
+        });
+      } catch (err) {
+        console.error(`\n❌ Error: ${err.message}\n`);
+        if (process.env.DEBUG) console.error(err.stack);
+        process.exit(1);
+      }
+      return;
+    }
 
     // Validate --name slug if provided
     if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
