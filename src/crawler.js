@@ -124,11 +124,8 @@ async function crawlAndScreenshot(graph, options) {
 
   try {
     browser = await chromium.launch();
-      viewport,
-      deviceScaleFactor: 2,
-    });
 
-    const baseUrl = `http://localhost:${port}`;
+    const baseUrl = `http://localhost:${actualPort}`;
 
     const startNodePaths = new Set(
       graph.nodes
@@ -144,12 +141,19 @@ async function crawlAndScreenshot(graph, options) {
         const node = graph.nodes[nextIndex++];
 
         try {
-          const page = await context.newPage();
+          // Use a fresh browser context per page so that each page gets
+          // its own session. This prevents pages that modify session state
+          // (e.g. sign-out pages) from breaking screenshots of other pages.
+          const context = await browser.newContext({
+            viewport,
+            deviceScaleFactor: 2,
+          });
           const requestedPath = canonicalizePath(node.urlPath);
           if (!requestedPath) {
-            await page.close();
+            await context.close();
             continue;
           }
+          const page = await context.newPage();
 
           const url = `${baseUrl}${requestedPath}`;
 
@@ -175,7 +179,7 @@ async function crawlAndScreenshot(graph, options) {
             console.warn(
               `   ⚠️  ${requestedPath} redirected to ${landedPath} — skipping screenshot`,
             );
-            await page.close();
+            await context.close();
             continue;
           }
 
@@ -232,7 +236,7 @@ async function crawlAndScreenshot(graph, options) {
               console.warn(
                 `   ⚠️  ${requestedPath} navigated away during processing — skipping screenshot`,
               );
-              await page.close();
+              await context.close();
               continue;
             }
             throw evalErr;
@@ -309,7 +313,7 @@ async function crawlAndScreenshot(graph, options) {
             }
           }
 
-          await page.close();
+          await context.close();
         } catch (err) {
           console.warn(
             `   ⚠️  Could not capture ${node.urlPath}: ${err.message}`,
@@ -326,12 +330,13 @@ async function crawlAndScreenshot(graph, options) {
       try {
         const canonicalStartUrl = canonicalizePath(startUrl);
         if (canonicalStartUrl) {
-          const page = await context.newPage();
+          const ctx = await browser.newContext({ viewport });
+          const page = await ctx.newPage();
           await page.goto(`${baseUrl}${canonicalStartUrl}`, {
             waitUntil: "networkidle",
             timeout: 10000,
           });
-          await page.close();
+          await ctx.close();
         }
       } catch {
         // ignore
@@ -665,9 +670,38 @@ function createRuntimeEdgeKey(edge) {
 }
 
 /**
+ * Check if a port is already in use by attempting to connect to it.
+ */
+function isPortInUse(port) {
+  return new Promise((resolve) => {
+    const net = require("net");
+    const socket = new net.Socket();
+    socket.setTimeout(500);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.connect(port, "127.0.0.1");
+  });
+}
+
+/**
  * Start the prototype's Express server
  */
-function startServer(prototypePath, port) {
+async function startServer(prototypePath, port) {
+  // Check if the requested port is already in use before starting
+  const inUse = await isPortInUse(port);
+  if (inUse) {
+    throw new Error(
+      `Port ${port} is already in use. Stop the other process or use --port to specify a different port.`,
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const env = {
       ...process.env,
@@ -689,14 +723,15 @@ function startServer(prototypePath, port) {
     const onData = (data) => {
       const output = data.toString();
       if (!started) {
-        // Try to detect the actual port from server output
-        // Matches patterns like "localhost:3000", "Running at http://localhost:3000",
-        // "port 3000", "listening on 3000", etc.
-        const portMatch = output.match(
-          /(?:localhost|127\.0\.0\.1):(\d{4,5})|(?:port|listening\s+on)\s+(\d{4,5})/i,
-        );
-        if (portMatch) {
-          detectedPort = parseInt(portMatch[1] || portMatch[2], 10);
+        // Try to detect the actual port from server output.
+        // Only extract port from success messages, not error messages.
+        if (!output.includes("in use")) {
+          const portMatch = output.match(
+            /(?:localhost|127\.0\.0\.1):(\d{4,5})|(?:port|listening\s+on)\s+(\d{4,5})/i,
+          );
+          if (portMatch) {
+            detectedPort = parseInt(portMatch[1] || portMatch[2], 10);
+          }
         }
 
         if (output.includes("Running at") || output.includes("localhost")) {
