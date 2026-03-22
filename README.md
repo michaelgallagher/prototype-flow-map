@@ -8,10 +8,10 @@ The tool analyses your prototype's templates, routes, and runtime behaviour to p
 
 ## Features
 
-- **Scenario recorder** — click through your prototype in a real browser to generate a flow map and `.flow` script automatically
-- **Scenario-first mapping** — define realistic user journeys and map what users actually experience
 - **Interactive workflow mapping** — walk through multi-step forms with clicks, fills, checkboxes, and snapshots
+- **Scenario-first mapping** — define realistic user journeys and map what users actually experience
 - **Combined scenario maps** — run multiple scenarios and produce a merged view with shared nodes
+- **Scenario recorder** — click through your prototype in a real browser to generate a flow map and `.flow` script automatically
 - **Screenshots** — captured with Playwright, dynamically sized to fit page content
 - **Interactive viewer** — pan, zoom, search, drag nodes, filter by provenance
 - **Static analysis** — auto-discovers pages from Nunjucks templates and Express route handlers
@@ -24,16 +24,6 @@ The tool analyses your prototype's templates, routes, and runtime behaviour to p
 npm install
 npx playwright install chromium
 ```
-
-### Record mode
-
-The fastest way to create a flow map. Opens a browser, lets you click through your prototype, and builds the map in real-time from what you do.
-
-```bash
-npx prototype-flow-map --record /path/to/prototype
-```
-
-A toolbar at the top of the browser controls the recording. Click through your login/setup steps, then press "Begin mapping" to start capturing pages. When you're done, press "Finish" or close the browser. See the [recording guide](docs/recording.md) for details.
 
 ### Static mode (default)
 
@@ -63,6 +53,16 @@ npx prototype-flow-map /path/to/prototype --list-scenarios
 ```
 
 Scenarios are defined as `.flow` files in a `scenarios/` directory in your prototype. See ["writing scenarios"](docs/scenarios.md) for the full format.
+
+### Record mode
+
+The fastest way to create a flow map. Opens a browser, lets you click through your prototype, and builds the map in real-time from what you do.
+
+```bash
+npx prototype-flow-map --record /path/to/prototype
+```
+
+A toolbar at the top of the browser controls the recording. Click through your login/setup steps, then press "Begin mapping" to start capturing pages. When you're done, press "Finish" or close the browser. See the [recording guide](docs/recording.md) for details.
 
 ## Documentation
 
