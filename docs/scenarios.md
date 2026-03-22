@@ -1,6 +1,8 @@
 # Writing scenarios
 
-Scenarios define realistic user journeys through your prototype. Instead of visiting every technically reachable URL, scenario mode maps what users actually experience — pages that are valid in context, with the right session state and seed data.
+Scenarios define realistic user journeys through your prototype. Instead of visiting every technically reachable URL, scenario mode maps what users actually experience -- pages that are valid in context, with the right session state and seed data.
+
+> **Tip:** You can generate `.flow` files automatically using the [recorder](recording.md) instead of writing them by hand. Run `npx prototype-flow-map --record /path/to/prototype` to click through your prototype in a browser and produce a `.flow` script. You can then edit the generated file to refine it.
 
 ## Directory layout
 

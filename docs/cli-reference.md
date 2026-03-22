@@ -9,6 +9,12 @@ npx prototype-flow-map /path/to/prototype [options]
 ## Common commands
 
 ```bash
+# Record a flow map interactively (opens a browser)
+npx prototype-flow-map --record /path/to/prototype
+
+# Record with a custom script filename and desktop viewport
+npx prototype-flow-map --record my-journey --desktop /path/to/prototype
+
 # Static analysis (no scenario config needed)
 npx prototype-flow-map /path/to/prototype
 
@@ -35,6 +41,7 @@ npx prototype-flow-map /path/to/prototype --name screening-case-management --tit
 
 | Option | Default | Description |
 |---|---|---|
+| `--record [filename]` | — | Record a scenario interactively (opens a browser). Optional filename, default: `recorded.flow` |
 | `-o, --output` | `./flow-map-output` | Output directory |
 | `-p, --port` | `4321` | Port to start the prototype server on |
 | `--width` | `375` | Screenshot viewport width (pixels) |
@@ -57,10 +64,13 @@ npx prototype-flow-map /path/to/prototype --name screening-case-management --tit
 | `--platform` | auto-detected | Project platform: `web` or `ios` |
 | `--no-open` | — | Don't automatically open the viewer in a browser |
 
+`--record` cannot be combined with `--mode`, `--scenario`, or `--scenario-set`.
+
 ## Mapping modes
 
 | Mode | Purpose | Best for |
 |---|---|---|
+| `record` | Interactive recording -- click through your prototype in a browser | Quick maps, exploration, non-technical users |
 | `static` | Broad static analysis of all templates and routes (this is the default mode) | Simple prototypes without seed data |
 | `scenario` | Map realistic user journeys with setup steps and scoped crawling | Prototypes with seed data, stateful flows, or complex routing |
 | `audit` | Static analysis plus runtime crawl of every discoverable page | Debugging and coverage checks |

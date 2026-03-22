@@ -8,6 +8,7 @@ The tool analyses your prototype's templates, routes, and runtime behaviour to p
 
 ## Features
 
+- **Scenario recorder** — click through your prototype in a real browser to generate a flow map and `.flow` script automatically
 - **Scenario-first mapping** — define realistic user journeys and map what users actually experience
 - **Interactive workflow mapping** — walk through multi-step forms with clicks, fills, checkboxes, and snapshots
 - **Combined scenario maps** — run multiple scenarios and produce a merged view with shared nodes
@@ -24,9 +25,19 @@ npm install
 npx playwright install chromium
 ```
 
+### Record mode
+
+The fastest way to create a flow map. Opens a browser, lets you click through your prototype, and builds the map in real-time from what you do.
+
+```bash
+npx prototype-flow-map --record /path/to/prototype
+```
+
+A toolbar at the top of the browser controls the recording. Click through your login/setup steps, then press "Begin mapping" to start capturing pages. When you're done, press "Finish" or close the browser. See the [recording guide](docs/recording.md) for details.
+
 ### Static mode (default)
 
-This is the basic mode. You give the tool a path to your prototype, and it analyses the Nunjucks templates and Express routes to find all pages and connections. This is a good way to get a quick overview of your prototype's structure, but it won't capture any dynamic behaviour or seed data. 
+This is the basic mode. You give the tool a path to your prototype, and it analyses the Nunjucks templates and Express routes to find all pages and connections. This is a good way to get a quick overview of your prototype's structure, but it won't capture any dynamic behaviour or seed data.
 
 ```bash
 # Analyse templates and routes without scenarios
@@ -38,7 +49,7 @@ npx prototype-flow-map /path/to/prototype --from "/pages/home,/pages/messages"
 
 ### Scenario mode
 
-This mode uses a script to walk your prototype as a user would, capturing the actual pages visited and interactions performed. This is the recommended way to get a realistic map of your prototype if you rely on seed data (but not only – it would work for most prototypes).
+This mode uses a `.flow` script to walk your prototype as a user would, capturing the actual pages visited and interactions performed. This is the recommended way to get a realistic map of your prototype if you rely on seed data (but not only -- it would work for most prototypes). You can write `.flow` scripts by hand or generate them with the recorder.
 
 ```bash
 # Run a single scenario
@@ -60,6 +71,7 @@ Scenarios are defined as `.flow` files in a `scenarios/` directory in your proto
 | [CLI reference](docs/cli-reference.md) | All command-line options, mapping modes, output structure |
 | [Using the viewer](docs/viewer.md) | Navigation, filters, repositioning nodes, hiding pages |
 | [Writing scenarios](docs/scenarios.md) | `.flow` file format, fragments, scenario sets, visit-driven vs BFS modes |
+| [Recording scenarios](docs/recording.md) | Record a flow map by clicking through your prototype in a browser |
 | [iOS/SwiftUI support](docs/ios-support.md) | Setup, navigation patterns detected, config overrides |
 | [How it works](docs/how-it-works.md) | Architecture overview for each mode (scenario, static, iOS) |
 | [Editor support](editor/README.md) | Syntax highlighting for `.flow` files in VS Code, Zed, Sublime Text, and others |

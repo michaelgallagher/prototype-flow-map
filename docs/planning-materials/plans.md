@@ -506,7 +506,7 @@ A YAML-based model is the best starting point because it is:
 - much friendlier to humans than JSON
 
 If later needed, higher-level tooling can be added on top:
-- scenario recorder
+- ~~scenario recorder~~ (implemented — `--record` flag)
 - reusable setup fragments
 - shared scenario libraries
 - UI for selecting scenarios
@@ -560,32 +560,35 @@ The tool now implements **scenario-first runtime mapping, with static analysis a
 
 ## Delivery status
 
-All five phases of the original delivery plan have been completed:
+All six phases of the delivery plan have been completed:
 
 1. ✓ **Runtime extraction** — DOM link extraction, runtime-discovered edges, static metadata merge
 2. ✓ **Canonicalization and filtering** — ID/UUID/date collapse, global nav classification, edge upgrading
 3. ✓ **Scenario-first crawling** — YAML config, setup steps, visit-driven and BFS modes, snapshot steps
 4. ✓ **Viewer experience** — grid-based layout with rank stacking, per-scenario positioning, combined maps, nav toggles
 5. ✓ **Validation** — tested with 5 scenarios against `manage-breast-screening-prototype`
+6. ✓ **Scenario recorder** — interactive recording via headed browser with real-time capture, direct map building, `.flow` script output
 
 ### Remaining work
 - Add automated tests for scenario runner and config validation
 - Improve error recovery for interactive step failures
-- Consider scenario recorder for generating `.flow` files from user interaction
 
 ---
 
 ## Key files
 
+- `src/recorder.js` — interactive recording orchestrator: headed browser, real-time capture, graph building, `.flow` output
+- `src/recorder-inject.js` — browser-side script: toolbar UI, interaction capture, step type resolution
+- `src/flow-serializer.js` — converts recorded steps to `.flow` file text (inverse of `flow-parser.js`)
 - `src/scenario-runner.js` — Playwright-based scenario execution: setup steps, visit-driven mapping, snapshot, BFS crawl, redirect resolution, layout rank computation
-- `src/crawler.js` — DOM link extraction, canonicalization, global nav classification, screenshot capture, modal dismissal
+- `src/crawler.js` — DOM link extraction, canonicalization, global nav classification, screenshot capture, modal dismissal, server lifecycle
 - `src/static-enrichment.js` — enriches runtime graphs with static template metadata (titles, file paths, node types)
 - `src/flow-parser.js` — `.flow` DSL parser: scenarios, fragments (`scenarios/fragments/*.flow`), and scenario sets (`scenarios/*.set`)
 - `src/flow-map-config.js` — config loading (YAML/JSON + `.flow` files), scenario/fragment/step validation
 - `src/index.js` — orchestration: scenario pipeline, multi-scenario merging, output generation
 - `src/build-viewer.js` — HTML viewer with grid-based layout for ranked nodes (dagre used only for unranked/static maps), per-scenario row heights, edge filtering
 - `src/graph-builder.js` — static graph construction, provenance metadata
-- `bin/cli.js` — CLI with `--scenario`, `--scenario-set`, `--desktop`, `--list-scenarios`
+- `bin/cli.js` — CLI with `--record`, `--scenario`, `--scenario-set`, `--desktop`, `--list-scenarios`
 
 ---
 
