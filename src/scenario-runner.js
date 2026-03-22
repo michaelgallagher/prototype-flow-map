@@ -79,6 +79,10 @@ async function runSingleScenario(scenario, options) {
   const { browser, baseUrl, viewport, mapOutputDir, resolvedSteps, config } = options;
 
   const scenarioScreenshotsDir = path.join(mapOutputDir, "screenshots");
+  // Clean screenshots from previous runs to avoid stale images
+  if (fs.existsSync(scenarioScreenshotsDir)) {
+    fs.rmSync(scenarioScreenshotsDir, { recursive: true });
+  }
   fs.mkdirSync(scenarioScreenshotsDir, { recursive: true });
 
   const context = await browser.newContext({
@@ -294,6 +298,12 @@ async function visitDrivenMap(options) {
     } else if (step.type === "snapshot") {
       // Capture whatever page the browser is currently on.
       // Useful after goto/click steps that navigate to dynamic URLs.
+      // Wait for the page to be fully loaded — click handlers use noWaitAfter
+      // so the page might still be navigating (e.g. through server-side redirects).
+      await Promise.race([
+        page.waitForLoadState("networkidle").catch(() => {}),
+        page.waitForTimeout(3000),
+      ]);
       const currentUrl = new URL(page.url());
       const urlPath = normalizePath(currentUrl.pathname);
 
@@ -569,8 +579,12 @@ async function executeStep(page, step, baseUrl) {
 
       case "clickLink": {
         // Find the first <a> link with the given text (substring match, ignores whitespace)
+        // Falls back to any <a> element by text, to handle <a role="button"> (e.g. NHS button macro)
         const linkText = step.text.trim();
-        const linkLocator = page.getByRole("link", { name: linkText, exact: false }).first();
+        let linkLocator = page.getByRole("link", { name: linkText, exact: false }).first();
+        if (await linkLocator.count() === 0) {
+          linkLocator = page.locator(`a:has-text("${linkText}")`).first();
+        }
         if (await linkLocator.count() === 0) {
           console.error(`   ❌ No link found with text: "${step.text}"`);
           throw new Error(`No link found with text: "${step.text}"`);
@@ -585,8 +599,9 @@ async function executeStep(page, step, baseUrl) {
       }
 
       case "clickButton": {
-        // Find a <button> with the given text, or <input type="button"> with the given value
-        const buttonSelector = `button:has-text("${step.text}"), input[type="button"][value="${step.text}"], input[type="submit"][value="${step.text}"]`;
+        // Find a <button> or <a role="button"> with the given text, or <input type="button/submit"> with the given value
+        // The <a role="button"> fallback handles NHS button macro which renders links as role="button"
+        const buttonSelector = `button:has-text("${step.text}"), input[type="button"][value="${step.text}"], input[type="submit"][value="${step.text}"], a[role="button"]:has-text("${step.text}")`;
         const buttonLocator = page.locator(buttonSelector).first();
         if (await buttonLocator.count() === 0) {
           console.error(`   ❌ No button found with text: "${step.text}"`);
@@ -926,7 +941,7 @@ async function visitPage(page, urlPath, options) {
 
   crawlStats.pagesVisited++;
 
-  // Dismiss modals, overlays, and notification banners before screenshotting
+  // Dismiss modals, overlays, BrowserSync UI, and notification banners before screenshotting
   try {
     await page.evaluate(() => {
       // Remove modal overlays and dialogs
@@ -938,6 +953,10 @@ async function visitPage(page, urlPath, options) {
       document.body.style.top = "";
       document.body.style.width = "";
 
+      // Remove BrowserSync notification bar
+      const bsNotify = document.getElementById("__bs_notify__");
+      if (bsNotify) bsNotify.remove();
+
       // Remove notification/flash banners that may overlay content
       document.querySelectorAll(
         '.app-reading-opinion-banner, .nhsuk-notification-banner, .flash-message'
@@ -945,29 +964,35 @@ async function visitPage(page, urlPath, options) {
     });
   } catch { /* ignore */ }
 
-  // Reposition fixed elements for full-page screenshot
+  // Reposition fixed elements for full-page screenshot.
+  // We convert them to absolute positioning IN PLACE (no DOM moves) to avoid
+  // corrupting sibling layout (e.g. sticky sidebars collapsing when a fixed
+  // bottom bar is ripped out of the layout container).
   try {
     await page.evaluate(() => {
       const viewportH = window.innerHeight;
+      const scrollY = window.scrollY || document.documentElement.scrollTop;
+      const docH = document.documentElement.scrollHeight;
       const fixedEls = Array.from(document.querySelectorAll("*")).filter(
         (el) => window.getComputedStyle(el).position === "fixed",
       );
       if (fixedEls.length === 0) return;
-      document.body.style.position = "relative";
       fixedEls.forEach((el) => {
         const rect = el.getBoundingClientRect();
         const isBottomFixed = rect.top > viewportH / 2;
-        document.body.appendChild(el);
+        // Convert to absolute in place — no appendChild
         el.style.position = "absolute";
-        el.style.left = "0";
-        el.style.right = "0";
+        el.style.left = rect.left + "px";
+        el.style.width = rect.width + "px";
         el.style.margin = "0";
         if (isBottomFixed) {
-          el.style.top = "auto";
-          el.style.bottom = "0";
-        } else {
+          // Pin to the bottom of the document
+          el.style.top = (docH - rect.height) + "px";
           el.style.bottom = "auto";
+        } else {
+          // Pin to the top of the document
           el.style.top = "0";
+          el.style.bottom = "auto";
         }
       });
     });

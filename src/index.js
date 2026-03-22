@@ -505,6 +505,10 @@ async function generateScenario(options) {
 
     // Copy screenshots from each scenario into the combined output
     const combinedScreenshotsDir = path.join(combinedOutputDir, "screenshots");
+    // Clean previous combined screenshots to avoid stale images
+    if (fs.existsSync(combinedScreenshotsDir)) {
+      fs.rmSync(combinedScreenshotsDir, { recursive: true });
+    }
     fs.mkdirSync(combinedScreenshotsDir, { recursive: true });
     for (const result of results) {
       const srcDir = path.join(mapOutputDirs.get(result.name), "screenshots");
