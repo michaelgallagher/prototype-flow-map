@@ -709,6 +709,11 @@ async function startServer(prototypePath, port) {
       NODE_ENV: "development",
       USE_AUTH: "false",
       WATCH: "false",
+      // PROXY tells nhsuk-prototype-kit to skip BrowserSync/nodemon and
+      // start Express directly. We don't need hot-reload, and BrowserSync
+      // injects a client script + notification bar that interferes with
+      // the recorder toolbar and page screenshots.
+      PROXY: "true",
     };
 
     const child = spawn("node", ["app.js"], {
@@ -734,7 +739,7 @@ async function startServer(prototypePath, port) {
           }
         }
 
-        if (output.includes("Running at") || output.includes("localhost")) {
+        if (output.includes("Running at") || output.includes("Running on") || output.includes("localhost")) {
           started = true;
           setTimeout(() => resolve({ child, port: detectedPort }), 1000);
         }
@@ -746,7 +751,23 @@ async function startServer(prototypePath, port) {
 
     child.on("error", reject);
 
+    // Poll the port as a fallback — some kits (e.g. nhsuk-prototype-kit
+    // in PROXY mode) start the server silently with no stdout output.
+    const pollInterval = setInterval(async () => {
+      if (started) {
+        clearInterval(pollInterval);
+        return;
+      }
+      const listening = await isPortInUse(detectedPort);
+      if (listening && !started) {
+        started = true;
+        clearInterval(pollInterval);
+        setTimeout(() => resolve({ child, port: detectedPort }), 500);
+      }
+    }, 500);
+
     setTimeout(() => {
+      clearInterval(pollInterval);
       if (!started) {
         started = true;
         resolve({ child, port: detectedPort });

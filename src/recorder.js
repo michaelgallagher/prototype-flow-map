@@ -124,10 +124,13 @@ async function startRecording({
         });
 
         // Reposition fixed elements for full-page screenshot
+        // (exclude the recorder toolbar — it's already hidden)
         await page.evaluate(() => {
           const viewportH = window.innerHeight;
           const fixedEls = Array.from(document.querySelectorAll("*")).filter(
-            (el) => window.getComputedStyle(el).position === "fixed",
+            (el) =>
+              !el.closest(".flow-recorder-toolbar") &&
+              window.getComputedStyle(el).position === "fixed",
           );
           if (fixedEls.length === 0) return;
           document.body.style.position = "relative";
@@ -201,12 +204,13 @@ async function startRecording({
         }
         console.warn(`   ⚠️  Capture failed for ${urlPath}: ${err.message}`);
       } finally {
-        // Restore toolbar
+        // Restore toolbar and body styles modified during capture
         try {
           await page.evaluate(() => {
             const bar = document.querySelector(".flow-recorder-toolbar");
             if (bar) bar.style.display = "flex";
             document.body.style.marginTop = "40px";
+            document.body.style.position = "";
           });
         } catch {
           // Page may have navigated away — ignore

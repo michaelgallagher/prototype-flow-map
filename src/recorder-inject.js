@@ -190,7 +190,33 @@
 
   // ─── Toolbar ────────────────────────────────────────────────────────
 
+  /**
+   * Remove BrowserSync UI elements that interfere with the recorder toolbar.
+   * BrowserSync injects a notification bar (z-index 9999999, position fixed,
+   * top 0) and a connected indicator. Both overlap/push our toolbar.
+   */
+  function dismissBrowserSync() {
+    // Remove the BrowserSync notification overlay
+    const bsNotify = document.getElementById("__bs_notify__");
+    if (bsNotify) bsNotify.remove();
+
+    // Disable BrowserSync notifications going forward if the API is available
+    if (window.___browserSync___ && typeof window.___browserSync___.socket !== "undefined") {
+      try {
+        window.___browserSync___.options.notify = false;
+      } catch {
+        // ignore
+      }
+    }
+
+    // Remove any margin/padding BrowserSync may have added to the body
+    // (some versions push body down to make room for their bar)
+  }
+
   function createToolbar() {
+    // Dismiss BrowserSync UI before creating our toolbar
+    dismissBrowserSync();
+
     const bar = document.createElement("div");
     bar.className = "flow-recorder-toolbar";
     bar.style.cssText = [
@@ -199,7 +225,7 @@
       "left: 0",
       "right: 0",
       "height: 40px",
-      "z-index: 999999",
+      "z-index: 2147483647",
       "display: flex",
       "align-items: center",
       "padding: 0 12px",
@@ -477,5 +503,23 @@
     createToolbar();
   } else {
     document.addEventListener("DOMContentLoaded", createToolbar);
+  }
+
+  // Watch for BrowserSync elements injected after our toolbar is created.
+  // BrowserSync's client script loads asynchronously and can inject its
+  // notification bar at any time.
+  const bsObserver = new MutationObserver(() => {
+    const bsNotify = document.getElementById("__bs_notify__");
+    if (bsNotify) {
+      bsNotify.remove();
+    }
+  });
+  const observeTarget = document.body || document.documentElement;
+  if (observeTarget) {
+    bsObserver.observe(observeTarget, { childList: true, subtree: true });
+  } else {
+    document.addEventListener("DOMContentLoaded", () => {
+      bsObserver.observe(document.body, { childList: true, subtree: true });
+    });
   }
 })();
