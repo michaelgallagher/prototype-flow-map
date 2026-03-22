@@ -13,8 +13,9 @@
   if (window.__flowRecorderInjected) return;
   window.__flowRecorderInjected = true;
 
-  let phase = "setup"; // "setup" | "map"
-  let stepCount = 0;
+  // Persist phase and step count across page navigations via sessionStorage
+  let phase = sessionStorage.getItem("__fr_phase") || "setup";
+  let stepCount = parseInt(sessionStorage.getItem("__fr_stepCount") || "0", 10);
 
   // ─── Communication ──────────────────────────────────────────────────
 
@@ -26,35 +27,60 @@
 
   function sendStep(step) {
     stepCount++;
+    sessionStorage.setItem("__fr_stepCount", String(stepCount));
     send("step", { step });
   }
 
   // ─── Label resolution helpers ───────────────────────────────────────
 
   /**
+   * Strip trailing parenthetical counters from link/button text.
+   * e.g. "Upcoming (4)" → "Upcoming", "All (50)" → "All",
+   *      "Start session (25 cases)" → "Start session"
+   * These are dynamic counts that change between sessions.
+   * Does NOT strip non-count parentheticals like "(Morning)" or
+   * "(at least 6 months ago)".
+   * Pattern: matches (N) or (N word) where N is a number at the start.
+   */
+  function stripDynamicCounts(text) {
+    return text.replace(/\s+\(\d+(?:\s+\w+)?\)\s*$/, "").trim();
+  }
+
+  /**
    * Get the accessible name for a link or button.
    * Priority: aria-label → aria-labelledby → visible text content.
+   * Strips trailing dynamic counts like " (4)" to avoid brittle matches.
    */
   function getAccessibleName(el) {
     if (!el) return "";
 
+    let name = "";
+
     const ariaLabel = el.getAttribute("aria-label");
-    if (ariaLabel) return ariaLabel.trim().substring(0, 60);
-
-    const labelledBy = el.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const labelEl = document.getElementById(labelledBy);
-      if (labelEl) return labelEl.textContent.trim().substring(0, 60);
+    if (ariaLabel) {
+      name = ariaLabel.trim().substring(0, 60);
+    } else {
+      const labelledBy = el.getAttribute("aria-labelledby");
+      if (labelledBy) {
+        const labelEl = document.getElementById(labelledBy);
+        if (labelEl) {
+          name = labelEl.textContent.trim().substring(0, 60);
+        }
+      }
     }
 
-    // For inputs with value (submit buttons)
-    if (el.tagName === "INPUT" && el.value) {
-      return el.value.trim().substring(0, 60);
+    if (!name) {
+      // For inputs with value (submit buttons)
+      if (el.tagName === "INPUT" && el.value) {
+        name = el.value.trim().substring(0, 60);
+      } else {
+        const text = el.textContent || "";
+        // Collapse whitespace and trim
+        name = text.replace(/\s+/g, " ").trim().substring(0, 60);
+      }
     }
 
-    const text = el.textContent || "";
-    // Collapse whitespace and trim
-    return text.replace(/\s+/g, " ").trim().substring(0, 60);
+    return stripDynamicCounts(name);
   }
 
   /**
@@ -213,6 +239,7 @@
     beginBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       phase = "map";
+      sessionStorage.setItem("__fr_phase", "map");
       send("phase", { phase: "map" });
       updateUI();
     });
@@ -220,11 +247,13 @@
 
     // Capture page button
     const captureBtn = document.createElement("button");
+    captureBtn.id = "__fr-capture";
     captureBtn.textContent = "Capture page";
     captureBtn.style.cssText = buttonStyle("#fff", "#1565c0");
     captureBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       send("capture");
+      flashCapture();
     });
     bar.appendChild(captureBtn);
 
@@ -277,6 +306,18 @@
     if (beginBtn) beginBtn.style.display = phase === "map" ? "none" : "";
 
     updateToolbarColor();
+  }
+
+  function flashCapture() {
+    const btn = document.getElementById("__fr-capture");
+    if (!btn) return;
+    const original = btn.textContent;
+    btn.textContent = "Captured!";
+    btn.style.background = "#4caf50";
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.style.background = "#1565c0";
+    }, 800);
   }
 
   // ─── Interaction capture ────────────────────────────────────────────

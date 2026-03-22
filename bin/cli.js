@@ -134,17 +134,38 @@ program
         ? { width: 1280, height: 800 }
         : { width: parseInt(options.width, 10), height: parseInt(options.height, 10) };
 
+      // Validate --name slug if provided (same logic as main path)
+      if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
+        console.error(
+          `\n❌ Error: --name must be lowercase alphanumeric with hyphens (e.g. "nhsapp-nav")\n`,
+        );
+        process.exit(1);
+      }
+      const mapName = options.name || toSlug(prototypeDirName);
+      const mapTitle = options.title || prototypeDirName;
+
       console.log(`\n📐 Prototype Flow Map — Recorder\n`);
       console.log(`   Prototype: ${resolvedPath}`);
+      console.log(`   Output:    ${path.resolve(options.output)}`);
+      console.log(`   Map:       ${mapName}`);
       console.log(`   Recording scenario... (browser opened)\n`);
 
       try {
-        await startRecording({
+        const result = await startRecording({
           prototypePath: resolvedPath,
           port: parseInt(options.port, 10),
           viewport: recordViewport,
           outputFilename,
+          outputDir: path.resolve(options.output),
+          name: mapName,
+          title: mapTitle,
+          open: options.open,
         });
+
+        if (result.viewerPath && options.open) {
+          console.log(`   Opening ${result.viewerPath} in your browser...\n`);
+          openInBrowser(result.viewerPath);
+        }
       } catch (err) {
         console.error(`\n❌ Error: ${err.message}\n`);
         if (process.env.DEBUG) console.error(err.stack);
