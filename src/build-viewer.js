@@ -1509,8 +1509,13 @@ function generateViewerJs() {
     const svgRect = svg.getBoundingClientRect();
     const mouseX = (e.clientX - svgRect.left - transform.x) / transform.scale;
     const mouseY = (e.clientY - svgRect.top - transform.y) / transform.scale;
-    const newX = mouseX - dragTarget.offsetX;
-    const newY = mouseY - dragTarget.offsetY;
+    const rawX = mouseX - dragTarget.offsetX;
+    const rawY = mouseY - dragTarget.offsetY;
+
+    // Snap to grid (15px increments)
+    const GRID = 15;
+    const newX = Math.round(rawX / GRID) * GRID;
+    const newY = Math.round(rawY / GRID) * GRID;
 
     dragTarget.node.x = newX;
     dragTarget.node.y = newY;
