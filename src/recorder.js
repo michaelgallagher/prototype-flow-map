@@ -484,7 +484,27 @@ async function startRecording({
     }
 
     const totalSteps = setupSteps.length + mapSteps.length;
-    const flowContent = serializeFlow({ startUrl, setupSteps, mapSteps });
+
+    // Post-process map steps for replay friendliness:
+    // Replace Visit steps with dynamic URLs (containing session-specific IDs)
+    // with Snapshot steps, since those URLs won't exist in a different session.
+    // Keep Visit steps for static URLs that will work across sessions.
+    const replayMapSteps = mapSteps.map((step) => {
+      if (step.type === "visit" && canonicalizePath(step.url) !== step.url) {
+        return { type: "snapshot" };
+      }
+      return step;
+    });
+
+    // Remove consecutive duplicate Snapshot steps
+    const dedupedMapSteps = replayMapSteps.filter((step, i) => {
+      if (step.type === "snapshot" && i > 0 && replayMapSteps[i - 1].type === "snapshot") {
+        return false;
+      }
+      return true;
+    });
+
+    const flowContent = serializeFlow({ startUrl, setupSteps, mapSteps: dedupedMapSteps });
     fs.writeFileSync(flowFilePath, flowContent, "utf-8");
 
     console.log(`   Scenario saved: ${path.relative(process.cwd(), flowFilePath)}`);

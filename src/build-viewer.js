@@ -130,6 +130,7 @@ function generateViewerHtml(
     window.__HAS_SCREENSHOTS__ = ${hasScreenshots ? "true" : "false"};
     window.__VIEWPORT_WIDTH__ = ${vpWidth};
     window.__VIEWPORT_HEIGHT__ = ${vpHeight};
+    window.__GENERATION_ID__ = ${JSON.stringify(Date.now().toString(36))};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
   <script src="${assetPrefix}viewer.js"></script>
@@ -552,13 +553,18 @@ function generateViewerJs() {
   let showGlobalNav = false;
   let provenanceFilter = '';
 
-  // Persist view mode preference
+  // Generation ID — changes each time the map is rebuilt, so stale
+  // localStorage data (positions, hidden nodes) is automatically ignored.
+  const genId = window.__GENERATION_ID__ || '';
+  const storageSuffix = location.pathname + (genId ? '-' + genId : '');
+
+  // Persist view mode preference (not scoped to generation — user preference)
   const viewModeKey = 'flowmap-viewmode-' + location.pathname;
   try { thumbnailMode = localStorage.getItem(viewModeKey) === 'thumbnail'; } catch(e) {}
 
   // Hidden nodes (viewer-time exclusion, persisted in localStorage)
   let hiddenNodes = new Set();
-  const hiddenStorageKey = 'flowmap-hidden-' + location.pathname;
+  const hiddenStorageKey = 'flowmap-hidden-' + storageSuffix;
   try {
     const savedHidden = localStorage.getItem(hiddenStorageKey);
     if (savedHidden) hiddenNodes = new Set(JSON.parse(savedHidden));
@@ -572,7 +578,7 @@ function generateViewerJs() {
   let manualPositions = {};
   let isDragging = false;
   let dragTarget = null;
-  const posStorageKey = 'flowmap-positions-' + location.pathname;
+  const posStorageKey = 'flowmap-positions-' + storageSuffix;
   try {
     const savedPos = localStorage.getItem(posStorageKey);
     if (savedPos) manualPositions = JSON.parse(savedPos);
