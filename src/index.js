@@ -562,8 +562,9 @@ async function generateScenario(options) {
 /**
  * Merge multiple scenario graphs into a single combined graph.
  * Shared nodes (e.g. /dashboard) are merged; edges are deduplicated.
- * Layout ranks are recomputed so shared nodes sit at the top and
- * each scenario's flow extends below.
+ * Layout ranks are recomputed: shared nodes keep their rank from the
+ * first scenario (preserving tab groups), and each subsequent scenario's
+ * non-shared nodes are offset to avoid collisions.
  */
 function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
   const nodeMap = new Map();
@@ -599,36 +600,56 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
   }
 
   // Recompute layout ranks for the combined graph.
-  // Strategy: shared nodes get rank 0. Each scenario's non-shared nodes
-  // keep their relative rank ordering, offset so scenarios don't collide.
-  // Each scenario gets its own rank range so their flows remain separate.
+  // Strategy: shared nodes keep their rank from the first scenario that
+  // defined them (preserving their position in tab groups, etc.).
+  // Each scenario's non-shared nodes keep their relative rank ordering,
+  // offset so scenarios don't collide.
   const nodes = Array.from(nodeMap.values());
   const sharedNodes = nodes.filter((n) => n.scenarios && n.scenarios.length > 1);
   const sharedIds = new Set(sharedNodes.map((n) => n.id));
 
-  // Give shared nodes rank 0
-  sharedNodes.forEach((n) => { n.layoutRank = 0; });
+  // Shared nodes that are start nodes in a later scenario but not the first
+  // should not be pinned to the top — they belong in their original position.
+  // Clear isStartNode so they stay in their tab group / rank layer.
+  for (const n of sharedNodes) {
+    if (n.isStartNode) {
+      // Only keep isStartNode if this node is the start of the FIRST scenario
+      const firstScenarioNodes = results[0].graph.nodes;
+      const inFirstScenario = firstScenarioNodes.find((fn) => fn.id === n.id);
+      if (!inFirstScenario || !inFirstScenario.isStartNode) {
+        delete n.isStartNode;
+      }
+    }
+  }
 
   // Assign each scenario its own rank range so flows don't interleave.
-  let nextRank = 1;
+  // Shared nodes keep the rank from the first scenario that contains them.
+  const rankedSharedIds = new Set(); // track shared nodes already ranked
+  let nextRank = 0;
   for (const result of results) {
-    const scenarioNodes = result.graph.nodes
-      .filter((n) => !sharedIds.has(n.id) && n.layoutRank !== undefined)
+    const allScenarioNodes = result.graph.nodes
+      .filter((n) => n.layoutRank !== undefined)
       .sort((a, b) => a.layoutRank - b.layoutRank);
 
-    if (scenarioNodes.length === 0) continue;
+    if (allScenarioNodes.length === 0) continue;
 
-    // Get the distinct ranks used by this scenario's non-shared nodes
-    const origRanks = [...new Set(scenarioNodes.map((n) => n.layoutRank))].sort((a, b) => a - b);
-    // Map each original rank to a combined rank, starting after the previous scenario
+    // Get the distinct ranks used by this scenario
+    const origRanks = [...new Set(allScenarioNodes.map((n) => n.layoutRank))].sort((a, b) => a - b);
     const rankMapping = new Map();
     origRanks.forEach((origRank, idx) => {
       rankMapping.set(origRank, nextRank + idx);
     });
 
-    for (const n of scenarioNodes) {
+    for (const n of allScenarioNodes) {
       const merged = nodeMap.get(n.id);
-      if (merged) merged.layoutRank = rankMapping.get(n.layoutRank);
+      if (!merged) continue;
+
+      if (sharedIds.has(n.id)) {
+        // Shared node: only assign rank from the first scenario that contains it
+        if (rankedSharedIds.has(n.id)) continue;
+        rankedSharedIds.add(n.id);
+      }
+      merged.layoutRank = rankMapping.get(n.layoutRank);
     }
 
     nextRank += origRanks.length;
