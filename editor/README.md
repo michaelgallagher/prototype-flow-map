@@ -3,7 +3,7 @@
 Syntax highlighting for `.flow` scenario files used by prototype-flow-map. Highlights:
 
 - **Comments** (`# ...`) — grey
-- **Step keywords** (`Visit`, `Goto`, `Click`, etc.) — keyword colour
+- **Step keywords** (`Visit`, `Goto`, `Click`, `ClickLink`, `ClickButton`, `FillIn`, `Choose`, etc.) — keyword colour
 - **Header directives** (`Start`, `Scope`, `Exclude`, etc.) — function colour
 - **Dividers** (`--- Setup ---`, `--- Map ---`) — constant colour
 - **Quoted strings** (`"selector"`) — string colour
