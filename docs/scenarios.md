@@ -93,8 +93,8 @@ For more detailed examples, you can check out the exampoles in `docs/example-sce
 
 | Step | Example | Description |
 |---|---|---|
-| `ClickLink` | `ClickLink "View appointment"` | Click a link by its visible text |
-| `ClickButton` | `ClickButton "Continue"` | Click a button by its visible text |
+| `ClickLink` | `ClickLink "View appointment"` | Click a link by its visible text (also matches `<a role="button">`) |
+| `ClickButton` | `ClickButton "Continue"` | Click a button by its visible text (also matches `<a role="button">`) |
 | `FillIn` | `FillIn "First name" with "Frankie"` | Fill a field by its label |
 | `Select … from` | `Select "Email" from "Contact preference"` | Select a dropdown option by label |
 | `Check` | `Check "Right breast"` | Check a checkbox by its label |
@@ -194,7 +194,7 @@ When you run multiple scenarios together (via `--scenario-set`), the tool produc
 - Individual maps for each scenario
 - A combined map with shared nodes (e.g. `/dashboard` appears once, connecting to both flows)
 
-Each scenario's pages are stacked below shared nodes in the order specified by the `.set` file.
+Shared nodes keep their position from the first scenario that contains them (preserving tab groups and other layout relationships). Each subsequent scenario's pages are stacked below in the order specified by the `.set` file.
 
 ## YAML config (optional)
 

@@ -37,7 +37,7 @@ Key files: `src/recorder.js`, `src/recorder-inject.js`, `src/flow-serializer.js`
    - Executes setup steps (login, navigate, fill forms)
    - Maps pages via visit-driven steps or BFS crawl within scope
    - Handles interactive steps (`click`, `check`, `select`) and `snapshot` for session-dependent pages
-   - Dismisses modals/overlays before capturing screenshots
+   - Waits for network idle and dismisses modals/overlays/BrowserSync UI before capturing screenshots
    - Captures dynamically-sized screenshots (height based on actual page content)
    - Resolves redirects (e.g. `/clinics` → `/clinics/today`) to preserve edge connections
    - Computes layout ranks for grid arrangement

@@ -52,8 +52,8 @@ After clicking "Begin mapping", page navigations automatically trigger screensho
 
 | Interaction | Step type |
 |---|---|
-| Click a link | `ClickLink "text"` (or `Click` with selector if no accessible name) |
-| Click a button | `ClickButton "text"` (or `Click` with selector) |
+| Click a link | `ClickLink "text"` — also matches `<a role="button">` (or `Click` with selector if no accessible name) |
+| Click a button | `ClickButton "text"` — also matches `<a role="button">` (or `Click` with selector) |
 | Select a radio button | `Choose "label"` |
 | Tick a checkbox | `Check "label"` |
 | Fill in a text field | `FillIn "label" with "value"` (or `Fill` with selector) |
@@ -132,5 +132,5 @@ The recorder is a good starting point. Record a journey, review the `.flow` outp
 - **Dynamic URLs in replay.** Pages with session-generated IDs (e.g. `/events/abc123/details`) are automatically converted to `Snapshot` steps in the saved script, but some may still need manual adjustment for reliable replay.
 - **Back button navigations.** Pressing back generates a `Visit` to the previous page. This is correct for the map but may produce redundant entries in the `.flow` script.
 - **Tab layout heuristics.** Tab siblings are detected by mutual cross-links between pages. If tabs don't link to each other in the DOM (e.g. tabs implemented via JavaScript), they may not be grouped side-by-side in the layout.
-- **BrowserSync interference.** The recorder disables BrowserSync by default (via the `PROXY` environment variable). If your prototype kit doesn't respect this, BrowserSync's notification bar may appear. The recorder attempts to remove it automatically.
+- **BrowserSync interference.** The tool disables BrowserSync by default (via the `PROXY` environment variable) and automatically removes BrowserSync's notification bar from screenshots. If your prototype kit doesn't respect the `PROXY` variable, BrowserSync may still run but its UI will be cleaned from captured images.
 - **One browser context.** The recorder uses a single browser context, so session state carries across page navigations. This is usually what you want, but means you can't record isolated scenarios back-to-back without restarting.
