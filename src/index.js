@@ -18,6 +18,9 @@ const { scanSwiftFiles } = require("./swift-scanner");
 const { parseSwiftFile } = require("./swift-parser");
 const { buildSwiftGraph } = require("./swift-graph-builder");
 const { crawlAndScreenshotIos } = require("./swift-crawler");
+const { scanKotlinFiles } = require("./kotlin-scanner");
+const { parseKotlinProject } = require("./kotlin-parser");
+const { buildKotlinGraph } = require("./kotlin-graph-builder");
 const {
   loadConfig,
   applyExclusions,
@@ -244,28 +247,47 @@ async function generate(options) {
 }
 
 async function generateNative(options) {
-  const { prototypePath, outputDir, name, title, screenshots } = options;
+  const { prototypePath, outputDir, name, title, screenshots, platform = "ios" } = options;
 
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
 
-  // Step 1: Scan for Swift source files
-  console.log("1️⃣  Scanning Swift files...");
-  const swiftFiles = scanSwiftFiles(prototypePath);
-  console.log(`   Found ${swiftFiles.length} Swift files`);
-
-  // Step 2: Parse each file for navigation patterns
-  console.log("2️⃣  Parsing views for navigation...");
-  const parsedViews = [];
-  for (const file of swiftFiles) {
-    const parsed = parseSwiftFile(file, prototypePath);
-    if (parsed) parsedViews.push(parsed);
-  }
-  console.log(`   Parsed ${parsedViews.length} SwiftUI views`);
-
-  // Step 3: Build the graph
-  console.log("3️⃣  Building flow graph...");
+  let graph;
   const config = loadConfig(prototypePath);
-  let graph = buildSwiftGraph(parsedViews);
+
+  if (platform === "android") {
+    // Step 1: Scan for Kotlin source files
+    console.log("1️⃣  Scanning Kotlin files...");
+    const kotlinFiles = scanKotlinFiles(prototypePath);
+    console.log(`   Found ${kotlinFiles.length} Kotlin files`);
+
+    // Step 2: Parse all files for Compose navigation patterns
+    console.log("2️⃣  Parsing composables for navigation...");
+    const parsedScreens = parseKotlinProject(kotlinFiles, prototypePath);
+    console.log(`   Parsed ${parsedScreens.length} Compose screens`);
+
+    // Step 3: Build the graph
+    console.log("3️⃣  Building flow graph...");
+    graph = buildKotlinGraph(parsedScreens);
+  } else {
+    // Step 1: Scan for Swift source files
+    console.log("1️⃣  Scanning Swift files...");
+    const swiftFiles = scanSwiftFiles(prototypePath);
+    console.log(`   Found ${swiftFiles.length} Swift files`);
+
+    // Step 2: Parse each file for navigation patterns
+    console.log("2️⃣  Parsing views for navigation...");
+    const parsedViews = [];
+    for (const file of swiftFiles) {
+      const parsed = parseSwiftFile(file, prototypePath);
+      if (parsed) parsedViews.push(parsed);
+    }
+    console.log(`   Parsed ${parsedViews.length} SwiftUI views`);
+
+    // Step 3: Build the graph
+    console.log("3️⃣  Building flow graph...");
+    graph = buildSwiftGraph(parsedViews);
+  }
+
   graph = applyExclusions(graph, config.exclude);
   console.log(
     `   Graph: ${graph.nodes.length} nodes, ${graph.edges.length} edges`,
@@ -274,8 +296,8 @@ async function generateNative(options) {
     console.log(`   Excluded: ${config.exclude.join(", ")}`);
   }
 
-  // Step 4: Capture screenshots via XCUITest (if enabled)
-  if (screenshots) {
+  // Step 4: Capture screenshots (if enabled)
+  if (screenshots && platform === "ios") {
     console.log("4️⃣  Capturing screenshots via XCUITest...");
     graph = await crawlAndScreenshotIos(graph, {
       prototypePath,
@@ -285,6 +307,8 @@ async function generateNative(options) {
     console.log(
       `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
     );
+  } else if (screenshots && platform === "android") {
+    console.log("4️⃣  Skipping screenshots (not yet supported for Android)");
   } else {
     console.log("4️⃣  Skipping screenshots (--no-screenshots)");
   }
@@ -307,7 +331,7 @@ async function generateNative(options) {
       name,
       title: title || path.basename(prototypePath),
       updatedAt: new Date().toISOString(),
-      platform: "ios",
+      platform,
       nodeCount: graph.nodes.length,
       edgeCount: graph.edges.length,
       hasScreenshots: Boolean(screenshots),
