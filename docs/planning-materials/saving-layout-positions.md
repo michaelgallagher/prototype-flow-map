@@ -1,5 +1,7 @@
 # Saving layout positions
 
+> **Status: not yet implemented.** This is a design proposal for a future feature. The viewer currently supports drag-to-reposition with localStorage persistence only.
+
 ## Current behaviour
 
 The viewer already supports drag-to-reposition nodes. When a user drags a node:
