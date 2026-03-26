@@ -16,6 +16,24 @@ async function buildViewer(
   const { name, rootOutputDir } = options;
   fs.mkdirSync(outputDir, { recursive: true });
 
+  // Read saved positions if they exist (regeneration merge)
+  let savedPositions = {};
+  const savedPosPath = path.join(outputDir, "positions.json");
+  if (fs.existsSync(savedPosPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(savedPosPath, "utf-8"));
+      // Only carry forward positions for nodes that still exist in the graph
+      const currentNodeIds = new Set(graph.nodes.map((n) => n.id));
+      for (const [nodeId, pos] of Object.entries(raw)) {
+        if (currentNodeIds.has(nodeId)) {
+          savedPositions[nodeId] = pos;
+        }
+      }
+    } catch {
+      // Ignore malformed positions file
+    }
+  }
+
   // CSS and JS live in the root output dir (shared across all maps).
   // When running in named-map mode the map's index.html is two levels deep
   // (maps/<name>/index.html), so we need to adjust the relative paths.
@@ -30,7 +48,14 @@ async function buildViewer(
   const htmlPath = path.join(outputDir, "index.html");
   fs.writeFileSync(
     htmlPath,
-    generateViewerHtml(graph, hasScreenshots, viewport, name, assetPrefix),
+    generateViewerHtml(
+      graph,
+      hasScreenshots,
+      viewport,
+      name,
+      assetPrefix,
+      savedPositions,
+    ),
   );
 
   // Write the CSS and JS only to the shared root directory
@@ -56,6 +81,7 @@ function generateViewerHtml(
   viewport,
   name,
   assetPrefix = "",
+  savedPositions = {},
 ) {
   const vpWidth = (viewport && viewport.width) || 375;
   const vpHeight = (viewport && viewport.height) || 812;
@@ -64,9 +90,10 @@ function generateViewerHtml(
     : "";
 
   // Detect scenario metadata from graph nodes
-  const scenarioName = graph.nodes.length > 0 ? graph.nodes[0].scenario || "" : "";
-  const hasProvenance = graph.edges.some(e => e.provenance);
-  const hasGlobalNav = graph.edges.some(e => e.isGlobalNav);
+  const scenarioName =
+    graph.nodes.length > 0 ? graph.nodes[0].scenario || "" : "";
+  const hasProvenance = graph.edges.some((e) => e.provenance);
+  const hasGlobalNav = graph.edges.some((e) => e.isGlobalNav);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -89,18 +116,23 @@ function generateViewerHtml(
       <button id="toggle-screenshots" onclick="toggleScreenshots()" style="display:none">Hide screenshots</button>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       ${hasGlobalNav ? '<label><input type="checkbox" id="toggle-global-nav"> Global nav</label>' : ""}
-      ${hasProvenance ? `<select id="provenance-filter">
+      ${
+        hasProvenance
+          ? `<select id="provenance-filter">
         <option value="">All edges</option>
         <option value="runtime">Runtime only</option>
         <option value="static">Static only</option>
         <option value="both">Both sources</option>
-      </select>` : ""}
+      </select>`
+          : ""
+      }
       <select id="hub-filter">
         <option value="">All hubs</option>
       </select>
       <input type="text" id="search" placeholder="Search pages..." />
       <button id="show-all-btn" onclick="showAllNodes()" style="display:none">Show hidden (0)</button>
       <button id="reset-positions-btn" onclick="resetPositions()">Reset positions</button>
+      <button id="save-layout-btn" onclick="saveLayout()" style="display:none">Save layout</button>
     </div>
   </div>
   <div id="canvas-container">
@@ -116,10 +148,14 @@ function generateViewerHtml(
     <div class="legend-item"><span class="legend-swatch" style="background:#d47a6b;height:2px"></span> Full-screen cover</div>
     <div class="legend-item"><span class="legend-swatch" style="height:1.5px;border-top:1.5px dashed #5aaf6a;background:none"></span> Web view</div>
     <div class="legend-item"><span class="legend-swatch" style="height:1px;border-top:1px dashed #8f8f40;background:none"></span> Safari / external</div>
-    ${hasProvenance ? `<h3 style="margin-top:8px">Provenance</h3>
+    ${
+      hasProvenance
+        ? `<h3 style="margin-top:8px">Provenance</h3>
     <div class="legend-item"><span class="legend-swatch legend-swatch--solid"></span> Runtime</div>
     <div class="legend-item"><span class="legend-swatch legend-swatch--dashed"></span> Static only</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--both"></span> Both sources</div>` : ""}
+    <div class="legend-item"><span class="legend-swatch legend-swatch--both"></span> Both sources</div>`
+        : ""
+    }
   </div>
   <div id="detail-panel" class="hidden">
     <button id="close-panel" onclick="closePanel()">✕</button>
@@ -131,6 +167,8 @@ function generateViewerHtml(
     window.__VIEWPORT_WIDTH__ = ${vpWidth};
     window.__VIEWPORT_HEIGHT__ = ${vpHeight};
     window.__GENERATION_ID__ = ${JSON.stringify(Date.now().toString(36))};
+    window.__SAVED_POSITIONS__ = ${JSON.stringify(savedPositions)};
+    window.__MAP_NAME__ = ${JSON.stringify(name || "")};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
   <script src="${assetPrefix}viewer.js"></script>
@@ -534,6 +572,22 @@ body {
 .edge-path--global-nav-edge {
   opacity: 0.3 !important;
 }
+
+/* Save layout button states */
+#save-layout-btn.save-btn--dirty {
+  border-color: #e8a838 !important;
+  color: #e8a838 !important;
+}
+
+#save-layout-btn.save-btn--saved {
+  border-color: #5aaf6a !important;
+  color: #5aaf6a !important;
+}
+
+#save-layout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 `;
 }
 
@@ -593,6 +647,18 @@ function generateViewerJs() {
   function savePositions() {
     try { localStorage.setItem(posStorageKey, JSON.stringify(manualPositions)); } catch(e) {}
   }
+
+  // Server-saved positions (embedded at build time from positions.json).
+  // These serve as the baseline when no localStorage or API positions exist.
+  const embeddedPositions = window.__SAVED_POSITIONS__ || {};
+  if (Object.keys(manualPositions).length === 0 && Object.keys(embeddedPositions).length > 0) {
+    manualPositions = { ...embeddedPositions };
+  }
+
+  // Serve-mode state
+  let isServeMode = false;
+  let hasUnsavedChanges = false;
+  const mapName = window.__MAP_NAME__ || '';
 
   // Screenshot viewport ratio (default 375x812 mobile)
   const VIEWPORT_WIDTH = window.__VIEWPORT_WIDTH__ || 375;
@@ -1526,7 +1592,48 @@ function generateViewerJs() {
   window.resetPositions = function() {
     manualPositions = {};
     savePositions();
+    if (isServeMode) {
+      hasUnsavedChanges = true;
+      const saveBtn = document.getElementById('save-layout-btn');
+      if (saveBtn) {
+        saveBtn.classList.add('save-btn--dirty');
+        saveBtn.textContent = 'Save layout *';
+      }
+    }
     render();
+  };
+
+  // Save layout to server (serve mode only)
+  window.saveLayout = async function() {
+    if (!isServeMode || !mapName) return;
+    const saveBtn = document.getElementById('save-layout-btn');
+    if (!saveBtn) return;
+    try {
+      saveBtn.textContent = 'Saving...';
+      saveBtn.disabled = true;
+      const resp = await fetch('/api/maps/' + encodeURIComponent(mapName) + '/positions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(manualPositions),
+      });
+      if (resp.ok) {
+        hasUnsavedChanges = false;
+        saveBtn.textContent = 'Layout saved \\u2713';
+        saveBtn.classList.remove('save-btn--dirty');
+        saveBtn.classList.add('save-btn--saved');
+        setTimeout(() => {
+          saveBtn.textContent = 'Save layout';
+          saveBtn.classList.remove('save-btn--saved');
+          saveBtn.disabled = false;
+        }, 2000);
+      } else {
+        throw new Error('Server returned ' + resp.status);
+      }
+    } catch(e) {
+      saveBtn.textContent = 'Save failed';
+      saveBtn.disabled = false;
+      setTimeout(() => { saveBtn.textContent = 'Save layout'; }, 2000);
+    }
   };
 
   // Edge geometry helpers
@@ -1621,6 +1728,15 @@ function generateViewerJs() {
     if (dragTarget.hasMoved) {
       manualPositions[dragTarget.nodeId] = { x: dragTarget.node.x, y: dragTarget.node.y };
       savePositions();
+      // Mark layout as having unsaved changes (serve mode)
+      if (isServeMode) {
+        hasUnsavedChanges = true;
+        const saveBtn = document.getElementById('save-layout-btn');
+        if (saveBtn) {
+          saveBtn.classList.add('save-btn--dirty');
+          saveBtn.textContent = 'Save layout *';
+        }
+      }
       setTimeout(() => { isDragging = false; }, 0);
     }
     dragTarget = null;
@@ -1661,6 +1777,35 @@ function generateViewerJs() {
 
   // Initial render
   render();
+
+  // Detect serve mode and load shared positions from API
+  (async function detectServeMode() {
+    try {
+      const resp = await fetch('/api/health');
+      if (!resp.ok) return;
+      isServeMode = true;
+
+      // Show the save button
+      const saveBtn = document.getElementById('save-layout-btn');
+      if (saveBtn) saveBtn.style.display = '';
+
+      // Load positions from the server (overrides localStorage and embedded)
+      if (mapName) {
+        const posResp = await fetch('/api/maps/' + encodeURIComponent(mapName) + '/positions');
+        if (posResp.ok) {
+          const apiPositions = await posResp.json();
+          if (Object.keys(apiPositions).length > 0) {
+            manualPositions = apiPositions;
+            // Also sync to localStorage so subsequent renders before save use them
+            savePositions();
+            render();
+          }
+        }
+      }
+    } catch(e) {
+      // Not in serve mode — no server available. This is fine.
+    }
+  })();
 })();
 `;
 }

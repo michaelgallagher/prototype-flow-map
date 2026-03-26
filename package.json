@@ -9,6 +9,8 @@
   "scripts": {
     "generate": "node bin/cli.js",
     "build-viewer": "node src/build-viewer.js",
+    "serve": "node bin/cli.js serve",
+    "start": "node bin/cli.js serve",
     "test": "node --test src/**/*.test.js"
   },
   "keywords": [

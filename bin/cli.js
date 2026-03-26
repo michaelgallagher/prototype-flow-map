@@ -36,7 +36,35 @@ program
   .name("prototype-flow-map")
   .description(
     "Generate an interactive flow map from an Express/Nunjucks prototype",
+  );
+
+// ── Serve subcommand ────────────────────────────────────────────
+
+program
+  .command("serve")
+  .description("Start a web server for viewing and collaborating on flow maps")
+  .argument("[output-dir]", "Output directory to serve", "./flow-map-output")
+  .option(
+    "-p, --port <number>",
+    "Port to serve on",
+    String(process.env.PORT || 3000),
   )
+  .action(async (outputDir, options) => {
+    const { startServer } = require("../src/server");
+    try {
+      await startServer({
+        outputDir: path.resolve(outputDir),
+        port: parseInt(options.port, 10),
+      });
+    } catch (err) {
+      console.error(`\n❌ Error: ${err.message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ── Default generate command ────────────────────────────────────
+
+program
   .argument("<prototype-path>", "Path to the prototype project root")
   .option("-o, --output <dir>", "Output directory", "./flow-map-output")
   .option("-p, --port <number>", "Port to start the prototype on", "4321")
@@ -149,7 +177,10 @@ program
 
       const recordViewport = options.desktop
         ? { width: 1280, height: 800 }
-        : { width: parseInt(options.width, 10), height: parseInt(options.height, 10) };
+        : {
+            width: parseInt(options.width, 10),
+            height: parseInt(options.height, 10),
+          };
 
       // Validate --name slug if provided (same logic as main path)
       if (options.name && !/^[a-z0-9][a-z0-9-]*$/.test(options.name)) {
@@ -313,7 +344,10 @@ program
           port: parseInt(options.port, 10),
           viewport: options.desktop
             ? { width: 1280, height: 800 }
-            : { width: parseInt(options.width, 10), height: parseInt(options.height, 10) },
+            : {
+                width: parseInt(options.width, 10),
+                height: parseInt(options.height, 10),
+              },
           screenshots: options.screenshots,
           runtimeCrawl: Boolean(options.runtimeCrawl),
           basePath: options.basePath,
