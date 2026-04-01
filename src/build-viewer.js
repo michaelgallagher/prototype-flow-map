@@ -956,11 +956,14 @@ function generateViewerJs() {
       // Build adjacency from ALL graph edges (not just dagre-filtered ones)
       // so that crawler-discovered edges don't change subgraph assignment
       const forwardAdj = {};
+      const reverseAdj = {};
       graph.edges.forEach(e => {
         if (e.type === 'nav') return;
         if (!filteredNodeIds.has(e.source) || !filteredNodeIds.has(e.target)) return;
         if (!forwardAdj[e.source]) forwardAdj[e.source] = [];
         forwardAdj[e.source].push(e.target);
+        if (!reverseAdj[e.target]) reverseAdj[e.target] = [];
+        reverseAdj[e.target].push(e.source);
       });
 
       // Multi-source BFS: all start nodes enqueued at distance 0.
@@ -984,84 +987,154 @@ function generateViewerJs() {
           }
         });
       }
-    }
 
-    // Force start nodes to top rank and correct left-to-right order,
-    // shifting their entire subgraphs with them
-    if (startNodes.length > 1) {
-      const sorted = startNodes
-        .map(n => layoutNodes[n.id])
-        .filter(Boolean)
-        .sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
-      if (sorted.length > 1) {
-        const minY = Math.min(...sorted.map(n => n.y));
-        const xs = sorted.map(n => n.x).sort((a, b) => a - b);
-
-        // Compute X delta for each start node
-        const deltas = {};
-        sorted.forEach((n, i) => {
-          deltas[n.id] = xs[i] - n.x;
-          n.y = minY;
-          n.x = xs[i];
-        });
-
-        // Shift all child nodes by their parent start node's delta
+      // Reverse-edge pass: assign orphan nodes that weren't reached by the
+      // forward BFS. These are nodes that have edges pointing TO nodes in an
+      // assigned subgraph (e.g. a warning screen that links to home) but no
+      // forward path from any start node reaches them. We iteratively assign
+      // orphans via their outgoing (forward) edges first, then incoming
+      // (reverse) edges, until no more assignments can be made.
+      let changed = true;
+      while (changed) {
+        changed = false;
         Object.keys(layoutNodes).forEach(nodeId => {
-          if (startNodeIds.has(nodeId)) return;
-          const parentStartId = subgraphOf[nodeId];
-          if (parentStartId && deltas[parentStartId]) {
-            layoutNodes[nodeId].x += deltas[parentStartId];
+          if (subgraphOf[nodeId] !== undefined) return;
+          // Try forward edges first: if this node points to an assigned node,
+          // join that subgraph (the orphan feeds into that subgraph).
+          const forwardTargets = forwardAdj[nodeId] || [];
+          for (const t of forwardTargets) {
+            if (subgraphOf[t] !== undefined) {
+              subgraphOf[nodeId] = subgraphOf[t];
+              changed = true;
+              return;
+            }
+          }
+          // Try reverse edges: if an assigned node points to this node,
+          // join that subgraph.
+          const reverseSources = reverseAdj[nodeId] || [];
+          for (const s of reverseSources) {
+            if (subgraphOf[s] !== undefined) {
+              subgraphOf[nodeId] = subgraphOf[s];
+              changed = true;
+              return;
+            }
           }
         });
       }
     }
 
-    // Resolve horizontal overlap between subgraphs after shifting
+    // When multiple start nodes exist, re-layout each subgraph independently
+    // with dagre and place them side by side in startOrder. The full-graph
+    // dagre layout interleaves nodes from different subgraphs, inflating
+    // bounding boxes and making post-hoc separation unreliable. Per-subgraph
+    // dagre runs produce compact layouts with honest widths.
     if (startNodes.length > 1) {
-      const gap = 40;
-      // Compute bounding boxes per subgraph
-      const bounds = {};
-      Object.keys(layoutNodes).forEach(nodeId => {
-        const n = layoutNodes[nodeId];
-        const owner = startNodeIds.has(nodeId) ? nodeId : subgraphOf[nodeId];
-        if (!owner) return;
-        const left = n.x - n.width / 2;
-        const right = n.x + n.width / 2;
-        if (!bounds[owner]) bounds[owner] = { minX: left, maxX: right };
-        else {
-          bounds[owner].minX = Math.min(bounds[owner].minX, left);
-          bounds[owner].maxX = Math.max(bounds[owner].maxX, right);
-        }
-      });
+      const subGap = 40;
+      const subMargin = 30;
 
-      // Sort subgraphs left-to-right by current start node X
-      const orderedStarts = startNodes
+      const sortedStarts = startNodes
         .map(n => layoutNodes[n.id])
         .filter(Boolean)
-        .sort((a, b) => a.x - b.x);
+        .sort((a, b) => (a.startOrder || 0) - (b.startOrder || 0));
 
-      // Walk left to right, push apart if overlapping
-      for (let i = 1; i < orderedStarts.length; i++) {
-        const prevId = orderedStarts[i - 1].id;
-        const currId = orderedStarts[i].id;
-        if (!bounds[prevId] || !bounds[currId]) continue;
-        const overlap = (bounds[prevId].maxX + gap) - bounds[currId].minX;
-        if (overlap > 0) {
-          // Push current subgraph and all subsequent subgraphs right
-          for (let j = i; j < orderedStarts.length; j++) {
-            const shiftId = orderedStarts[j].id;
-            Object.keys(layoutNodes).forEach(nodeId => {
-              const owner = startNodeIds.has(nodeId) ? nodeId : subgraphOf[nodeId];
-              if (owner === shiftId) {
-                layoutNodes[nodeId].x += overlap;
-              }
-            });
-            if (bounds[shiftId]) {
-              bounds[shiftId].minX += overlap;
-              bounds[shiftId].maxX += overlap;
-            }
-          }
-        }
+      if (sortedStarts.length > 1) {
+        // Bucket nodes by subgraph owner
+        const subNodeIds = {};
+        Object.keys(layoutNodes).forEach(nodeId => {
+          const owner = startNodeIds.has(nodeId) ? nodeId : subgraphOf[nodeId];
+          if (!owner) return;
+          if (!subNodeIds[owner]) subNodeIds[owner] = [];
+          subNodeIds[owner].push(nodeId);
+        });
+
+        let currentX = subMargin;
+        sortedStarts.forEach(startNode => {
+          const nodeIds = subNodeIds[startNode.id] || [startNode.id];
+          const nodeIdSet = new Set(nodeIds);
+
+          // Create a fresh dagre graph for this subgraph only
+          const sg = new dagre.graphlib.Graph();
+          sg.setGraph({
+            rankdir: 'TB',
+            nodesep: 15,
+            ranksep: 50,
+            edgesep: 8,
+            marginx: 0,
+            marginy: 0,
+            align: 'UL',
+          });
+          sg.setDefaultEdgeLabel(() => ({}));
+
+          // Add this subgraph's nodes with their current dimensions
+          nodeIds.forEach(id => {
+            const n = layoutNodes[id];
+            if (!n) return;
+            sg.setNode(id, { width: n.width, height: n.height });
+          });
+
+          // Add only edges where both endpoints are in this subgraph
+          graph.edges.forEach((e, i) => {
+            if (!nodeIdSet.has(e.source) || !nodeIdSet.has(e.target)) return;
+            if (e.type === 'nav') return;
+            if (e.isGlobalNav && !showGlobalNav) return;
+            if (provenanceFilter && e.provenance && e.provenance !== provenanceFilter) return;
+            // Exclude incoming edges to the start node so it stays at the top
+            // rank (mirrors the same filtering in the main dagre graph).
+            // Without this, nodes like a warning screen that link TO the start
+            // node get placed above it by dagre.
+            if (e.target === startNode.id && e.source !== startNode.id) return;
+            sg.setEdge(e.source, e.target, { id: 'sub-edge-' + i });
+          });
+
+          // Pin the start node to the top rank via a virtual root
+          const vRoot = '__vr__';
+          sg.setNode(vRoot, { width: 0, height: 0 });
+          sg.setEdge(vRoot, startNode.id, { weight: 2, minlen: 1 });
+
+          dagre.layout(sg);
+
+          // Compute bounding box of this subgraph's layout
+          let minX = Infinity, maxX = -Infinity, minY = Infinity;
+          sg.nodes().forEach(id => {
+            if (id === vRoot) return;
+            const pos = sg.node(id);
+            minX = Math.min(minX, pos.x - pos.width / 2);
+            maxX = Math.max(maxX, pos.x + pos.width / 2);
+            minY = Math.min(minY, pos.y - pos.height / 2);
+          });
+
+          // Translate: place this subgraph at currentX, top-align at subMargin
+          const shiftX = currentX - minX;
+          const shiftY = subMargin - minY;
+          sg.nodes().forEach(id => {
+            if (id === vRoot) return;
+            const pos = sg.node(id);
+            layoutNodes[id].x = pos.x + shiftX;
+            layoutNodes[id].y = pos.y + shiftY;
+          });
+
+          currentX = (maxX + shiftX) + subGap;
+        });
+
+        // Top-align nodes within each per-subgraph rank (same as the
+        // non-hasRanks alignment above, but applied per subgraph).
+        sortedStarts.forEach(startNode => {
+          const nodeIds = subNodeIds[startNode.id] || [];
+          const RANK_TOLERANCE = 5;
+          const rankGroups = {};
+          nodeIds.forEach(id => {
+            const n = layoutNodes[id];
+            if (!n) return;
+            const roundedY = Math.round(n.y / RANK_TOLERANCE) * RANK_TOLERANCE;
+            if (!rankGroups[roundedY]) rankGroups[roundedY] = [];
+            rankGroups[roundedY].push(n);
+          });
+          Object.values(rankGroups).forEach(group => {
+            if (group.length < 2) return;
+            const minTop = Math.min(...group.map(n => n.y - n.height / 2));
+            group.forEach(n => { n.y = minTop + n.height / 2; });
+          });
+        });
       }
     }
 
