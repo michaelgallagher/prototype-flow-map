@@ -54,6 +54,27 @@ Key files: `src/recorder.js`, `src/recorder-inject.js`, `src/flow-serializer.js`
 5. **Runs `xcodebuild test`** in the iOS Simulator, collects the PNG files
 6. **Generates a static HTML viewer** with the graph and screenshots embedded
 
+## Android prototypes
+
+1. **Scans** for all `.kt` files in the project
+2. **Parses** each file for Jetpack Compose navigation patterns (`navController.navigate()`, NavHost `composable()` entries, `BottomNavItem` registrations, `slideIntoContainer` modal transitions, `openTab()` external links)
+3. **Builds a directed graph** of screens and navigation edges; the parser records the raw NavHost route template (`message_detail/{messageId}`) alongside the canonical node ID so the crawler can navigate correctly
+4. **Auto-injects** two files into the prototype at run time:
+   - `navigation/TestHooks.kt` — a `@VisibleForTesting` singleton exposing `NavHostController?`
+   - A single `LaunchedEffect(navController) { TestHooks.navController = navController }` line into whichever `.kt` file hosts the `NavHost` — both are idempotent (skipped if already present)
+5. **Generates a temporary `FlowMapCapture.kt`** instrumented test that navigates to each screen by calling `navController.navigate("<rawRoute>")` directly (not by tapping UI) and captures via `composeTestRule.onRoot().captureToImage()`
+6. **Builds debug + androidTest APKs**, installs them, runs `am instrument` directly on the device (skipping `connectedDebugAndroidTest` because that task uninstalls the app before screenshots can be pulled), `adb pull`s PNGs off the device, then uninstalls
+7. **Restores all injected files and animation settings** in a `finally` block, leaving the prototype's git status unchanged
+8. **Generates a static HTML viewer** with the graph and screenshots embedded
+
+Screens whose route has parameters (`{id}` placeholders) are skipped by default; provide concrete values in `flow-map.config.yml`:
+
+```yaml
+overrides:
+  message_detail:
+    route: "message_detail/demo-msg-1"
+```
+
 ## Canonical deduplication
 
 The tool automatically deduplicates parameterised routes. URLs like `/participants/abc123` and `/participants/def456` are recognised as the same canonical pattern (`/participants/:id`), and the crawler visits at most 3 instances per pattern. This prevents the map from exploding when there are hundreds of entity pages.

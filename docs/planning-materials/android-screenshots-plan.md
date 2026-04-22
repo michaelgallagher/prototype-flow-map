@@ -200,11 +200,18 @@ node bin/cli.js ~/Repos/native-nhsapp-android-prototype/DemoNHSApp2 -o /tmp/andr
 
 ## Checkpoint (update as work progresses)
 
-- [ ] Step 0 — verify PoC end-to-end produces `messages.png`
-- [ ] Step 1 — `src/android-test-generator.js`
-- [ ] Step 2 — `src/kotlin-crawler.js`
-- [ ] Step 3 — `src/index.js` wiring
-- [ ] Step 4 — smoke test against DemoNHSApp2
+- [x] Step 0 — verify PoC end-to-end produces `messages.png` *(2026-04-22)*
+- [x] Step 1 — `src/android-test-generator.js` *(commit `0b3bc03`)*
+- [x] Step 2 — `src/kotlin-crawler.js` *(commit `269c79d`)*
+- [x] Step 3 — `src/index.js` wiring *(commit `269c79d`)*
+- [x] Step 4 — smoke test against DemoNHSApp2 *(18/18 distinct PNGs, prototype clean)*
+- [x] Step 5 — docs + memory *(this commit)*
+
+**Final result on DemoNHSApp2:** 35 graph nodes → 18 screenshots captured, 10 skipped as parameterized (need `overrides.<id>.route` config), 3 skipped as phantom nodes (no NavHost entry), 4 external URL nodes (no capture needed). All 18 PNGs have distinct MD5 hashes — no duplicate home-screen captures. Prototype git status identical before/after the run.
+
+**Known follow-ups not addressed here:**
+- Phantom nodes (`archived_messages`, `message_detail`, `prescriptionAdditionalDetail`) — these navigate() call targets have no NavHost entry per the parser's view, which is likely a parser bug with how routes created via helper functions or string interpolation propagate into the screens list. Separate task.
+- Compose `captureToImage()` covers the Compose tree only — screens embedding `AndroidView { WebView(...) }` may render blank regions. If this bites on overlay-browser screens, fall back to UiAutomator `takeScreenshot` for those specific nodes via an override step language (not yet implemented on Android).
 
 ## Commit strategy
 
