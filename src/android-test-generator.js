@@ -40,23 +40,28 @@ function generateAndroidTest(graph, packageName, mainActivityClass, overrides = 
 
   for (const node of screenNodes) {
     const override = overrides[node.id];
-    const rawRoute = node.rawRoute || node.id;
-    const hasParam = /\{[^}]+\}/.test(rawRoute);
 
-    let routeToNavigate;
+    // Override always wins
     if (override && typeof override.route === "string") {
-      routeToNavigate = override.route;
-    } else if (hasParam) {
-      skipped.push({ id: node.id, rawRoute });
+      tests.push({ safeId: sanitizeFilename(node.id), route: override.route });
       continue;
-    } else {
-      routeToNavigate = rawRoute;
     }
 
-    tests.push({
-      safeId: sanitizeFilename(node.id),
-      route: routeToNavigate,
-    });
+    // Phantom nodes (created by graph-builder when a navigate() targets a
+    // canonical route with no matching NavHost entry) have no rawRoute.
+    // We can't reliably navigate to them, so skip.
+    if (!node.rawRoute) {
+      skipped.push({ id: node.id, reason: "no NavHost entry" });
+      continue;
+    }
+
+    // Parameterized routes need a concrete value — require a config override
+    if (/\{[^}]+\}/.test(node.rawRoute)) {
+      skipped.push({ id: node.id, reason: `parameterized (${node.rawRoute})` });
+      continue;
+    }
+
+    tests.push({ safeId: sanitizeFilename(node.id), route: node.rawRoute });
   }
 
   if (tests.length === 0) return null;
@@ -72,8 +77,8 @@ function generateAndroidTest(graph, packageName, mainActivityClass, overrides = 
 function renderTestFile({ packageName, mainActivityClass, tests, skipped }) {
   const methods = tests.map(renderTestMethod).join("\n");
   const skipComments = skipped.length
-    ? "\n    // Skipped (parameterized route, add to config overrides to capture):\n" +
-      skipped.map((s) => `    //   ${s.id}  (raw: ${s.rawRoute})`).join("\n") +
+    ? "\n    // Skipped (add to config overrides.<id>.route to capture):\n" +
+      skipped.map((s) => `    //   ${s.id}  — ${s.reason}`).join("\n") +
       "\n"
     : "";
 

@@ -176,10 +176,16 @@ function findAppModule(prototypePath) {
     ignore: ["**/node_modules/**", "**/build/**"],
   });
 
-  const appRe = /(?:id\s*\(\s*["']com\.android\.application["']|alias\s*\(\s*libs\.plugins\.android\.application)/;
+  // Match the android.application plugin being APPLIED (not declared with `apply false`).
+  // Root project gradle files typically use `alias(...) apply false`, which should be skipped.
   const candidates = gradleFiles.filter((f) => {
     try {
-      return appRe.test(fs.readFileSync(f, "utf-8"));
+      const content = fs.readFileSync(f, "utf-8");
+      const lines = content.split("\n");
+      return lines.some((line) => {
+        const matches = /(?:id\s*\(\s*["']com\.android\.application["']|alias\s*\(\s*libs\.plugins\.android\.application)/.test(line);
+        return matches && !/\bapply\s+false\b/.test(line);
+      });
     } catch {
       return false;
     }
