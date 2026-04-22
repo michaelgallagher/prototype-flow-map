@@ -65,6 +65,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
 
     results.push({
       route: canonicalRoute,
+      rawRoute: entry.route,
       composableName: entry.composableName,
       filePath: screen.filePath || entry.filePath,
       relativePath: screen.relativePath || path.relative(projectPath, entry.filePath),

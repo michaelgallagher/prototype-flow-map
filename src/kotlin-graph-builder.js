@@ -31,6 +31,7 @@ function buildKotlinGraph(parsedScreens) {
       id: screen.route,
       label: toLabel(screen.composableName),
       urlPath: screen.route,
+      rawRoute: screen.rawRoute || screen.route,
       hub: null,
       filePath: screen.relativePath || null,
       screenshot: null,
