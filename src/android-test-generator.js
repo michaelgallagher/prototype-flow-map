@@ -28,7 +28,7 @@ function sanitizeFilename(id) {
  *
  * @param {object} graph - { nodes, edges }
  * @param {string} packageName - Android app package (e.g. "com.prototype.nhsappnotab")
- * @param {string} mainActivityClass - simple class name (e.g. "MainActivity")
+ * @param {string} mainActivityClass - fully-qualified class (e.g. "com.prototype.nhsappnotab.MainActivity")
  * @param {object} overrides - map of nodeId → { route: string }
  * @returns {string|null} Kotlin source, or null if no tests would be generated
  */

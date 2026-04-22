@@ -21,6 +21,7 @@ const { crawlAndScreenshotIos } = require("./swift-crawler");
 const { scanKotlinFiles } = require("./kotlin-scanner");
 const { parseKotlinProject } = require("./kotlin-parser");
 const { buildKotlinGraph } = require("./kotlin-graph-builder");
+const { crawlAndScreenshotAndroid } = require("./kotlin-crawler");
 const {
   loadConfig,
   applyExclusions,
@@ -308,7 +309,15 @@ async function generateNative(options) {
       `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
     );
   } else if (screenshots && platform === "android") {
-    console.log("4️⃣  Skipping screenshots (not yet supported for Android)");
+    console.log("4️⃣  Capturing screenshots via Android Compose test...");
+    graph = await crawlAndScreenshotAndroid(graph, {
+      prototypePath,
+      outputDir: mapOutputDir,
+      overrides: config.overrides,
+    });
+    console.log(
+      `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
+    );
   } else {
     console.log("4️⃣  Skipping screenshots (--no-screenshots)");
   }
