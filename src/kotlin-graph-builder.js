@@ -161,20 +161,61 @@ function deduplicateEdges(edges) {
 }
 
 /**
+ * Use DFS to find back-edges in a directed graph (edges that form cycles).
+ * Returns a Set of "source|target" keys for back-edges.
+ */
+function findBackEdges(edges, nodeIds) {
+  const adj = new Map();
+  for (const id of nodeIds) adj.set(id, []);
+  for (const e of edges) {
+    adj.get(e.source).push(e.target);
+  }
+
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = new Map();
+  for (const id of nodeIds) color.set(id, WHITE);
+  const backEdges = new Set();
+
+  function dfs(u) {
+    color.set(u, GRAY);
+    for (const v of (adj.get(u) || [])) {
+      if (color.get(v) === GRAY) {
+        backEdges.add(`${u}|${v}`);
+      } else if (color.get(v) === WHITE) {
+        dfs(v);
+      }
+    }
+    color.set(u, BLACK);
+  }
+
+  for (const id of nodeIds) {
+    if (color.get(id) === WHITE) dfs(id);
+  }
+
+  return backEdges;
+}
+
+/**
  * Assign layoutRank to each node via BFS from root nodes.
  * Tab siblings share the same rank.
+ * Back-edges (navigation cycles back to earlier screens) are excluded
+ * so cycle entry points are correctly identified as roots.
  */
 function assignLayoutRanks(nodes, edges, parsedScreens) {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Build tab sibling pairs to exclude from rank computation
+  // Build tab sibling pairs to exclude from rank computation.
+  // Only lateral sibling↔sibling pairs are excluded, NOT host→sibling edges.
+  // This ensures the host screen's direct navigate() calls to tabs still
+  // contribute to rank (e.g. home → messages should make messages rank 1).
   const tabSiblingPairs = new Set();
   for (const screen of parsedScreens) {
     if (screen.bottomNavItems.length < 2) continue;
+    const host = screen.route;
     const tabRoutes = screen.bottomNavItems
       .map((item) => canonicalizeRoute(item.route))
-      .filter((r) => nodeIds.has(r));
+      .filter((r) => nodeIds.has(r) && r !== host); // exclude the host itself
     for (let i = 0; i < tabRoutes.length; i++) {
       for (let j = i + 1; j < tabRoutes.length; j++) {
         tabSiblingPairs.add(`${tabRoutes[i]}|${tabRoutes[j]}`);
@@ -183,6 +224,17 @@ function assignLayoutRanks(nodes, edges, parsedScreens) {
     }
   }
 
+  // Rank edges = non-tab-sibling edges between known nodes
+  const rankEdges = edges.filter(
+    (e) =>
+      nodeIds.has(e.source) &&
+      nodeIds.has(e.target) &&
+      !tabSiblingPairs.has(`${e.source}|${e.target}`)
+  );
+
+  // Detect back-edges so cycles don't inflate in-degrees of entry nodes
+  const backEdges = findBackEdges(rankEdges, nodeIds);
+
   const children = new Map();
   const inDegree = new Map();
   for (const id of nodeIds) {
@@ -190,20 +242,19 @@ function assignLayoutRanks(nodes, edges, parsedScreens) {
     inDegree.set(id, 0);
   }
 
-  for (const e of edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    if (tabSiblingPairs.has(`${e.source}|${e.target}`)) continue;
+  for (const e of rankEdges) {
+    if (backEdges.has(`${e.source}|${e.target}`)) continue;
     children.get(e.source).push(e.target);
     inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
   }
 
-  // Find roots
+  // Find roots (nodes with no incoming non-back, non-tab-sibling edges)
   const roots = [];
   for (const [id, deg] of inDegree) {
     if (deg === 0) roots.push(id);
   }
 
-  // BFS — track visited edges to prevent infinite loops from cycles
+  // BFS — track visited edges to prevent re-processing in remaining cycles
   const rankOf = new Map();
   const queue = [];
   const visitedEdges = new Set();
@@ -231,12 +282,13 @@ function assignLayoutRanks(nodes, edges, parsedScreens) {
     }
   }
 
-  // Force tab siblings to share the same rank
+  // Force tab siblings (non-host) to share the same rank
   for (const screen of parsedScreens) {
     if (screen.bottomNavItems.length < 2) continue;
+    const host = screen.route;
     const tabRoutes = screen.bottomNavItems
       .map((item) => canonicalizeRoute(item.route))
-      .filter((r) => rankOf.has(r));
+      .filter((r) => rankOf.has(r) && r !== host);
     if (tabRoutes.length === 0) continue;
     const sharedRank = Math.min(...tabRoutes.map((r) => rankOf.get(r)));
     for (const r of tabRoutes) {

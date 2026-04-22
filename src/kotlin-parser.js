@@ -16,8 +16,9 @@ const path = require("path");
  * }
  */
 function parseKotlinProject(kotlinFiles, projectPath) {
-  // Pass 1: build route registry from Routes objects and BottomNavItem definitions
+  // Pass 1: build route registry from Routes objects, BottomNavItem definitions, and helper fns
   const routeConstants = new Map(); // "Routes.prescriptions2" → "prescriptions2"
+  const routeHelpers = new Map();  // "familyCarerCaredForDetailRoute" → "familyCarer/caredFor/{param}"
   const bottomNavItems = []; // [{ route, label, routeRef }]
   const navHostEntries = []; // [{ route, composableName, filePath, isModal }]
 
@@ -26,6 +27,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     const stripped = stripKotlinComments(content);
 
     extractRouteConstants(stripped, routeConstants);
+    extractRouteHelpers(stripped, routeHelpers);
     extractBottomNavItems(stripped, bottomNavItems, routeConstants);
   }
 
@@ -41,7 +43,10 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     extractNavHostEntries(stripped, navHostEntries, routeConstants, filePath);
 
     // Extract navController.navigate() calls from screen files
-    extractNavigations(stripped, filePath, relativePath, routeConstants, screensByRoute);
+    extractNavigations(stripped, filePath, relativePath, routeConstants, routeHelpers, screensByRoute);
+
+    // Extract navController.navigate() calls from NavHost composable lambdas
+    extractNavHostNavigations(stripped, filePath, relativePath, routeConstants, routeHelpers, navHostEntries, screensByRoute);
 
     // Extract openTab() calls
     extractExternalLinks(stripped, filePath, relativePath, screensByRoute);
@@ -174,23 +179,28 @@ function findMatchingParen(source, pos) {
 // ---------------------------------------------------------------------------
 
 /**
- * Canonicalize a route string by stripping parameter placeholders and values.
+ * Canonicalize a route string by stripping parameter placeholders and hardcoded values.
  * "prescriptionPharmacyDetail/{pharmacyId}?editMode={editMode}" → "prescriptionPharmacyDetail"
  * "message_detail/{messageId}" → "message_detail"
+ * "familyCarer/caredFor/{personId}" → "familyCarer/caredFor"
  * "prescriptionPharmacyDetail/1" → "prescriptionPharmacyDetail" (hardcoded param value)
  */
 function canonicalizeRoute(route) {
   if (!route) return route;
-  // Strip {placeholder} segments, query strings, and trailing slash
-  let canonical = route.replace(/\/?\{[^}]+\}/g, "").replace(/\?.*$/, "").replace(/\/+$/, "");
-  // Also strip trailing path segments that look like parameter values
-  // e.g. "prescriptionPharmacyDetail/1" → "prescriptionPharmacyDetail"
-  // e.g. "prescriptionConfirmationRepeat/Boots/123 High St/Paracetamol/"
-  // Only strip segments after the first path component
-  if (canonical.includes("/")) {
-    canonical = canonical.split("/")[0];
-  }
-  return canonical || route;
+  // Strip query strings first
+  let canonical = route.replace(/\?.*$/, "");
+  // Strip trailing slash
+  canonical = canonical.replace(/\/+$/, "");
+  // Split into path segments and drop any that are {placeholder} or look like runtime values
+  // (all-digits, or contain $ interpolation markers from earlier processing)
+  const segments = canonical.split("/").filter((seg) => {
+    if (!seg) return false;
+    if (/^\{[^}]+\}$/.test(seg)) return false; // {placeholder}
+    if (/^\d+$/.test(seg)) return false;        // hardcoded numeric param
+    if (seg.includes("{param}")) return false;  // interpolated string placeholder
+    return true;
+  });
+  return segments.join("/") || route;
 }
 
 /**
@@ -203,16 +213,31 @@ function resolveRouteRef(ref, routeConstants) {
 
 /**
  * Resolve a navigate() argument to a canonical route string.
- * Handles: "home", Routes.prescriptions2, "message_detail/${message.id}"
+ * Handles: "home", Routes.prescriptions2, "message_detail/${message.id}",
+ *          com.x.y.Routes.biometricLogin (fully-qualified), xyzRoute(id) (helper call)
  */
-function resolveNavigateArg(arg, routeConstants) {
+function resolveNavigateArg(arg, routeConstants, routeHelpers) {
   if (!arg) return null;
+
+  // Fully-qualified Routes reference: com.x.y.Routes.xxx or any.pkg.Routes.xxx
+  const fqRouteMatch = arg.match(/(?:\w+\.)+Routes\.(\w+)$/);
+  if (fqRouteMatch) {
+    const resolved = routeConstants.get(`Routes.${fqRouteMatch[1]}`);
+    return resolved ? canonicalizeRoute(resolved) : fqRouteMatch[1];
+  }
 
   // Routes.xxx reference
   const routeRefMatch = arg.match(/^Routes\.(\w+)$/);
   if (routeRefMatch) {
     const resolved = routeConstants.get(`Routes.${routeRefMatch[1]}`);
     return resolved ? canonicalizeRoute(resolved) : routeRefMatch[1];
+  }
+
+  // Routes.xxxRoute(args) — helper call via Routes object
+  const routesHelperMatch = arg.match(/^Routes\.(\w+)\s*\(/);
+  if (routesHelperMatch) {
+    const helper = routeHelpers && routeHelpers.get(`Routes.${routesHelperMatch[1]}`);
+    return helper ? canonicalizeRoute(helper) : null;
   }
 
   // BottomNavItem.xxx.route reference
@@ -226,13 +251,25 @@ function resolveNavigateArg(arg, routeConstants) {
   const strMatch = arg.match(/^"([^"]*)"$/);
   if (strMatch) {
     let route = strMatch[1];
-    // Replace Kotlin string interpolation: ${...} → placeholder, then canonicalize
+    // Replace Kotlin string interpolation: ${...} → drop segment, then canonicalize
     route = route.replace(/\$\{[^}]+\}/g, "{param}").replace(/\$\w+/g, "{param}");
     return canonicalizeRoute(route);
   }
 
-  // Plain identifier — might be a local variable; treat as route
-  return canonicalizeRoute(arg);
+  // Route helper function call: xyzRoute(args) or xyzRoute(id)
+  const helperCallMatch = arg.match(/^([a-zA-Z_]\w*)\s*\(/);
+  if (helperCallMatch && routeHelpers) {
+    const helper = routeHelpers.get(helperCallMatch[1]);
+    return helper ? canonicalizeRoute(helper) : null;
+  }
+
+  // Plain single-word identifier — check if it's a known file-level route constant
+  if (/^[a-zA-Z_]\w*$/.test(arg)) {
+    const fromConst = routeConstants.get(arg);
+    if (fromConst) return canonicalizeRoute(fromConst);
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,21 +277,69 @@ function resolveNavigateArg(arg, routeConstants) {
 // ---------------------------------------------------------------------------
 
 /**
- * Extract route string constants from `object Routes { ... }` blocks.
+ * Extract route helper functions: private fun xyzRoute(id: String) = "path/segment/$id"
+ * Populates routeHelpers: Map of fnName → route template (with {param} substitution)
+ * Also handles Routes object helper functions: fun xyzRoute(id: String) = "path/$id"
+ */
+function extractRouteHelpers(content, routeHelpers) {
+  // Match: [private] fun xyzRoute(params) = "some/path/$id"
+  // or: fun xyzRoute(params) = "some/path/${id}"
+  const helperRe = /\bfun\s+([a-z]\w*Route)\s*\([^)]*\)\s*=\s*"([^"]+)"/g;
+  let match;
+  while ((match = helperRe.exec(content)) !== null) {
+    const fnName = match[1];
+    let template = match[2];
+    // Replace interpolations with {param}
+    template = template.replace(/\$\{[^}]+\}/g, "{param}").replace(/\$\w+/g, "{param}");
+    routeHelpers.set(fnName, template);
+  }
+
+  // Also capture helpers inside `object Routes { fun xyzRoute(...) = "..." }`
+  const objectRe = /\bobject\s+Routes\s*\{/g;
+  let objMatch;
+  while ((objMatch = objectRe.exec(content)) !== null) {
+    const closure = findClosureAt(content, objMatch.index + objMatch[0].length - 1);
+    if (!closure) continue;
+
+    const innerRe = /\bfun\s+([a-z]\w*Route)\s*\([^)]*\)\s*=\s*"([^"]+)"/g;
+    let innerMatch;
+    while ((innerMatch = innerRe.exec(closure.content)) !== null) {
+      const fnName = innerMatch[1];
+      let template = innerMatch[2];
+      template = template.replace(/\$\{[^}]+\}/g, "{param}").replace(/\$\w+/g, "{param}");
+      routeHelpers.set(fnName, template);
+      routeHelpers.set(`Routes.${fnName}`, template);
+    }
+  }
+}
+
+/**
+ * Extract route string constants from `object Routes { ... }` blocks
+ * and from file-level private const val declarations.
  */
 function extractRouteConstants(content, routeConstants) {
-  // Match: object Routes { ... }
+  // Routes object properties
   const objectRe = /\bobject\s+Routes\s*\{/g;
   let match;
   while ((match = objectRe.exec(content)) !== null) {
     const closure = findClosureAt(content, match.index + match[0].length - 1);
     if (!closure) continue;
 
-    // Match: var/val/const val name = "value"
     const propRe = /(?:const\s+val|var|val)\s+(\w+)\s*=\s*"([^"]+)"/g;
     let propMatch;
     while ((propMatch = propRe.exec(closure.content)) !== null) {
       routeConstants.set(`Routes.${propMatch[1]}`, propMatch[2]);
+    }
+  }
+
+  // File-level private/internal const val declarations (e.g. in AppNavigation.kt)
+  // private const val FamilyCarerAddCaredForRoute = "familyCarer/addCaredFor"
+  const fileConstRe = /(?:private\s+|internal\s+)?const\s+val\s+([A-Z][A-Za-z0-9]+(?:Route|Pattern|Path))\s*=\s*"([^"]+)"/g;
+  let constMatch;
+  while ((constMatch = fileConstRe.exec(content)) !== null) {
+    // Only store if not already registered (Routes object takes precedence)
+    if (!routeConstants.has(constMatch[1])) {
+      routeConstants.set(constMatch[1], constMatch[2]);
     }
   }
 }
@@ -327,7 +412,7 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
 
       // Extract route = "..." or route = Routes.xxx or BottomNavItem.xxx.route
       let route = null;
-      const routeNamedMatch = compArgs.match(/\broute\s*=\s*(Routes\.\w+|BottomNavItem\.\w+\.route|"[^"]+")/);
+      const routeNamedMatch = compArgs.match(/\broute\s*=\s*(Routes\.\w+|BottomNavItem\.\w+\.route|"[^"]+"|[A-Z][A-Za-z0-9]+)/);
       if (routeNamedMatch) {
         const routeArg = routeNamedMatch[1];
         if (routeArg.startsWith('"')) {
@@ -336,6 +421,9 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
           route = resolveRouteRef(routeArg, routeConstants) || routeArg.replace("Routes.", "");
         } else if (routeArg.startsWith("BottomNavItem.")) {
           route = resolveRouteRef(routeArg, routeConstants) || routeArg;
+        } else {
+          // File-level constant (e.g. FamilyCarerAddCaredForRoute)
+          route = routeConstants.get(routeArg) || null;
         }
       }
       if (!route) continue;
@@ -362,8 +450,8 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
       let composableName = null;
       while ((fnMatch = fnCallRe.exec(lambda.content)) !== null) {
         const name = fnMatch[1];
-        // Skip known non-screen types
-        if (/^(Modifier|URL|URLDecoder|NavType|AnimatedContentTransitionScope|Spring)$/.test(name)) continue;
+        // Skip known non-screen composables and Compose/Kotlin built-ins
+        if (/^(Modifier|URL|URLDecoder|NavType|AnimatedContentTransitionScope|Spring|LaunchedEffect|DisposableEffect|SideEffect|remember|Box|Column|Row|Text|Icon|Surface|Scaffold|HorizontalDivider|VerticalDivider|Spacer|Card|Button|IconButton|AlertDialog|ModalBottomSheet|BackHandler|NavHost|CompositionLocalProvider|ProvideTextStyle|ExitTransition|EnterTransition|AnimatedVisibility|CrossfadeScope)$/.test(name)) continue;
         composableName = name;
         break;
       }
@@ -380,7 +468,7 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
 /**
  * Extract navController.navigate() calls from screen composable files.
  */
-function extractNavigations(content, filePath, relativePath, routeConstants, screensByRoute) {
+function extractNavigations(content, filePath, relativePath, routeConstants, routeHelpers, screensByRoute) {
   // Find @Composable fun declarations to associate navigations with screens
   const funRe = /\bfun\s+([A-Z][A-Za-z0-9]+)\s*\(/g;
   let funMatch;
@@ -403,18 +491,7 @@ function extractNavigations(content, filePath, relativePath, routeConstants, scr
     const body = findClosureAt(content, braceIdx);
     if (!body) continue;
 
-    const navigations = [];
-
-    // navController.navigate("route") or navController.navigate(Routes.xxx)
-    const navRe = /navController\.navigate\s*\(\s*("(?:[^"\\]|\\.)*"|Routes\.\w+|BottomNavItem\.\w+\.route|[a-zA-Z_]\w*)/g;
-    let navMatch;
-    while ((navMatch = navRe.exec(body.content)) !== null) {
-      const rawArg = navMatch[1];
-      const targetRoute = resolveNavigateArg(rawArg, routeConstants);
-      if (targetRoute) {
-        navigations.push({ targetRoute, label: null });
-      }
-    }
+    const navigations = extractNavigationsFromBlock(body.content, routeConstants, routeHelpers);
 
     if (!screensByRoute.has(fnName)) {
       screensByRoute.set(fnName, {
@@ -427,6 +504,137 @@ function extractNavigations(content, filePath, relativePath, routeConstants, scr
     const screen = screensByRoute.get(fnName);
     screen.navigations.push(...navigations);
   }
+}
+
+/**
+ * Extract navigate() calls from inside AppNavigation.kt composable() lambdas.
+ * These are navigate calls that don't live inside a named @Composable function
+ * (they're inside inline lambdas passed to composable(route = "x") { ... }).
+ * We attribute them to the parent route's screen.
+ */
+function extractNavHostNavigations(content, filePath, relativePath, routeConstants, routeHelpers, navHostEntries, screensByRoute) {
+  // Only process files that contain a NavHost
+  if (!content.includes("NavHost")) return;
+
+  // For each registered NavHost entry, find its composable() block and scan for navigate() calls
+  const composableRe = /\bcomposable\s*\(/g;
+  let match;
+  while ((match = composableRe.exec(content)) !== null) {
+    const compStart = match.index;
+    const compParenClose = findMatchingParen(content, compStart + match[0].length - 1);
+    if (compParenClose === -1) continue;
+
+    const compArgs = content.slice(compStart + match[0].length, compParenClose);
+
+    // Extract route (mirrors extractNavHostEntries logic)
+    let route = null;
+    const routeNamedMatch = compArgs.match(/\broute\s*=\s*(Routes\.\w+|BottomNavItem\.\w+\.route|"[^"]+"|[A-Z][A-Za-z0-9]+)/);
+    if (routeNamedMatch) {
+      const routeArg = routeNamedMatch[1];
+      if (routeArg.startsWith('"')) {
+        route = canonicalizeRoute(routeArg.slice(1, -1));
+      } else if (routeArg.startsWith("Routes.")) {
+        const resolved = routeConstants.get(routeArg);
+        route = resolved ? canonicalizeRoute(resolved) : routeArg.replace("Routes.", "");
+      } else if (routeArg.startsWith("BottomNavItem.")) {
+        const resolved = routeConstants.get(routeArg);
+        route = resolved ? canonicalizeRoute(resolved) : null;
+      } else {
+        const resolved = routeConstants.get(routeArg);
+        route = resolved ? canonicalizeRoute(resolved) : null;
+      }
+    }
+    if (!route) continue;
+
+    // Find the trailing lambda
+    const afterParen = content.slice(compParenClose + 1);
+    const braceOffset = afterParen.indexOf("{");
+    if (braceOffset === -1) continue;
+    const lambdaStart = compParenClose + 1 + braceOffset;
+    const lambda = findClosureAt(content, lambdaStart);
+    if (!lambda) continue;
+
+    const navigations = extractNavigationsFromBlock(lambda.content, routeConstants, routeHelpers);
+    if (navigations.length === 0) continue;
+
+    // Find the composable function name to look up screen
+    // Find composable screen name — skip built-ins that appear before the actual screen call
+    const nonScreenRe = /^(Modifier|URL|URLDecoder|NavType|AnimatedContentTransitionScope|Spring|LaunchedEffect|DisposableEffect|SideEffect|remember|Box|Column|Row|Text|Icon|Surface|Scaffold|HorizontalDivider|VerticalDivider|Spacer|Card|Button|IconButton|AlertDialog|ModalBottomSheet|BackHandler|NavHost|CompositionLocalProvider|ExitTransition|EnterTransition|AnimatedVisibility)$/;
+    const fnCallRe = /\b([A-Z][A-Za-z0-9]+)\s*\(/g;
+    let fnMatch;
+    let composableName = null;
+    while ((fnMatch = fnCallRe.exec(lambda.content)) !== null) {
+      if (!nonScreenRe.test(fnMatch[1])) { composableName = fnMatch[1]; break; }
+    }
+
+    // Attribute navigations to the composable name (or directly to route)
+    const key = composableName || route;
+    if (!screensByRoute.has(key)) {
+      screensByRoute.set(key, {
+        filePath,
+        relativePath,
+        navigations: [],
+        externalLinks: [],
+      });
+    }
+    const screen = screensByRoute.get(key);
+    // Deduplicate against already-extracted navigations from screen files
+    for (const nav of navigations) {
+      if (!screen.navigations.some((n) => n.targetRoute === nav.targetRoute)) {
+        screen.navigations.push(nav);
+      }
+    }
+  }
+}
+
+/**
+ * Extract navController.navigate() calls from an arbitrary code block.
+ * Uses paren-matching rather than regex to correctly handle nested call expressions.
+ */
+function extractNavigationsFromBlock(blockContent, routeConstants, routeHelpers) {
+  const navigations = [];
+  const navRe = /navController\.navigate\s*\(/g;
+  let navMatch;
+  while ((navMatch = navRe.exec(blockContent)) !== null) {
+    // The opening paren is the last char of the match
+    const openParen = navMatch.index + navMatch[0].length - 1;
+    const closeParen = findMatchingParen(blockContent, openParen);
+    if (closeParen === -1) continue;
+
+    const argStr = blockContent.slice(openParen + 1, closeParen).trim();
+    const rawArg = extractFirstArg(argStr);
+    if (!rawArg) continue;
+
+    const targetRoute = resolveNavigateArg(rawArg, routeConstants, routeHelpers);
+    if (targetRoute) {
+      navigations.push({ targetRoute, label: null });
+    }
+  }
+  return navigations;
+}
+
+/**
+ * Extract the first argument token from a navigate() argument string.
+ * Handles: "route", Routes.xxx, fqRoute, helperFn(id), com.x.Routes.xxx
+ */
+function extractFirstArg(raw) {
+  if (!raw) return null;
+  raw = raw.trim();
+
+  // String literal
+  if (raw.startsWith('"')) {
+    const end = raw.indexOf('"', 1);
+    return end !== -1 ? raw.slice(0, end + 1) : null;
+  }
+
+  // Identifier (possibly qualified with dots or a function call)
+  // Match: word(.word)* optionally followed by ( for function calls
+  const identMatch = raw.match(/^((?:\w+\.)*\w+)\s*(\()?/);
+  if (identMatch) {
+    return identMatch[2] ? `${identMatch[1]}(` : identMatch[1];
+  }
+
+  return null;
 }
 
 /**
