@@ -32,6 +32,9 @@ async function crawlAndScreenshotAndroid(graph, options) {
   // 2. Extract metadata (package + main activity)
   const metadata = extractProjectMetadata(appModule);
   console.log(`   Package: ${metadata.packageName}`);
+  if (metadata.applicationId !== metadata.packageName) {
+    console.log(`   Application ID: ${metadata.applicationId}`);
+  }
   console.log(`   MainActivity: ${metadata.mainActivityClass}`);
 
   // 3. Find a running adb device
@@ -94,9 +97,9 @@ async function crawlAndScreenshotAndroid(graph, options) {
     adb(device, "install", "-r", "-t", appApk);
     adb(device, "install", "-r", "-t", testApk);
 
-    // 10. Run instrumentation
+    // 10. Run instrumentation (uses applicationId — that's what the test APK targets)
     console.log("   Running instrumented tests...");
-    const instrumentResult = runInstrumentation(device, metadata.packageName);
+    const instrumentResult = runInstrumentation(device, metadata.applicationId, metadata.packageName);
 
     // Surface flow-map log lines
     const diagLines = (instrumentResult.stdout || "")
@@ -110,7 +113,7 @@ async function crawlAndScreenshotAndroid(graph, options) {
     // 11. Pull screenshots off the device before uninstall wipes them
     const screenshotsDir = path.join(outputDir, "screenshots");
     fs.mkdirSync(screenshotsDir, { recursive: true });
-    const deviceDir = `/sdcard/Android/data/${metadata.packageName}/cache/flow-map/`;
+    const deviceDir = `/sdcard/Android/data/${metadata.applicationId}/cache/flow-map/`;
     spawnSync("adb", ["-s", device, "pull", deviceDir, screenshotsDir], {
       encoding: "utf-8",
     });
@@ -136,9 +139,9 @@ async function crawlAndScreenshotAndroid(graph, options) {
     }
     console.log(`   Captured ${captured} of ${methodCount} screens`);
   } finally {
-    // 13. Uninstall (best-effort)
-    try { adb(device, "uninstall", `${metadata.packageName}.test`); } catch {}
-    try { adb(device, "uninstall", metadata.packageName); } catch {}
+    // 13. Uninstall (best-effort) — by applicationId, which is what's installed
+    try { adb(device, "uninstall", `${metadata.applicationId}.test`); } catch {}
+    try { adb(device, "uninstall", metadata.applicationId); } catch {}
 
     // 14. Restore animations
     restoreAnimations(device, animOriginals);
@@ -223,10 +226,18 @@ function findAppModule(prototypePath) {
 }
 
 /**
- * Parse packageName (namespace) and launcher Activity from the module.
+ * Parse metadata from the module. Returns:
+ *   - packageName: namespace (Kotlin package for source files)
+ *   - applicationId: runtime install identity (defaults to namespace if absent)
+ *   - mainActivityClass / mainActivitySimpleName: launcher activity
+ *
+ * Note: `namespace` and `applicationId` are often the same but can diverge.
+ * `namespace` is for code paths (imports, src dirs, generated test source).
+ * `applicationId` is what the OS sees: `pm install`, `/sdcard/Android/data/<appId>/`,
+ * and the instrumentation target `<appId>.test/<runner>`.
  */
 function extractProjectMetadata(appModule) {
-  // 1. Parse namespace from build.gradle(.kts)
+  // 1. Parse namespace + applicationId from build.gradle(.kts)
   const gradleKts = path.join(appModule.dir, "build.gradle.kts");
   const gradleGroovy = path.join(appModule.dir, "build.gradle");
   const gradlePath = fs.existsSync(gradleKts) ? gradleKts : gradleGroovy;
@@ -236,6 +247,8 @@ function extractProjectMetadata(appModule) {
     throw new Error(`Could not find 'namespace' in ${gradlePath}`);
   }
   const packageName = nsMatch[1];
+  const appIdMatch = gradleSrc.match(/applicationId\s*=\s*["']([^"']+)["']/);
+  const applicationId = appIdMatch ? appIdMatch[1] : packageName;
 
   // 2. Find MAIN activity in AndroidManifest.xml
   const manifestPath = path.join(appModule.dir, "src/main/AndroidManifest.xml");
@@ -258,6 +271,7 @@ function extractProjectMetadata(appModule) {
   }
 
   // Resolve relative class name: ".MainActivity" → "<pkg>.MainActivity"
+  // Activity classes live under the namespace (not applicationId).
   const mainActivityClass = mainActivityRaw.startsWith(".")
     ? packageName + mainActivityRaw
     : mainActivityRaw.includes(".")
@@ -266,7 +280,7 @@ function extractProjectMetadata(appModule) {
 
   const mainActivitySimpleName = mainActivityClass.split(".").pop();
 
-  return { packageName, mainActivityClass, mainActivitySimpleName };
+  return { packageName, applicationId, mainActivityClass, mainActivitySimpleName };
 }
 
 function getGradlewName() {
@@ -291,27 +305,26 @@ function findApk(appModule, buildType, { test }) {
 
 function findDevice() {
   const requested = process.env.ANDROID_SERIAL;
-  let listing;
-  try {
-    listing = execSync("adb devices", { encoding: "utf-8", timeout: 10_000 });
-  } catch (err) {
-    throw new Error(`adb devices failed: ${err.message}`);
-  }
-  const devices = listing
-    .split("\n")
-    .slice(1) // skip header line
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("*"))
-    .map((l) => {
-      const [serial, state] = l.split(/\s+/);
-      return { serial, state };
-    })
-    .filter((d) => d.state === "device");
+  let devices = listAttachedDevices();
 
   if (devices.length === 0) {
-    throw new Error(
-      "No Android device attached. Boot an emulator or plug in a device and try again.",
-    );
+    if (requested) {
+      throw new Error(
+        `ANDROID_SERIAL=${requested} requested but no devices are attached.`,
+      );
+    }
+    const booted = bootEmulator();
+    if (!booted) {
+      throw new Error(
+        "No Android device attached and no AVDs available. Boot an emulator or plug in a device and try again.",
+      );
+    }
+    devices = listAttachedDevices();
+    if (devices.length === 0) {
+      throw new Error(
+        "Started an emulator but it never appeared in `adb devices`. Boot one manually and retry.",
+      );
+    }
   }
 
   if (requested) {
@@ -327,6 +340,89 @@ function findDevice() {
   return devices[0].serial;
 }
 
+function listAttachedDevices() {
+  let listing;
+  try {
+    listing = execSync("adb devices", { encoding: "utf-8", timeout: 10_000 });
+  } catch (err) {
+    throw new Error(`adb devices failed: ${err.message}`);
+  }
+  return listing
+    .split("\n")
+    .slice(1) // skip header line
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("*"))
+    .map((l) => {
+      const [serial, state] = l.split(/\s+/);
+      return { serial, state };
+    })
+    .filter((d) => d.state === "device");
+}
+
+function findEmulatorBinary() {
+  const sdk = resolveAndroidSdk();
+  if (!sdk) return null;
+  const bin = path.join(sdk, "emulator", "emulator");
+  return fs.existsSync(bin) ? bin : null;
+}
+
+function pickAvd(emulatorBin) {
+  const out = execSync(`"${emulatorBin}" -list-avds`, { encoding: "utf-8", timeout: 10_000 });
+  const avds = out.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (avds.length === 0) return null;
+  const preferred = process.env.ANDROID_AVD;
+  if (preferred && avds.includes(preferred)) return preferred;
+  if (avds.includes("Pixel_9")) return "Pixel_9";
+  return avds[0];
+}
+
+function bootEmulator() {
+  const emulatorBin = findEmulatorBinary();
+  if (!emulatorBin) {
+    console.log("   ⚠️  Android SDK emulator binary not found (checked ANDROID_HOME, ANDROID_SDK_ROOT, ~/Library/Android/sdk).");
+    return false;
+  }
+  const avd = pickAvd(emulatorBin);
+  if (!avd) {
+    console.log("   ⚠️  No AVDs configured. Create one in Android Studio first.");
+    return false;
+  }
+  console.log(`   No device attached — booting AVD: ${avd}`);
+  const { spawn } = require("child_process");
+  const proc = spawn(emulatorBin, ["-avd", avd, "-no-snapshot-save"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  proc.unref();
+
+  // Wait for the device to register with adb.
+  try {
+    execSync("adb wait-for-device", { timeout: 180_000, stdio: "ignore" });
+  } catch (err) {
+    console.log(`   ⚠️  adb wait-for-device timed out: ${err.message}`);
+    return false;
+  }
+
+  // Wait for boot completion (sys.boot_completed=1). Polls up to ~3 minutes.
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = execSync("adb shell getprop sys.boot_completed", {
+        encoding: "utf-8", timeout: 5_000,
+      }).trim();
+      if (res === "1") {
+        console.log(`   Emulator ${avd} ready.`);
+        return true;
+      }
+    } catch {
+      // device not ready yet
+    }
+    execSync("sleep 2");
+  }
+  console.log("   ⚠️  Emulator booted but sys.boot_completed never became 1.");
+  return false;
+}
+
 function adb(device, ...args) {
   const result = spawnSync("adb", ["-s", device, ...args], { encoding: "utf-8", timeout: 120_000 });
   if (result.status !== 0) {
@@ -340,14 +436,18 @@ function adbShell(device, shellCmd) {
   return adb(device, "shell", shellCmd);
 }
 
-function runInstrumentation(device, packageName) {
+function runInstrumentation(device, applicationId, namespace) {
+  // The test class FQN uses the namespace (that's the package declaration in the
+  // generated Kotlin source). The instrumentation target uses the applicationId
+  // (that's the installed test APK's package, which is `<applicationId>.test`).
+  const testClass = namespace || applicationId;
   const result = spawnSync(
     "adb",
     [
       "-s", device,
       "shell", "am", "instrument", "-w",
-      "-e", "class", `${packageName}.FlowMapCapture`,
-      `${packageName}.test/androidx.test.runner.AndroidJUnitRunner`,
+      "-e", "class", `${testClass}.FlowMapCapture`,
+      `${applicationId}.test/androidx.test.runner.AndroidJUnitRunner`,
     ],
     { encoding: "utf-8", timeout: 1_200_000 },
   );
@@ -393,13 +493,18 @@ function restoreAnimations(device, originals) {
 // ---------------------------------------------------------------------------
 
 function envWithJavaHome() {
+  const env = { ...process.env };
   const javaHome = resolveJavaHome();
-  if (!javaHome) return { ...process.env };
-  return {
-    ...process.env,
-    JAVA_HOME: javaHome,
-    PATH: `${javaHome}/bin:${process.env.PATH || ""}`,
-  };
+  if (javaHome) {
+    env.JAVA_HOME = javaHome;
+    env.PATH = `${javaHome}/bin:${process.env.PATH || ""}`;
+  }
+  const sdk = resolveAndroidSdk();
+  if (sdk) {
+    env.ANDROID_HOME = sdk;
+    env.ANDROID_SDK_ROOT = sdk;
+  }
+  return env;
 }
 
 function resolveJavaHome() {
@@ -411,6 +516,18 @@ function resolveJavaHome() {
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+function resolveAndroidSdk() {
+  const candidates = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    path.join(require("os").homedir(), "Library/Android/sdk"),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, "platform-tools"))) return c;
   }
   return null;
 }
