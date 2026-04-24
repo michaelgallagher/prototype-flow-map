@@ -98,134 +98,161 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
 
   const browser = await chromium.launch();
 
-  try {
-    for (const [origin, seedSet] of seedsByOrigin) {
-      if (totalPagesCrawled >= maxPages) break;
+  // Per-origin working state. We visit seeds across all origins first (so no
+  // single origin can starve the rest of their subgraph roots), then
+  // round-robin BFS expansion until `maxPages` is exhausted. This prevents a
+  // single wide-branching seed (e.g. www.nhs.uk) from eating the global
+  // budget before other origins are touched.
+  const originState = new Map(); // origin -> { context, visited, queue }
 
+  async function ensureContext(origin) {
+    let state = originState.get(origin);
+    if (!state) {
       const context = await browser.newContext({
         viewport: viewport || { width: 375, height: 812 },
         deviceScaleFactor: 2,
       });
-      const visited = new Set(); // canonical URLs visited on this origin
-      const queue = [];
+      state = { context, visited: new Set(), queue: [] };
+      originState.set(origin, state);
+    }
+    return state;
+  }
 
-      for (const seed of seedSet) {
-        queue.push({ canonical: seed, depth: 0, isSeed: true });
+  async function visitOne(origin, state, task) {
+    const { canonical, depth, isSeed } = task;
+    if (state.visited.has(canonical)) return;
+    state.visited.add(canonical);
+
+    const urlPath = canonicalPathFor(canonical);
+    const nodeId = canonical;
+    let node = nodeById.get(nodeId);
+    if (!node) {
+      node = {
+        id: nodeId,
+        label: labelFor(canonical),
+        urlPath,
+        origin,
+        type: "web-page",
+        hub: null,
+        filePath: null,
+        screenshot: null,
+      };
+      if (isSeed) node.subgraphRoot = true;
+      nodes.push(node);
+      nodeById.set(nodeId, node);
+    } else if (isSeed) {
+      node.subgraphRoot = true;
+    }
+
+    const page = await state.context.newPage();
+    try {
+      const response = await page.goto(canonical, {
+        waitUntil: "domcontentloaded",
+        timeout: timeoutMs,
+      });
+      await Promise.race([
+        page.waitForLoadState("networkidle").catch(() => {}),
+        page.waitForTimeout(2000),
+      ]);
+
+      if (response && !response.ok()) {
+        node.error = `HTTP ${response.status()}`;
       }
+
+      stats.pagesVisited += 1;
+      totalPagesCrawled += 1;
+      if (isSeed) stats.seedsCrawled += 1;
 
       try {
-        while (queue.length > 0) {
-          if (totalPagesCrawled >= maxPages) break;
-          const { canonical, depth, isSeed } = queue.shift();
-          if (visited.has(canonical)) continue;
-          visited.add(canonical);
+        const title = (await page.title())?.trim();
+        if (title) node.label = title.slice(0, 80);
+      } catch {
+        /* ignore */
+      }
 
-          const page = await context.newPage();
-          const urlPath = canonicalPathFor(canonical);
-          const nodeId = canonical;
-          let node = nodeById.get(nodeId);
-          if (!node) {
-            node = {
-              id: nodeId,
-              label: labelFor(canonical),
-              urlPath,
-              origin,
-              type: "web-page",
-              hub: null,
-              filePath: null,
-              screenshot: null,
-            };
-            if (isSeed) node.subgraphRoot = true;
-            nodes.push(node);
-            nodeById.set(nodeId, node);
-          } else if (isSeed) {
-            node.subgraphRoot = true;
-          }
+      if (screenshotsDir) {
+        try {
+          const filename = webScreenshotName(canonical);
+          const outPath = path.join(screenshotsDir, filename);
+          await dismissOverlays(page);
+          await page.screenshot({ path: outPath, fullPage: true });
+          node.screenshot = `screenshots/web/${filename}`;
+        } catch (shotErr) {
+          node.screenshotError = shotErr.message;
+        }
+      }
 
-          try {
-            const response = await page.goto(canonical, {
-              waitUntil: "domcontentloaded",
-              timeout: timeoutMs,
-            });
-            await Promise.race([
-              page.waitForLoadState("networkidle").catch(() => {}),
-              page.waitForTimeout(2000),
-            ]);
-
-            if (response && !response.ok()) {
-              node.error = `HTTP ${response.status()}`;
-            }
-
-            stats.pagesVisited += 1;
-            totalPagesCrawled += 1;
-            if (isSeed) stats.seedsCrawled += 1;
-
-            // Give the page a title if we can
+      if (depth < maxDepth) {
+        const { links } = await extractRuntimeLinks(page, urlPath, origin);
+        for (const link of links) {
+          if (link.kind !== "anchor") continue;
+          const childUrl = origin + link.target;
+          const childCanonical = canonicalizeAbsolute(childUrl);
+          if (!childCanonical) continue;
+          if (sameOriginOnly) {
             try {
-              const title = (await page.title())?.trim();
-              if (title) node.label = title.slice(0, 80);
+              if (new URL(childCanonical).origin !== origin) continue;
             } catch {
-              /* ignore */
+              continue;
             }
-
-            if (screenshotsDir) {
-              try {
-                const filename = webScreenshotName(canonical);
-                const outPath = path.join(screenshotsDir, filename);
-                await dismissOverlays(page);
-                await page.screenshot({ path: outPath, fullPage: true });
-                node.screenshot = `screenshots/web/${filename}`;
-              } catch (shotErr) {
-                // Screenshot failures don't fail the whole crawl.
-                node.screenshotError = shotErr.message;
-              }
-            }
-
-            // Follow same-origin <a href> links only, up to maxDepth.
-            if (depth < maxDepth) {
-              const { links } = await extractRuntimeLinks(
-                page,
-                urlPath,
-                origin,
-              );
-              for (const link of links) {
-                if (link.kind !== "anchor") continue;
-                const childUrl = origin + link.target;
-                const childCanonical = canonicalizeAbsolute(childUrl);
-                if (!childCanonical) continue;
-                if (sameOriginOnly) {
-                  try {
-                    if (new URL(childCanonical).origin !== origin) continue;
-                  } catch {
-                    continue;
-                  }
-                }
-                addEdge(edges, edgeKeys, {
-                  source: canonical,
-                  target: childCanonical,
-                  type: "link",
-                });
-                if (!visited.has(childCanonical)) {
-                  queue.push({
-                    canonical: childCanonical,
-                    depth: depth + 1,
-                    isSeed: false,
-                  });
-                }
-              }
-            }
-          } catch (err) {
-            stats.pagesFailed += 1;
-            node.error = err.message || String(err);
-          } finally {
-            await page.close().catch(() => {});
+          }
+          addEdge(edges, edgeKeys, {
+            source: canonical,
+            target: childCanonical,
+            type: "link",
+          });
+          if (!state.visited.has(childCanonical)) {
+            state.queue.push({
+              canonical: childCanonical,
+              depth: depth + 1,
+              isSeed: false,
+            });
           }
         }
-      } finally {
-        await context.close().catch(() => {});
       }
+    } catch (err) {
+      stats.pagesFailed += 1;
+      node.error = err.message || String(err);
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+
+  try {
+    // Phase 1: visit every seed across every origin, so each allowed
+    // jump-off gets its root node + screenshot even under tight budgets.
+    for (const [origin, seedSet] of seedsByOrigin) {
+      for (const seed of seedSet) {
+        if (totalPagesCrawled >= maxPages) break;
+        const state = await ensureContext(origin);
+        await visitOne(origin, state, {
+          canonical: seed,
+          depth: 0,
+          isSeed: true,
+        });
+      }
+      if (totalPagesCrawled >= maxPages) break;
+    }
+
+    // Phase 2: round-robin BFS expansion across origin queues. Each pass
+    // pops one task from each non-empty origin queue, ensuring no origin
+    // monopolises the remaining budget.
+    while (totalPagesCrawled < maxPages) {
+      let progressed = false;
+      for (const [origin, state] of originState) {
+        if (totalPagesCrawled >= maxPages) break;
+        if (state.queue.length === 0) continue;
+        const task = state.queue.shift();
+        if (state.visited.has(task.canonical)) continue;
+        await visitOne(origin, state, task);
+        progressed = true;
+      }
+      if (!progressed) break;
     }
   } finally {
+    for (const { context } of originState.values()) {
+      await context.close().catch(() => {});
+    }
     await browser.close().catch(() => {});
   }
 

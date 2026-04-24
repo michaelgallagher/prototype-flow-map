@@ -278,6 +278,12 @@ body {
 .node-rect--screen    { fill: #1a3545; stroke: #2a7a9f; }
 .node-rect--web-view  { fill: #1a3f22; stroke: #2a8f40; }
 .node-rect--external  { fill: #3a3520; stroke: #8f7a30; }
+/* Web jump-off pages — discovered by the web crawler and spliced into
+   native maps. Upgraded jump-off roots (native screens that hand off to a
+   web prototype) get a slightly heavier stroke to stand out as the bridge
+   between native and web regions. */
+.node-rect--web-page          { fill: #1e3548; stroke: #6b9fd4; stroke-dasharray: 4,2; }
+.node-rect--web-page.subgraph-root { stroke-width: 2.2; stroke-dasharray: none; }
 
 .node-label {
   fill: #ffffff;
@@ -779,12 +785,22 @@ function generateViewerJs() {
 
       if (hasOwners) {
         // Group nodes by (owner, rank).
+        // Nodes without a layoutRank get placed in a catch-all "overflow"
+        // column at the end of the canvas — previously they were silently
+        // skipped, which hid any BFS-discovered web-page children whose
+        // layout metadata the splice failed to populate. The overflow column
+        // ensures those nodes are still visible so the bug is loud, not
+        // silent.
         const columnsByOwner = {};
+        const overflowIds = [];
         filteredNodes.forEach(n => {
           if (!layoutNodes[n.id]) return;
-          const owner = n.subgraphOwner || n.id;
           const rank = nodeRank[n.id];
-          if (rank === undefined) return;
+          if (rank === undefined) {
+            overflowIds.push(n.id);
+            return;
+          }
+          const owner = n.subgraphOwner || n.id;
           if (!columnsByOwner[owner]) {
             const ownerNode = filteredNodes.find(x => x.id === owner);
             columnsByOwner[owner] = {
@@ -796,6 +812,9 @@ function generateViewerJs() {
           if (!columnsByOwner[owner].rankIds[rank]) columnsByOwner[owner].rankIds[rank] = [];
           columnsByOwner[owner].rankIds[rank].push(n.id);
         });
+        if (overflowIds.length > 0 && typeof console !== 'undefined') {
+          console.warn('[flow-map] ' + overflowIds.length + ' node(s) lack layoutRank/subgraphOwner and were placed in an overflow column:', overflowIds.slice(0, 5));
+        }
 
         const columns = Object.values(columnsByOwner).sort((a, b) => a.order - b.order);
 
@@ -826,6 +845,21 @@ function generateViewerJs() {
 
           currentLeft += colWidth + COLUMN_GAP;
         });
+
+        // Overflow column: pack unranked nodes into a rightmost column so
+        // they stay visible. They keep whatever Y dagre assigned, so if a
+        // handful slip through they still don't stack on top of each other.
+        if (overflowIds.length > 0) {
+          const colWidth = Math.max(
+            ...overflowIds.map(id => layoutNodes[id].width),
+            NODE_WIDTH,
+          );
+          const colCenterX = currentLeft + colWidth / 2;
+          overflowIds.forEach(id => {
+            const n = layoutNodes[id];
+            n.x = colCenterX;
+          });
+        }
       } else {
         const rowWidths = {};
         sortedRanks.forEach(rank => {
@@ -1125,6 +1159,7 @@ function generateViewerJs() {
       rect.setAttribute('height', node.height);
       let rectClass = 'node-rect node-rect--' + (node.type || 'content');
       if (node.isStartNode) rectClass += ' node-rect--start-node';
+      if (node.subgraphRoot) rectClass += ' subgraph-root';
       rect.setAttribute('class', rectClass);
       rect.dataset.nodeId = node.id;
       group.appendChild(rect);

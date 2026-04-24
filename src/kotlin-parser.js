@@ -29,6 +29,15 @@ function parseKotlinProject(kotlinFiles, projectPath) {
   // Getter function name → return class (e.g. "getTrustedPerson" → "TrustedAccessPerson").
   const getterReturnType = new Map();
 
+  // URL bindings harvested from WebFlowConfig-style constructors anywhere in
+  // the project. Screens that refer to these bindings by name (e.g.
+  // `activeWebFlow = PrescriptionWebFlow.RepeatPrescription`) then get the
+  // underlying URL attributed as an external link.
+  //
+  // Keyed on both bare property name (`RepeatPrescription`) and
+  // object-qualified name (`PrescriptionWebFlow.RepeatPrescription`).
+  const urlBindings = new Map();
+
   for (const filePath of kotlinFiles) {
     const content = fs.readFileSync(filePath, "utf-8");
     const stripped = stripKotlinComments(content);
@@ -39,6 +48,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     extractInlineNavItems(stripped, bottomNavItems, routeConstants);
     extractSeedIds(stripped, seedIdsByClass);
     extractGetterReturnTypes(stripped, getterReturnType);
+    extractUrlBindings(stripped, urlBindings);
   }
 
   // Pass 2: parse NavHost composable() registrations and screen navigate() calls
@@ -59,7 +69,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     extractNavHostNavigations(stripped, filePath, relativePath, routeConstants, routeHelpers, navHostEntries, screensByRoute);
 
     // Extract openTab() calls
-    extractExternalLinks(stripped, filePath, relativePath, screensByRoute);
+    extractExternalLinks(stripped, filePath, relativePath, screensByRoute, urlBindings);
   }
 
   // Pass 3: merge NavHost entries with screen data
@@ -931,17 +941,123 @@ function extractFirstArg(raw) {
 }
 
 /**
+ * Harvest WebFlowConfig-style URL bindings from a single file.
+ *
+ * Matches declarations of the form:
+ *   val NAME = SomeCtor(
+ *     url = "https://..."               — literal URL
+ *     url = "$BASE_URL/path"            — string-interpolated URL using a
+ *                                          file-local `const val BASE_URL = "..."`
+ *     title = "Some label"              — optional display label
+ *     ...                               — other args ignored
+ *   )
+ *
+ * The constructor name is intentionally open — any call whose argument list
+ * contains a literal `url = "..."` counts. That covers `WebFlowConfig(...)`,
+ * `InAppBrowser(...)`, and any sibling patterns downstream prototypes might
+ * invent without needing a hardcoded type name.
+ *
+ * Resolves Kotlin string interpolation against file-local `const val`
+ * string constants so that `"$BASE_URL/foo"` gives back the full URL.
+ *
+ * Writes both the bare and object-qualified forms into `bindings`:
+ *   "RepeatPrescription" → { url, label }
+ *   "PrescriptionWebFlow.RepeatPrescription" → { url, label }
+ * so downstream lookup handles both `.X` and qualified `.Obj.X` references.
+ */
+function extractUrlBindings(content, bindings) {
+  // File-local string constants (supports `const val`, `private const val`,
+  // etc.; optional `: String` type annotation).
+  const stringConstants = new Map();
+  const constRe =
+    /\b(?:public\s+|private\s+|internal\s+|protected\s+)?(?:const\s+)?val\s+(\w+)\s*(?::\s*String)?\s*=\s*"((?:[^"\\]|\\.)*)"/g;
+  let cmatch;
+  while ((cmatch = constRe.exec(content)) !== null) {
+    stringConstants.set(cmatch[1], cmatch[2]);
+  }
+
+  // Track `object Name { ... }` brace-spans so we can qualify bindings.
+  const objectBlocks = [];
+  const objRe = /\bobject\s+(\w+)\s*\{/g;
+  let omatch;
+  while ((omatch = objRe.exec(content)) !== null) {
+    const openBrace = content.indexOf("{", omatch.index);
+    if (openBrace === -1) continue;
+    const closure = findClosureAt(content, openBrace);
+    if (!closure) continue;
+    objectBlocks.push({
+      name: omatch[1],
+      start: openBrace,
+      end: closure.end,
+    });
+  }
+
+  // Find `val Name = SomeCtor(` and capture the argument block.
+  const valRe = /\bval\s+(\w+)\s*=\s*(\w+)\s*\(/g;
+  let vmatch;
+  while ((vmatch = valRe.exec(content)) !== null) {
+    const name = vmatch[1];
+    const openParen = content.indexOf("(", vmatch.index + vmatch[0].length - 1);
+    const closeParen = findMatchingParen(content, openParen);
+    if (closeParen === -1) continue;
+    const argsBlock = content.slice(openParen + 1, closeParen);
+
+    // Extract `url = "..."` — only the first occurrence.
+    const urlMatch = /\burl\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(argsBlock);
+    if (!urlMatch) continue;
+
+    let url = urlMatch[1];
+    // Resolve `$CONST` and `${CONST}` interpolations using file-local constants.
+    url = url.replace(/\$\{(\w+)\}/g, (m, key) =>
+      stringConstants.has(key) ? stringConstants.get(key) : m,
+    );
+    url = url.replace(/\$(\w+)/g, (m, key) =>
+      stringConstants.has(key) ? stringConstants.get(key) : m,
+    );
+
+    if (!/^https?:\/\//i.test(url)) continue;
+
+    // Optional label from a sibling `title = "..."` argument.
+    const titleMatch = /\btitle\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(argsBlock);
+    const label = titleMatch ? titleMatch[1] : null;
+
+    const entry = { url, label };
+
+    // Qualify via the nearest enclosing `object Name { ... }`, if any.
+    const enclosing = objectBlocks.find(
+      (b) => vmatch.index > b.start && vmatch.index < b.end,
+    );
+    if (enclosing) {
+      bindings.set(`${enclosing.name}.${name}`, entry);
+    }
+    // Bare form — only set if not already claimed by a different qualified
+    // owner, otherwise later files' bindings can stomp earlier ones. When
+    // multiple objects define the same bare name, the qualified form is the
+    // safe way to disambiguate in downstream lookups.
+    if (!bindings.has(name)) {
+      bindings.set(name, entry);
+    }
+  }
+}
+
+/**
  * Extract external / web-handoff URLs from screen files. Recognizes:
  *   openTab(context, "https://...")                     — Chrome Custom Tabs helper
  *   InAppBrowser(url = "https://...", ...)              — embedded WebView composable
  *   InAppBrowser("https://...", ...)                    — positional variant
  *   CustomTabsIntent.Builder()...launchUrl(ctx, Uri.parse("https://..."))
  *
- * InAppBrowser calls where `url = config.url` / `url = activeWebFlow!!.url` are
- * indirected via a runtime object and can't be resolved statically — those are
- * skipped (caught by a follow-up scenario-style driver if needed).
+ * Also resolves indirections through a cross-file URL-binding map:
+ *   activeWebFlow = PrescriptionWebFlow.RepeatPrescription
+ *   activeWebFlow = RepeatPrescription
+ *   InAppBrowser(url = SomeConfig.url, ...)  (via the `X = Y` assignment if
+ *                                              `Y` was previously declared
+ *                                              as a WebFlowConfig-style binding)
+ *
+ * Pure runtime indirection that can't be name-matched (e.g. `url = param.url`
+ * where `param` is a function argument) is still skipped.
  */
-function extractExternalLinks(content, filePath, relativePath, screensByRoute) {
+function extractExternalLinks(content, filePath, relativePath, screensByRoute, urlBindings) {
   const funRe = /\bfun\s+([A-Z][A-Za-z0-9]+)\s*\(/g;
   let funMatch;
   while ((funMatch = funRe.exec(content)) !== null) {
@@ -982,6 +1098,28 @@ function extractExternalLinks(content, filePath, relativePath, screensByRoute) {
     let ctiMatch;
     while ((ctiMatch = ctiRe.exec(body.content)) !== null) {
       pushUnique({ url: ctiMatch[1], label: null });
+    }
+
+    // Resolve indirected assignments against the project-wide URL bindings
+    // harvested in pass 1. Covers patterns like:
+    //   activeWebFlow = PrescriptionWebFlow.RepeatPrescription
+    //   activeCover   = .repeatPrescription      (iOS-ish; ignored here)
+    // We look for any assignment of an identifier or dotted ref to a state
+    // variable, then consult the bindings map. Try qualified first so the
+    // object-qualified form wins when both exist.
+    if (urlBindings && urlBindings.size > 0) {
+      const assignRe =
+        /\b(?:\w+)\s*=\s*((?:[A-Z]\w*\.)?[A-Za-z]\w*)\b/g;
+      let amatch;
+      const seenRefs = new Set();
+      while ((amatch = assignRe.exec(body.content)) !== null) {
+        const ref = amatch[1];
+        if (seenRefs.has(ref)) continue;
+        seenRefs.add(ref);
+        const binding = urlBindings.get(ref);
+        if (!binding) continue;
+        pushUnique({ url: binding.url, label: binding.label });
+      }
     }
 
     if (externalLinks.length > 0) {
