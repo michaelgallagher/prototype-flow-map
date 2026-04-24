@@ -21,6 +21,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
   const routeHelpers = new Map();  // "familyCarerCaredForDetailRoute" → "familyCarer/caredFor/{param}"
   const bottomNavItems = []; // [{ route, label, routeRef }]
   const navHostEntries = []; // [{ route, composableName, filePath, isModal }]
+  const startDestinations = []; // canonical route strings from NavHost(startDestination = ...)
 
   for (const filePath of kotlinFiles) {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -29,6 +30,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     extractRouteConstants(stripped, routeConstants);
     extractRouteHelpers(stripped, routeHelpers);
     extractBottomNavItems(stripped, bottomNavItems, routeConstants);
+    extractInlineNavItems(stripped, bottomNavItems, routeConstants);
   }
 
   // Pass 2: parse NavHost composable() registrations and screen navigate() calls
@@ -39,8 +41,8 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     const stripped = stripKotlinComments(content);
     const relativePath = path.relative(projectPath, filePath);
 
-    // Extract NavHost composable() registrations
-    extractNavHostEntries(stripped, navHostEntries, routeConstants, filePath);
+    // Extract NavHost composable() registrations + startDestination
+    extractNavHostEntries(stripped, navHostEntries, routeConstants, filePath, startDestinations);
 
     // Extract navController.navigate() calls from screen files
     extractNavigations(stripped, filePath, relativePath, routeConstants, routeHelpers, screensByRoute);
@@ -73,18 +75,35 @@ function parseKotlinProject(kotlinFiles, projectPath) {
       externalLinks: screen.externalLinks || [],
       bottomNavItems: [],
       isModal: entry.isModal || false,
+      isStartDestination: false,
     });
   }
 
-  // Attach bottom nav items to the screen that hosts the NavHost (or first result)
+  // Mark the NavHost startDestination (first one parsed wins if multiple)
+  const canonicalStart = startDestinations.length > 0
+    ? canonicalizeRoute(startDestinations[0])
+    : null;
+  if (canonicalStart) {
+    const startScreen = results.find((r) => r.route === canonicalStart);
+    if (startScreen) startScreen.isStartDestination = true;
+  }
+
+  // Attach bottom nav items to the startDestination screen (falls back to first result)
+  // Dedupe by canonical route in case the same tab was picked up by multiple detectors.
   if (bottomNavItems.length > 0 && results.length > 0) {
-    // Find the NavHost host screen or use the start destination
-    const startRoute = navHostEntries.length > 0 ? canonicalizeRoute(navHostEntries[0].route) : null;
-    const hostScreen = results.find((r) => r.route === startRoute) || results[0];
-    hostScreen.bottomNavItems = bottomNavItems.map((item) => ({
-      route: resolveRouteRef(item.routeRef, routeConstants) || item.route,
-      label: item.label,
-    }));
+    const hostScreen =
+      (canonicalStart && results.find((r) => r.route === canonicalStart)) ||
+      results[0];
+    const seen = new Set();
+    const deduped = [];
+    for (const item of bottomNavItems) {
+      const resolved = resolveRouteRef(item.routeRef, routeConstants) || item.route;
+      const canon = canonicalizeRoute(resolved);
+      if (seen.has(canon)) continue;
+      seen.add(canon);
+      deduped.push({ route: resolved, label: item.label });
+    }
+    hostScreen.bottomNavItems = deduped;
   }
 
   return results;
@@ -386,15 +405,86 @@ function extractBottomNavItems(content, bottomNavItems, routeConstants) {
 }
 
 /**
+ * Extract bottom-nav entries from inline NavItem(...) list patterns, e.g.:
+ *   listOf(
+ *     NavItem("Home", "home", Icons.Default.Home, ...),
+ *     NavItem("Messages", "messages", ...),
+ *   )
+ * Accepts both positional (label, route) and named (label = "...", route = "...") forms.
+ * Silently ignores NavItem calls where label/route aren't string literals.
+ */
+function extractInlineNavItems(content, bottomNavItems, routeConstants) {
+  // Capture only if preceded by `listOf(` or `,\s*` within a few hundred chars —
+  // cheap guard against unrelated `NavItem` types that aren't bottom-nav lists.
+  // In practice this prototype's shape is `listOf(NavItem(...), NavItem(...), ...)`.
+  const navItemRe = /\bNavItem\s*\(/g;
+  const seenRoutes = new Set(bottomNavItems.map((i) => i.route));
+  let match;
+  while ((match = navItemRe.exec(content)) !== null) {
+    const closeParenIdx = findMatchingParen(content, match.index + match[0].length - 1);
+    if (closeParenIdx === -1) continue;
+    const args = content.slice(match.index + match[0].length, closeParenIdx);
+
+    // Named args take precedence.
+    const namedLabel = args.match(/\blabel\s*=\s*"([^"]+)"/);
+    const namedRoute = args.match(/\broute\s*=\s*(Routes\.\w+|"([^"]+)")/);
+
+    let label = namedLabel ? namedLabel[1] : null;
+    let routeRaw = null;
+    if (namedRoute) {
+      routeRaw = namedRoute[1];
+    } else {
+      // Positional: first two string literals are label, route.
+      const strings = [...args.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      if (strings.length >= 2) {
+        label = label || strings[0];
+        routeRaw = `"${strings[1]}"`;
+      }
+    }
+    if (!routeRaw || !label) continue;
+
+    const isRoutesRef = routeRaw.startsWith("Routes.");
+    const resolvedRoute = isRoutesRef
+      ? resolveRouteRef(routeRaw, routeConstants) || routeRaw.replace("Routes.", "")
+      : routeRaw.replace(/^"|"$/g, "");
+
+    if (seenRoutes.has(resolvedRoute)) continue;
+    seenRoutes.add(resolvedRoute);
+
+    bottomNavItems.push({
+      route: resolvedRoute,
+      label,
+      routeRef: isRoutesRef ? routeRaw : null,
+    });
+  }
+}
+
+/**
  * Extract composable() route registrations from NavHost blocks.
  */
-function extractNavHostEntries(content, navHostEntries, routeConstants, filePath) {
+function extractNavHostEntries(content, navHostEntries, routeConstants, filePath, startDestinations) {
   // Find NavHost blocks
   const navHostRe = /\bNavHost\s*\(/g;
   let match;
   while ((match = navHostRe.exec(content)) !== null) {
     const closeParenIdx = findMatchingParen(content, match.index + match[0].length - 1);
     if (closeParenIdx === -1) continue;
+
+    // Capture startDestination from NavHost args (positional or named).
+    // Example shapes: NavHost(navController, startDestination = "home") { ... }
+    //                 NavHost(startDestination = Routes.home, ...) { ... }
+    if (startDestinations) {
+      const navHostArgs = content.slice(match.index + match[0].length - 1, closeParenIdx + 1);
+      const startDestMatch = navHostArgs.match(/\bstartDestination\s*=\s*(Routes\.\w+|"([^"]+)"|[A-Z][A-Za-z0-9]+)/);
+      if (startDestMatch) {
+        const raw = startDestMatch[1];
+        let resolved = null;
+        if (raw.startsWith('"')) resolved = raw.slice(1, -1);
+        else if (raw.startsWith("Routes.")) resolved = resolveRouteRef(raw, routeConstants) || raw.replace("Routes.", "");
+        else resolved = routeConstants.get(raw) || null;
+        if (resolved) startDestinations.push(resolved);
+      }
+    }
 
     // The NavHost body might be inside the paren args (builder = { }) or after
     // Look for composable() calls in a reasonable range after the NavHost

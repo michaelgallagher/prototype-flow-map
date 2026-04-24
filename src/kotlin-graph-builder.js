@@ -197,26 +197,59 @@ function findBackEdges(edges, nodeIds) {
 }
 
 /**
- * Assign layoutRank to each node via BFS from root nodes.
- * Tab siblings share the same rank.
- * Back-edges (navigation cycles back to earlier screens) are excluded
- * so cycle entry points are correctly identified as roots.
+ * Assign layoutRank + subgraph ownership via per-owner multi-source BFS.
+ *
+ * Model: each "top-row" node (startDestination + its tab siblings) is a start
+ * node and the root of its own subgraph. Every other node is claimed by the
+ * nearest start (FIFO ties → lower startOrder wins), and its layoutRank is the
+ * distance from its owner. Orphan roots (nodes with no incoming edges that
+ * aren't reachable from any tab) each become their own start — they render as
+ * additional columns to the right of the main tab columns.
+ *
+ * Tab-sibling edges (lateral) and back-edges (navigation cycles) are excluded
+ * from the BFS so entry points aren't demoted and siblings stay co-ranked.
+ *
+ * Outputs on each node:
+ *   - layoutRank:     distance from owner (0 for starts)
+ *   - subgraphOwner:  id of the owning start
+ *   - isStartNode:    true iff the node is a start
+ *   - startOrder:     position in the left-to-right column ordering
  */
 function assignLayoutRanks(nodes, edges, parsedScreens) {
   const nodeIds = new Set(nodes.map((n) => n.id));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Build tab sibling pairs to exclude from rank computation.
-  // Only lateral sibling↔sibling pairs are excluded, NOT host→sibling edges.
-  // This ensures the host screen's direct navigate() calls to tabs still
-  // contribute to rank (e.g. home → messages should make messages rank 1).
+  // Identify the start destination + its tab siblings. These become columns.
+  const startScreen = parsedScreens.find((s) => s.isStartDestination);
+  const startRoute = startScreen ? startScreen.route : null;
+  const primaryStarts = []; // [{ id, order }]
+  if (startRoute && nodeIds.has(startRoute)) {
+    const tabItems = startScreen.bottomNavItems || [];
+    if (tabItems.length > 0) {
+      // Use tab order from the nav bar.
+      tabItems.forEach((item, idx) => {
+        const r = canonicalizeRoute(item.route);
+        if (nodeIds.has(r) && !primaryStarts.find((s) => s.id === r)) {
+          primaryStarts.push({ id: r, order: idx });
+        }
+      });
+      // Ensure startDestination is included even if not in its own nav bar
+      if (!primaryStarts.find((s) => s.id === startRoute)) {
+        primaryStarts.unshift({ id: startRoute, order: -1 });
+        primaryStarts.forEach((s, i) => (s.order = i));
+      }
+    } else {
+      primaryStarts.push({ id: startRoute, order: 0 });
+    }
+  }
+
+  // Tab-sibling pairs (all pairs within the same bottomNavItems list).
   const tabSiblingPairs = new Set();
   for (const screen of parsedScreens) {
     if (screen.bottomNavItems.length < 2) continue;
-    const host = screen.route;
     const tabRoutes = screen.bottomNavItems
       .map((item) => canonicalizeRoute(item.route))
-      .filter((r) => nodeIds.has(r) && r !== host); // exclude the host itself
+      .filter((r) => nodeIds.has(r));
     for (let i = 0; i < tabRoutes.length; i++) {
       for (let j = i + 1; j < tabRoutes.length; j++) {
         tabSiblingPairs.add(`${tabRoutes[i]}|${tabRoutes[j]}`);
@@ -225,15 +258,12 @@ function assignLayoutRanks(nodes, edges, parsedScreens) {
     }
   }
 
-  // Rank edges = non-tab-sibling edges between known nodes
   const rankEdges = edges.filter(
     (e) =>
       nodeIds.has(e.source) &&
       nodeIds.has(e.target) &&
       !tabSiblingPairs.has(`${e.source}|${e.target}`)
   );
-
-  // Detect back-edges so cycles don't inflate in-degrees of entry nodes
   const backEdges = findBackEdges(rankEdges, nodeIds);
 
   const children = new Map();
@@ -242,65 +272,86 @@ function assignLayoutRanks(nodes, edges, parsedScreens) {
     children.set(id, []);
     inDegree.set(id, 0);
   }
-
   for (const e of rankEdges) {
     if (backEdges.has(`${e.source}|${e.target}`)) continue;
     children.get(e.source).push(e.target);
     inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
   }
 
-  // Find roots (nodes with no incoming non-back, non-tab-sibling edges)
-  const roots = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) roots.push(id);
-  }
-
-  // BFS — track visited edges to prevent re-processing in remaining cycles
   const rankOf = new Map();
+  const ownerOf = new Map();
+  const startList = []; // [{ id, order, isOrphan }]
   const queue = [];
-  const visitedEdges = new Set();
+  let head = 0;
 
-  for (const r of roots) {
-    rankOf.set(r, 0);
-    queue.push(r);
+  function seedStart(id, order, isOrphan = false) {
+    rankOf.set(id, 0);
+    ownerOf.set(id, id);
+    startList.push({ id, order, isOrphan });
+    queue.push(id);
   }
 
-  let head = 0;
-  while (head < queue.length) {
-    const current = queue[head++];
-    const currentRank = rankOf.get(current);
-    for (const child of children.get(current) || []) {
-      const edgeKey = `${current}|${child}`;
-      if (visitedEdges.has(edgeKey)) continue;
-      visitedEdges.add(edgeKey);
-
-      const existingRank = rankOf.get(child);
-      const newRank = currentRank + 1;
-      if (existingRank === undefined || newRank > existingRank) {
-        rankOf.set(child, newRank);
+  function runBfs() {
+    while (head < queue.length) {
+      const current = queue[head++];
+      const currentRank = rankOf.get(current);
+      const currentOwner = ownerOf.get(current);
+      for (const child of children.get(current) || []) {
+        if (rankOf.has(child)) continue; // FIFO: first claimant (shortest, earliest start) wins
+        rankOf.set(child, currentRank + 1);
+        ownerOf.set(child, currentOwner);
         queue.push(child);
       }
     }
   }
 
-  // Force tab siblings (non-host) to share the same rank
-  for (const screen of parsedScreens) {
-    if (screen.bottomNavItems.length < 2) continue;
-    const host = screen.route;
-    const tabRoutes = screen.bottomNavItems
-      .map((item) => canonicalizeRoute(item.route))
-      .filter((r) => rankOf.has(r) && r !== host);
-    if (tabRoutes.length === 0) continue;
-    const sharedRank = Math.min(...tabRoutes.map((r) => rankOf.get(r)));
-    for (const r of tabRoutes) {
-      rankOf.set(r, sharedRank);
+  // Seed primary starts in order so ties go to earlier tab.
+  if (primaryStarts.length > 0) {
+    primaryStarts
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .forEach((s) => seedStart(s.id, s.order, false));
+    runBfs();
+  } else {
+    // No startDestination parsed — fall back to all zero-in-degree nodes.
+    let order = 0;
+    for (const [id, deg] of inDegree) {
+      if (deg === 0) seedStart(id, order++, false);
     }
+    runBfs();
   }
 
-  // Apply ranks
+  // Orphan pass: each unreached zero-in-degree node becomes its own start,
+  // getting its own column to the right of the tabs.
+  let nextOrder = startList.length;
+  for (const [id, deg] of inDegree) {
+    if (rankOf.has(id)) continue;
+    if (deg !== 0) continue;
+    seedStart(id, nextOrder++, true);
+  }
+  runBfs();
+
+  // Cycle stragglers (inside disconnected strongly-connected components with
+  // no zero-in-degree node) — each becomes its own orphan start.
+  for (const id of nodeIds) {
+    if (rankOf.has(id)) continue;
+    seedStart(id, nextOrder++, true);
+  }
+  runBfs();
+
+  // Apply outputs.
   for (const [id, rank] of rankOf) {
     const node = nodeById.get(id);
-    if (node) node.layoutRank = rank;
+    if (!node) continue;
+    node.layoutRank = rank;
+    node.subgraphOwner = ownerOf.get(id);
+  }
+  for (const s of startList) {
+    const node = nodeById.get(s.id);
+    if (!node) continue;
+    node.isStartNode = true;
+    node.startOrder = s.order;
+    if (s.isOrphan) node.isOrphanRoot = true;
   }
 }
 
