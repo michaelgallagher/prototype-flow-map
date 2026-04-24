@@ -5,6 +5,7 @@ const path = require("path");
 const { execSync } = require("child_process");
 const { generate, generateNative } = require("../src/index");
 const { isIosProject } = require("../src/swift-scanner");
+const { isAndroidProject } = require("../src/kotlin-scanner");
 const {
   loadConfig,
   listScenarios,
@@ -83,7 +84,7 @@ program
   )
   .option(
     "--platform <platform>",
-    'Project platform: "web" (default) or "ios". Auto-detected if omitted.',
+    'Project platform: "web" (default), "ios", or "android". Auto-detected if omitted.',
     "",
   )
   .option("--no-open", "Do not open the browser after generation")
@@ -194,10 +195,12 @@ program
     // Determine platform (explicit flag > auto-detect)
     let platform = (options.platform || "").toLowerCase();
     if (!platform) {
-      platform = isIosProject(resolvedPath) ? "ios" : "web";
+      if (isIosProject(resolvedPath)) platform = "ios";
+      else if (isAndroidProject(resolvedPath)) platform = "android";
+      else platform = "web";
     }
-    if (!["web", "ios"].includes(platform)) {
-      console.error(`\n❌ Error: --platform must be "web" or "ios"\n`);
+    if (!["web", "ios", "android"].includes(platform)) {
+      console.error(`\n❌ Error: --platform must be "web", "ios", or "android"\n`);
       process.exit(1);
     }
 
@@ -249,13 +252,14 @@ program
     console.log();
 
     try {
-      if (platform === "ios") {
+      if (platform === "ios" || platform === "android") {
         await generateNative({
           prototypePath: resolvedPath,
           outputDir: path.resolve(options.output),
           name: mapName,
           title: mapTitle,
           screenshots: options.screenshots,
+          platform,
         });
       } else {
         await generate({

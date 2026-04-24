@@ -769,29 +769,85 @@ function generateViewerJs() {
         currentTop += maxH + RANK_GAP;
       });
 
-      // Compute X positions: centre all rows on a common axis.
-      // Find the widest row, then centre every row on that midpoint.
-      // This produces a clean, vertically-aligned grid layout.
-      const rowWidths = {};
-      sortedRanks.forEach(rank => {
-        const ids = rankBuckets[rank];
-        rowWidths[rank] = ids.reduce((sum, id) => sum + layoutNodes[id].width, 0)
-          + HORIZ_GAP * Math.max(0, ids.length - 1);
-      });
+      // Compute X positions.
+      // When subgraph ownership is available (native-mobile pipeline), pack
+      // each subgraph into its own column: columns sit left-to-right in
+      // startOrder, each rank row centers on its column's midpoint. Otherwise
+      // fall back to the original global-centered layout.
+      const hasOwners = filteredNodes.some(n => n.subgraphOwner !== undefined);
+      const COLUMN_GAP = 60;
 
-      const maxWidth = Math.max(...Object.values(rowWidths));
-      const centerX = MARGIN_X + maxWidth / 2;
-
-      sortedRanks.forEach(rank => {
-        const ids = rankBuckets[rank];
-        const totalWidth = rowWidths[rank];
-        let currentX = centerX - totalWidth / 2;
-        ids.forEach(id => {
-          const n = layoutNodes[id];
-          n.x = currentX + n.width / 2;
-          currentX += n.width + HORIZ_GAP;
+      if (hasOwners) {
+        // Group nodes by (owner, rank).
+        const columnsByOwner = {};
+        filteredNodes.forEach(n => {
+          if (!layoutNodes[n.id]) return;
+          const owner = n.subgraphOwner || n.id;
+          const rank = nodeRank[n.id];
+          if (rank === undefined) return;
+          if (!columnsByOwner[owner]) {
+            const ownerNode = filteredNodes.find(x => x.id === owner);
+            columnsByOwner[owner] = {
+              owner,
+              order: ownerNode && ownerNode.startOrder !== undefined ? ownerNode.startOrder : Infinity,
+              rankIds: {},
+            };
+          }
+          if (!columnsByOwner[owner].rankIds[rank]) columnsByOwner[owner].rankIds[rank] = [];
+          columnsByOwner[owner].rankIds[rank].push(n.id);
         });
-      });
+
+        const columns = Object.values(columnsByOwner).sort((a, b) => a.order - b.order);
+
+        let currentLeft = MARGIN_X;
+        columns.forEach(col => {
+          const ranks = Object.keys(col.rankIds);
+          // Column width = widest rank row in this subgraph.
+          let colWidth = 0;
+          ranks.forEach(r => {
+            const ids = col.rankIds[r];
+            const rowW = ids.reduce((sum, id) => sum + layoutNodes[id].width, 0)
+              + HORIZ_GAP * Math.max(0, ids.length - 1);
+            if (rowW > colWidth) colWidth = rowW;
+          });
+          const colCenterX = currentLeft + colWidth / 2;
+
+          ranks.forEach(r => {
+            const ids = col.rankIds[r];
+            const rowWidth = ids.reduce((sum, id) => sum + layoutNodes[id].width, 0)
+              + HORIZ_GAP * Math.max(0, ids.length - 1);
+            let x = colCenterX - rowWidth / 2;
+            ids.forEach(id => {
+              const n = layoutNodes[id];
+              n.x = x + n.width / 2;
+              x += n.width + HORIZ_GAP;
+            });
+          });
+
+          currentLeft += colWidth + COLUMN_GAP;
+        });
+      } else {
+        const rowWidths = {};
+        sortedRanks.forEach(rank => {
+          const ids = rankBuckets[rank];
+          rowWidths[rank] = ids.reduce((sum, id) => sum + layoutNodes[id].width, 0)
+            + HORIZ_GAP * Math.max(0, ids.length - 1);
+        });
+
+        const maxWidth = Math.max(...Object.values(rowWidths));
+        const centerX = MARGIN_X + maxWidth / 2;
+
+        sortedRanks.forEach(rank => {
+          const ids = rankBuckets[rank];
+          const totalWidth = rowWidths[rank];
+          let currentX = centerX - totalWidth / 2;
+          ids.forEach(id => {
+            const n = layoutNodes[id];
+            n.x = currentX + n.width / 2;
+            currentX += n.width + HORIZ_GAP;
+          });
+        });
+      }
     }
 
     // Assign each node to its nearest start node's subgraph (multi-source BFS)
