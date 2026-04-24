@@ -297,4 +297,4 @@ async function dismissOverlays(page) {
   }
 }
 
-module.exports = { crawlWebJumpoffs };
+module.exports = { crawlWebJumpoffs, canonicalizeAbsolute };

@@ -30,6 +30,11 @@ const {
 } = require("./flow-map-config");
 const { runScenarios } = require("./scenario-runner");
 const { enrichScenarioGraph } = require("./static-enrichment");
+const { crawlWebJumpoffs } = require("./web-jumpoff-crawler");
+const {
+  collectSeedUrls,
+  spliceWebSubgraphs,
+} = require("./splice-web-subgraphs");
 
 async function generate(options) {
   const {
@@ -248,12 +253,23 @@ async function generate(options) {
 }
 
 async function generateNative(options) {
-  const { prototypePath, outputDir, name, title, screenshots, platform = "ios" } = options;
+  const {
+    prototypePath,
+    outputDir,
+    name,
+    title,
+    screenshots,
+    platform = "ios",
+    config: providedConfig,
+  } = options;
 
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
 
   let graph;
-  const config = loadConfig(prototypePath);
+  // Prefer the config passed down from the CLI (which already carries any
+  // --web-jumpoffs / --no-web-jumpoffs override). Fall back to loading fresh
+  // when callers invoke generateNative() programmatically without a config.
+  const config = providedConfig || loadConfig(prototypePath);
 
   if (platform === "android") {
     // Step 1: Scan for Kotlin source files
@@ -295,6 +311,44 @@ async function generateNative(options) {
   );
   if (config.exclude.length > 0) {
     console.log(`   Excluded: ${config.exclude.join(", ")}`);
+  }
+
+  // Step 3b: Crawl any hosted web prototypes that the native flow jumps out
+  // to, and splice the resulting subgraphs in. Runs before native screenshot
+  // capture so the iOS/Android crawlers never see web-page nodes.
+  if (config.webJumpoffs && config.webJumpoffs.enabled) {
+    const seeds = collectSeedUrls(graph, config.webJumpoffs.allowlist);
+    if (seeds.length === 0) {
+      console.log(
+        "3️⃣ b Web jump-offs enabled but no allowlisted URLs found in graph — skipping",
+      );
+    } else {
+      console.log(
+        `3️⃣ b Crawling ${seeds.length} web jump-off(s) (maxPages=${config.webJumpoffs.maxPages})...`,
+      );
+      const webResult = await crawlWebJumpoffs(seeds, {
+        outputDir: mapOutputDir,
+        config: config.webJumpoffs,
+        viewport: { width: 375, height: 812 },
+      });
+      const { nodesAdded, nodesUpgraded, edgesAdded } = spliceWebSubgraphs(
+        graph,
+        webResult,
+      );
+      console.log(
+        `   Added ${nodesAdded} web-page node(s), upgraded ${nodesUpgraded} native jump-off(s), added ${edgesAdded} link edge(s)`,
+      );
+      if (webResult.stats.pagesFailed > 0) {
+        console.log(
+          `   ⚠️  ${webResult.stats.pagesFailed} web page(s) failed to load`,
+        );
+      }
+      if (webResult.stats.originsSkipped.length > 0) {
+        console.log(
+          `   Skipped origins (not on allowlist): ${webResult.stats.originsSkipped.join(", ")}`,
+        );
+      }
+    }
   }
 
   // Step 4: Capture screenshots (if enabled)

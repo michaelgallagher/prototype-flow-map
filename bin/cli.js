@@ -279,6 +279,7 @@ program
           title: mapTitle,
           screenshots: options.screenshots,
           platform,
+          config,
         });
       } else {
         await generate({
