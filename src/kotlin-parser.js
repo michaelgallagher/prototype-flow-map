@@ -22,6 +22,12 @@ function parseKotlinProject(kotlinFiles, projectPath) {
   const bottomNavItems = []; // [{ route, label, routeRef }]
   const navHostEntries = []; // [{ route, composableName, filePath, isModal }]
   const startDestinations = []; // canonical route strings from NavHost(startDestination = ...)
+  // Seed-data lookup: class name → [id, id, ...] in source order, across all files.
+  // Used to supply realistic defaults for parameterized routes that read from
+  // a ViewModel collection (e.g. `getTrustedPerson("trusted-1")`).
+  const seedIdsByClass = new Map();
+  // Getter function name → return class (e.g. "getTrustedPerson" → "TrustedAccessPerson").
+  const getterReturnType = new Map();
 
   for (const filePath of kotlinFiles) {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -31,6 +37,8 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     extractRouteHelpers(stripped, routeHelpers);
     extractBottomNavItems(stripped, bottomNavItems, routeConstants);
     extractInlineNavItems(stripped, bottomNavItems, routeConstants);
+    extractSeedIds(stripped, seedIdsByClass);
+    extractGetterReturnTypes(stripped, getterReturnType);
   }
 
   // Pass 2: parse NavHost composable() registrations and screen navigate() calls
@@ -42,7 +50,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
     const relativePath = path.relative(projectPath, filePath);
 
     // Extract NavHost composable() registrations + startDestination
-    extractNavHostEntries(stripped, navHostEntries, routeConstants, filePath, startDestinations);
+    extractNavHostEntries(stripped, navHostEntries, routeConstants, filePath, startDestinations, seedIdsByClass, getterReturnType);
 
     // Extract navController.navigate() calls from screen files
     extractNavigations(stripped, filePath, relativePath, routeConstants, routeHelpers, screensByRoute);
@@ -76,6 +84,7 @@ function parseKotlinProject(kotlinFiles, projectPath) {
       bottomNavItems: [],
       isModal: entry.isModal || false,
       isStartDestination: false,
+      navArgs: entry.navArgs || [],
     });
   }
 
@@ -462,7 +471,7 @@ function extractInlineNavItems(content, bottomNavItems, routeConstants) {
 /**
  * Extract composable() route registrations from NavHost blocks.
  */
-function extractNavHostEntries(content, navHostEntries, routeConstants, filePath, startDestinations) {
+function extractNavHostEntries(content, navHostEntries, routeConstants, filePath, startDestinations, seedIdsByClass, getterReturnType) {
   // Find NavHost blocks
   const navHostRe = /\bNavHost\s*\(/g;
   let match;
@@ -486,16 +495,28 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
       }
     }
 
-    // The NavHost body might be inside the paren args (builder = { }) or after
-    // Look for composable() calls in a reasonable range after the NavHost
-    const searchEnd = Math.min(content.length, match.index + 20000);
-    const searchContent = content.slice(match.index, searchEnd);
+    // Locate the NavHost body: either the trailing lambda after its closing `)`,
+    // or (rare) a `builder = { ... }` inside the args. Prefer the trailing lambda.
+    // Fall back to a generous range so we don't miss composables in long files.
+    let bodyStart = match.index;
+    let bodyEnd = content.length;
+    const afterClose = content.slice(closeParenIdx + 1);
+    const trailingBrace = afterClose.match(/^\s*\{/);
+    if (trailingBrace) {
+      const lambdaStart = closeParenIdx + 1 + trailingBrace.index;
+      const lambda = findClosureAt(content, lambdaStart);
+      if (lambda) {
+        bodyStart = lambdaStart;
+        bodyEnd = lambda.end + 1;
+      }
+    }
+    const searchContent = content.slice(bodyStart, bodyEnd);
 
     // Find composable() registrations
     const composableRe = /\bcomposable\s*\(/g;
     let compMatch;
     while ((compMatch = composableRe.exec(searchContent)) !== null) {
-      const compStart = match.index + compMatch.index;
+      const compStart = bodyStart + compMatch.index;
       const compParenClose = findMatchingParen(content, compStart + compMatch[0].length - 1);
       if (compParenClose === -1) continue;
 
@@ -521,6 +542,13 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
 
       // Detect modal transition (slideIntoContainer towards Up)
       const isModal = /SlideDirection\.Up/.test(compArgs);
+
+      // Extract navArgument declarations from the composable() args.
+      // Supports both builder form:
+      //   navArgument("id") { type = NavType.StringType; defaultValue = "1" }
+      // and call form:
+      //   navArgument("id") { type = NavType.StringType }
+      const navArgs = extractNavArguments(compArgs);
 
       // Find the composable function name in the trailing lambda
       const afterParen = content.slice(compParenClose + 1);
@@ -548,12 +576,186 @@ function extractNavHostEntries(content, navHostEntries, routeConstants, filePath
       }
 
       if (composableName) {
-        navHostEntries.push({ route, composableName, filePath, isModal });
+        // Try to infer a realistic sample value for each placeholder param by
+        // looking at the lambda body for `viewModel.getXxx(paramName)` calls and
+        // following the getter's return type to a seed-data list of that class.
+        if (seedIdsByClass && getterReturnType) {
+          resolveSampleValues(lambda.content, navArgs, seedIdsByClass, getterReturnType);
+        }
+        navHostEntries.push({ route, composableName, filePath, isModal, navArgs });
       }
     }
 
     break; // Only process the first NavHost per file
   }
+}
+
+/**
+ * Scan constructor-style calls `ClassName( ... id = "..." ... )` and record
+ * the first string id assigned inside each. Used later to supply a realistic
+ * value for a `{personId}`-style placeholder when the Compose navArgument has
+ * no declared default.
+ *
+ * Prioritizes ids that appear inside seed-state regions:
+ *   MutableStateFlow( listOf(ClassName(id = "...")) )
+ *   fun defaultXxx(): List<X> = listOf(ClassName(id = "..."))
+ * so that preview/addable/test-only constructors don't mask the real seed.
+ * Non-priority occurrences are still recorded as a fallback.
+ *
+ * Only captures ids at the top level of a constructor's args (depth 0), so
+ * nested calls like `Color(...)` don't leak into the outer class's list.
+ */
+function extractSeedIds(content, seedIdsByClass) {
+  const skipRe = /^(listOf|setOf|mapOf|arrayOf|List|Set|Map|Color|Modifier|MutableStateFlow|StateFlow|Pair|Triple|remember|mutableStateOf)$/;
+
+  // First, find priority regions: MutableStateFlow(...) and `default\w+()` bodies.
+  const priorityRanges = [];
+  const msfRe = /\bMutableStateFlow\s*\(/g;
+  let pm;
+  while ((pm = msfRe.exec(content)) !== null) {
+    const open = pm.index + pm[0].length - 1;
+    const close = findMatchingParen(content, open);
+    if (close !== -1) priorityRanges.push([open + 1, close]);
+  }
+  const defRe = /\bfun\s+default\w+\s*\(\s*\)\s*:[^=]*=\s*/g;
+  let dm;
+  while ((dm = defRe.exec(content)) !== null) {
+    // Body is the expression after `=`. Take until the first matching `)` of a
+    // `listOf(` immediately following, or the next top-level newline+close — for
+    // robustness we allow a generous window up to the end of a matching listOf.
+    const after = content.slice(dm.index + dm[0].length);
+    const listOfMatch = after.match(/^listOf\s*\(/);
+    if (!listOfMatch) continue;
+    const open = dm.index + dm[0].length + listOfMatch[0].length - 1;
+    const close = findMatchingParen(content, open);
+    if (close !== -1) priorityRanges.push([open + 1, close]);
+  }
+
+  function inPriorityRange(idx) {
+    for (const [s, e] of priorityRanges) if (idx >= s && idx <= e) return true;
+    return false;
+  }
+
+  const ctorRe = /\b([A-Z]\w+)\s*\(/g;
+  let match;
+  while ((match = ctorRe.exec(content)) !== null) {
+    const className = match[1];
+    if (skipRe.test(className)) continue;
+    const openParen = match.index + match[0].length - 1;
+    const close = findMatchingParen(content, openParen);
+    if (close === -1) continue;
+    const body = content.slice(openParen + 1, close);
+    const id = findTopLevelId(body);
+    if (!id) continue;
+    if (!seedIdsByClass.has(className)) seedIdsByClass.set(className, { primary: [], fallback: [] });
+    const bucket = seedIdsByClass.get(className);
+    const list = inPriorityRange(match.index) ? bucket.primary : bucket.fallback;
+    if (!list.includes(id)) list.push(id);
+  }
+}
+
+/**
+ * Pick the best sample id for a given class from the bucketed seed map.
+ * Primary (inside MutableStateFlow/default*()) beats fallback (previews, addable lists).
+ */
+function pickSampleId(bucket) {
+  if (!bucket) return null;
+  if (bucket.primary.length > 0) return bucket.primary[0];
+  if (bucket.fallback.length > 0) return bucket.fallback[0];
+  return null;
+}
+
+/**
+ * Return the first `id = "..."` string assignment at paren-depth 0 of `body`.
+ * Skips assignments inside nested `(...)` so we don't pick up e.g. a color arg.
+ */
+function findTopLevelId(body) {
+  const re = /\bid\s*=\s*"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    let depth = 0;
+    for (let i = 0; i < m.index; i++) {
+      if (body[i] === "(") depth++;
+      else if (body[i] === ")") depth--;
+    }
+    if (depth === 0) return m[1];
+  }
+  return null;
+}
+
+/**
+ * Scan for getter function declarations with explicit return types:
+ *   fun getTrustedPerson(personId: String): TrustedAccessPerson? = ...
+ *   fun getCaredForPerson(personId: String): CaredForPerson = ...
+ *
+ * Populates getterReturnType: getterName → className.
+ */
+function extractGetterReturnTypes(content, getterReturnType) {
+  const re = /\bfun\s+(get\w+)\s*\([^)]*\)\s*:\s*([A-Z]\w+)\??/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    getterReturnType.set(m[1], m[2]);
+  }
+}
+
+/**
+ * For each navArg, search the composable's render lambda for a getter call
+ * of the form `<receiver>.<getter>(<paramName>)`. If the getter's return type
+ * maps to a known seed class, set sampleValue to that class's first seed id.
+ *
+ * Declared defaults and explicit overrides take precedence over sampleValue —
+ * this only fills in the null/empty cases.
+ */
+function resolveSampleValues(lambdaBody, navArgs, seedIdsByClass, getterReturnType) {
+  for (const arg of navArgs) {
+    if (arg.defaultValue && arg.defaultValue !== "") continue; // declared default wins
+    const callRe = new RegExp(`\\w+\\.(get\\w+)\\s*\\(\\s*${escapeRegex(arg.name)}\\b`);
+    const m = lambdaBody.match(callRe);
+    if (!m) continue;
+    const className = getterReturnType.get(m[1]);
+    if (!className) continue;
+    const sampleId = pickSampleId(seedIdsByClass.get(className));
+    if (!sampleId) continue;
+    arg.sampleValue = sampleId;
+  }
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Extract navArgument("name") { type = NavType.X; defaultValue = Y } declarations
+ * from the args of a composable() call. Returns array of { name, type, defaultValue }.
+ *
+ * `compArgs` is the substring inside composable(...) — typically contains an
+ * `arguments = listOf(navArgument(...) { ... }, navArgument(...) { ... })` block.
+ */
+function extractNavArguments(compArgs) {
+  const results = [];
+  const navArgRe = /\bnavArgument\s*\(\s*"([^"]+)"\s*\)\s*\{/g;
+  let match;
+  while ((match = navArgRe.exec(compArgs)) !== null) {
+    const name = match[1];
+    const bodyStart = match.index + match[0].length - 1; // position of `{`
+    const closure = findClosureAt(compArgs, bodyStart);
+    if (!closure) continue;
+    const body = closure.content;
+
+    // type = NavType.StringType / BoolType / IntType / LongType / FloatType / ...
+    const typeMatch = body.match(/\btype\s*=\s*NavType\.(\w+)/);
+    const type = typeMatch ? typeMatch[1] : null;
+
+    // defaultValue = "foo" | 123 | true | false | 1.5
+    const defStrMatch = body.match(/\bdefaultValue\s*=\s*"([^"]*)"/);
+    const defLitMatch = body.match(/\bdefaultValue\s*=\s*(true|false|-?\d+(?:\.\d+)?)/);
+    let defaultValue = null;
+    if (defStrMatch) defaultValue = defStrMatch[1];
+    else if (defLitMatch) defaultValue = defLitMatch[1];
+
+    results.push({ name, type, defaultValue });
+  }
+  return results;
 }
 
 /**

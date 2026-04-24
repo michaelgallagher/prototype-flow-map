@@ -55,9 +55,23 @@ function generateAndroidTest(graph, packageName, mainActivityClass, overrides = 
       continue;
     }
 
-    // Parameterized routes need a concrete value — require a config override
+    // Parameterized routes: substitute each {placeholder} with a value from
+    // override.params → declared defaultValue → type-aware fallback.
     if (/\{[^}]+\}/.test(node.rawRoute)) {
-      skipped.push({ id: node.id, reason: `parameterized (${node.rawRoute})` });
+      const overrideParams = (override && override.params) || {};
+      const { route: resolved, unresolved } = substitutePlaceholders(
+        node.rawRoute,
+        node.navArgs || [],
+        overrideParams,
+      );
+      if (unresolved.length > 0) {
+        skipped.push({
+          id: node.id,
+          reason: `unresolved params (${unresolved.join(", ")}) in ${node.rawRoute}`,
+        });
+        continue;
+      }
+      tests.push({ safeId: sanitizeFilename(node.id), route: resolved });
       continue;
     }
 
@@ -164,6 +178,79 @@ function renderTestMethod({ safeId, route }) {
     fun testCapture_${safeId}() {
         navigateAndCapture("${escapedRoute}", "${safeId}")
     }`;
+}
+
+/**
+ * Substitute {placeholder} tokens in a route string with concrete values.
+ *
+ * Resolution order per placeholder name:
+ *   1. overrideParams[name] — caller-supplied concrete value
+ *   2. matching navArg.defaultValue declared in the composable() registration
+ *   3. Type-aware fallback: StringType→"1", BoolType→"false", Int/Long→"0",
+ *      Float→"0.0", anything else→"1"
+ *
+ * URL-encodes string values so multi-segment paths don't break the route.
+ *
+ * Returns { route, unresolved }. `unresolved` lists placeholders that had no
+ * value at all — shouldn't normally happen since we always have a fallback,
+ * but surfaces here if a navArg is malformed.
+ */
+function substitutePlaceholders(rawRoute, navArgs, overrideParams) {
+  const byName = new Map(navArgs.map((a) => [a.name, a]));
+  const unresolved = [];
+
+  const route = rawRoute.replace(/\{([^}]+)\}/g, (_, name) => {
+    if (Object.prototype.hasOwnProperty.call(overrideParams, name)) {
+      return encodeForRoute(overrideParams[name]);
+    }
+    const arg = byName.get(name);
+    // Ignore empty-string defaults: they're valid in Compose (the screen
+    // applies `.ifBlank { ... }` fallbacks) but produce empty path segments
+    // that fail to match the NavHost route pattern.
+    if (arg && arg.defaultValue !== null && arg.defaultValue !== undefined && arg.defaultValue !== "") {
+      return encodeForRoute(arg.defaultValue);
+    }
+    // Seed-data sample extracted from the ViewModel (e.g. "trusted-1") —
+    // lets state-dependent screens render with real data instead of blanks.
+    if (arg && arg.sampleValue) {
+      return encodeForRoute(arg.sampleValue);
+    }
+    const fallback = fallbackForType(arg && arg.type);
+    if (fallback === null) {
+      unresolved.push(name);
+      return `{${name}}`;
+    }
+    return encodeForRoute(fallback);
+  });
+
+  return { route, unresolved };
+}
+
+function fallbackForType(type) {
+  switch (type) {
+    case "BoolType":
+      return "false";
+    case "IntType":
+    case "LongType":
+      return "0";
+    case "FloatType":
+      return "0.0";
+    case "StringType":
+    case null:
+    case undefined:
+      return "1";
+    default:
+      return "1";
+  }
+}
+
+function encodeForRoute(value) {
+  const s = String(value);
+  // Empty string is a valid value for some flows (e.g. additionalInfo default)
+  // — but an empty path segment would break the route. Leave empty as-is when
+  // Compose declares it; Kotlin side handles `.ifBlank { ... }` fallbacks.
+  if (s === "") return "";
+  return encodeURIComponent(s).replace(/%2F/g, "/");
 }
 
 function kotlinEscape(s) {

@@ -36,6 +36,7 @@ function buildKotlinGraph(parsedScreens) {
       filePath: screen.relativePath || null,
       screenshot: null,
       type: "screen",
+      navArgs: screen.navArgs || [],
     };
     nodes.push(node);
     nodeMap.set(screen.route, node);
