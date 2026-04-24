@@ -81,8 +81,12 @@ overrides:
 
 The iOS `steps: [...]` form is ignored on Android; Android's `route` / `params` are ignored on iOS. One config file covers both platforms if a prototype has both.
 
+## Web jump-offs
+
+When an Android prototype hands off to a hosted web prototype (via `openTab`, `InAppBrowser`, or `CustomTabsIntent.Builder`), add `--web-jumpoffs` to crawl the linked web journey and splice it into the map. See the "Native + web prototype joining" section in `docs/planning-materials/plans.md` for the config options (`webJumpoffs.maxDepth`, `maxPages`, `allowlist`, etc.) and current tuning work.
+
 ## Limitations
 
-- **WebView screens**: Compose `onRoot().captureToImage()` captures the Compose tree only. Screens that embed an `AndroidView { WebView(...) }` may show a blank region where the WebView renders. Future work could fall back to UiAutomator for those specific nodes.
+- **WebView screens**: Compose `onRoot().captureToImage()` captures the Compose tree only. Screens that embed an `AndroidView { WebView(...) }` may show a blank region where the WebView renders. Future work could fall back to UiAutomator for those specific nodes. (For externally-hosted web prototypes linked from the native app, use `--web-jumpoffs` — see above.)
 - **Onboarding**: the generated test uses `@BeforeClass` to set the `onboarding/completed` shared-pref to `true` before the activity launches. If your prototype uses a different shared-pref name/key for its onboarding gate, you'll need to adjust — currently this is hardcoded.
 - **NavHost anchor**: auto-injection looks for `val navController = rememberNavController()` to place its hook. If the prototype names the controller differently, the tool prints a clear error and leaves the file alone.

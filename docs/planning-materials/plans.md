@@ -125,12 +125,41 @@ Additionally:
 
 ## Future plans
 
-### 1. iOS + web prototype joining
-The native iOS prototype accesses web prototype pages for specific journeys (via `WebView` and `CustomWebView`). The goal is to map both iOS and web parts together, showing the full picture including web screens reached from the native app.
+### 1. Native + web prototype joining — **MVP delivered**
 
-Phases:
-- Extract WebView URLs as cross-prototype entry points
-- Stitch native + web graphs when a WebView URL matches a web prototype page
+Native (iOS + Android) prototypes link out to hosted web prototypes (NHS Prototype Kit apps on Heroku) for parts of the user journey — e.g. GP appointment booking, repeat prescriptions, 111 emergency-prescription flows. We now crawl those web journeys and splice them into the native flow map so the map reads as one continuous experience.
+
+**What's live** (commits 1 → 3d → 4, opt-in via `--web-jumpoffs`):
+
+- `src/kotlin-parser.js` / `src/swift-parser.js` detect the full set of native→web handoff patterns: `openTab`, `InAppBrowser`, `CustomTabsIntent.Builder`, `UIApplication.shared.open`. Kotlin also resolves `WebFlowConfig(url = "$BASE_URL/...", title = "...")` indirection (`const val` harvest + `object Name { ... }` qualification + `val X = WebFlowConfig(...)` binding → assignment resolution via `activeWebFlow = PrescriptionWebFlow.X`).
+- `src/web-jumpoff-crawler.js` — Playwright BFS. Two-phase budget strategy: (1) every seed across every origin gets its root visited first, (2) round-robin BFS expansion across origin queues until `maxPages` exhausts. Prevents wide-branching origins from starving the rest.
+- `src/splice-web-subgraphs.js` — upgrades existing native `external` / `web-view` nodes in place (type → `web-page`, id normalised to canonical form, pre-existing edges retargeted, `nativeHandoffType` preserved). Then BFS-propagates `subgraphOwner` + `layoutRank` from each upgraded root to its descendants so the column-packed viewer layout places the whole web subgraph under its native handoff.
+- `src/build-viewer.js` — `.node-rect--web-page` styling, `.subgraph-root` heavier stroke on the handoff root, overflow column for any node that slips through without a rank (with `console.warn`, not silent).
+- `src/flow-map-config.js` — `webJumpoffs` config block (enabled, maxDepth, maxPages, timeoutMs, sameOriginOnly, screenshots, allowlist).
+- `bin/cli.js` — `--web-jumpoffs` / `--no-web-jumpoffs` tri-state override.
+
+**Verified** on `~/Repos/native-nhsapp-android-prototype/DemoNHSApp2`: 12 native jump-offs upgraded, 28 BFS-discovered pages added, 460+ link edges, all with screenshots, all positioned in-column under their native handoff.
+
+### 1a. Next session — web journey tuning
+
+The MVP renders the full journey; these items polish how each web screen looks inside the map.
+
+**Task 1 — uniform aspect ratio on web screenshots**
+Native screenshots are portrait (375×812 iPhone / similar on Android). Web screenshots are currently `fullPage: true` (see `src/web-jumpoff-crawler.js` `page.screenshot({ path, fullPage: true })`), so a long content page produces a tall thumbnail that visually dominates the row. Crop/fit web screenshots to match the native viewport aspect ratio (probably 375×812 at `clip: { x: 0, y: 0, width, height }` with `fullPage: false`, OR keep fullPage capture and set `screenshotAspectRatio` on the node so the viewer's `getNodeDims` renders it in a fixed-height box). Decide between crop-at-capture vs resize-at-render — the viewer already has `thumbnailMode: 'xMidYMin slice'` which crops to the top portion of any screenshot; may be enough without touching the crawler. See `src/build-viewer.js:1190`.
+
+**Task 2 — strip web chrome (header / tab bar / footer) from web screenshots**
+In the real app, the in-app WebView uses user-agent detection + injected JavaScript to hide the hosted web prototype's own header, bottom tab bar, and footer so the page looks native. We should mimic this in our crawl so the map screenshots match what the user actually sees in the app. Two approaches:
+
+- **UA match**: set the crawler's User-Agent to whatever string the real app uses, and rely on the hosted prototype's existing JS to self-hide chrome. Cleanest — same code path as production. Check what UA the DemoNHSApp2 WKWebView / Custom Tab sends; plumb it through `browser.newContext({ userAgent })` in `src/web-jumpoff-crawler.js`.
+- **JS injection fallback**: if UA sniffing isn't enough (or prototypes don't implement it), extend `dismissOverlays` in the crawler to also strip common NHS-prototype chrome selectors (`.nhsuk-header`, `.nhsapp-tab-bar`, `.nhsuk-footer`, etc.) via `page.evaluate`.
+
+Probably want both: UA first (pure), JS fallback as a config option.
+
+### 1b. Follow-ups deferred from the MVP
+
+- **iOS parser parity for enum-switched URL indirection**. Kotlin now resolves `WebFlowConfig(url = ...)`-style bindings. iOS has an analogous pattern: `enum PrescriptionFlow: String, WebFlowConfig { case a, b; var url: URL { switch self { case .a: URL(string: "...")! } } }`. Spawned as a background task during Commit 3b but not yet landed. Relevant file: `~/Repos/nhasapp-ios-demo-v2/PrescriptionFlow.swift`.
+- **Cross-map crawl caching.** iOS and Android runs currently crawl the same Heroku origins independently. Cache the crawl output on disk keyed by origin + crawl config so a second run against a different platform can reuse it. Low priority; kicks in only for users who have both prototypes.
+- **Interactive crawl for form-gated journeys.** Shallow `<a href>` BFS misses content behind a form submit. If a journey turns out to be form-driven (e.g. "Start now" is a POST), layer a scenario-style driver on top of the crawler. Not a blocker today — the current MVP captures the structural skeleton.
 
 ### 2. Saving layout positions
 Allow users to persist node layout adjustments across sessions and devices. See `saving-layout-positions.md` for the full design exploration.
