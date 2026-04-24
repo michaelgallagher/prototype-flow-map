@@ -133,6 +133,22 @@ function defaultConfig() {
         suppressDebugRoutes: true,
       },
     },
+    // Web jump-offs: when an iOS or Android prototype links to a hosted web
+    // prototype (e.g. NHS Prototype Kit on Heroku), shallow-BFS that URL and
+    // splice the resulting pages into the native flow map as a web subgraph.
+    //
+    // Opt-in: defaults to disabled so existing runs stay deterministic and
+    // don't make unexpected network calls. Enable per-prototype via config or
+    // via the --web-jumpoffs CLI flag.
+    webJumpoffs: {
+      enabled: false,
+      maxDepth: 3,
+      maxPages: 40,
+      timeoutMs: 15000,
+      sameOriginOnly: true,
+      screenshots: true,
+      allowlist: [],
+    },
     fragments: {},
     scenarioSets: {},
     scenarios: [],
@@ -198,6 +214,42 @@ function validateConfig(raw) {
           config.runtimeMapping.filters[key] = rm.filters[key];
         }
       }
+    }
+  }
+
+  // Web jump-offs
+  if (raw.webJumpoffs && typeof raw.webJumpoffs === "object") {
+    const wj = raw.webJumpoffs;
+    if (typeof wj.enabled === "boolean") {
+      config.webJumpoffs.enabled = wj.enabled;
+    }
+    if (typeof wj.maxDepth === "number" && wj.maxDepth >= 0) {
+      config.webJumpoffs.maxDepth = Math.floor(wj.maxDepth);
+    }
+    if (typeof wj.maxPages === "number" && wj.maxPages > 0) {
+      config.webJumpoffs.maxPages = Math.floor(wj.maxPages);
+    }
+    if (typeof wj.timeoutMs === "number" && wj.timeoutMs > 0) {
+      config.webJumpoffs.timeoutMs = Math.floor(wj.timeoutMs);
+    }
+    if (typeof wj.sameOriginOnly === "boolean") {
+      config.webJumpoffs.sameOriginOnly = wj.sameOriginOnly;
+    }
+    if (typeof wj.screenshots === "boolean") {
+      config.webJumpoffs.screenshots = wj.screenshots;
+    }
+    if (Array.isArray(wj.allowlist)) {
+      // Normalize each allowlist entry to its origin form (protocol + host)
+      // so comparisons against runtime URLs are robust to trailing paths.
+      config.webJumpoffs.allowlist = wj.allowlist
+        .filter((o) => typeof o === "string")
+        .map((o) => {
+          try {
+            return new URL(o).origin;
+          } catch {
+            return o; // leave malformed entries; they simply won't match anything
+          }
+        });
     }
   }
 

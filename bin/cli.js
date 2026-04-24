@@ -109,6 +109,14 @@ program
     "--record [filename]",
     "Record a scenario interactively (opens a browser). Optional filename, default: recorded.flow",
   )
+  .option(
+    "--web-jumpoffs",
+    "Crawl web prototypes that native (iOS/Android) flows link out to, and splice them into the map (overrides webJumpoffs.enabled)",
+  )
+  .option(
+    "--no-web-jumpoffs",
+    "Skip web jump-off crawling (overrides webJumpoffs.enabled)",
+  )
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
     const prototypeDirName = path.basename(resolvedPath);
@@ -206,6 +214,17 @@ program
 
     // Load config from prototype directory
     const config = loadConfig(resolvedPath);
+
+    // Tri-state override of config.webJumpoffs.enabled. Both --web-jumpoffs
+    // and --no-web-jumpoffs are registered with commander (so they show up in
+    // --help), but we inspect argv directly to distinguish "flag not passed"
+    // from "flag passed with default true", which commander collapses together
+    // when both a positive and negating option share the same property.
+    if (process.argv.includes("--no-web-jumpoffs")) {
+      config.webJumpoffs.enabled = false;
+    } else if (process.argv.includes("--web-jumpoffs")) {
+      config.webJumpoffs.enabled = true;
+    }
 
     // Handle --list-scenarios
     if (options.listScenarios) {
