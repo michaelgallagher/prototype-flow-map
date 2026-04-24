@@ -57,22 +57,26 @@ Key files: `src/recorder.js`, `src/recorder-inject.js`, `src/flow-serializer.js`
 ## Android prototypes
 
 1. **Scans** for all `.kt` files in the project
-2. **Parses** each file for Jetpack Compose navigation patterns (`navController.navigate()`, NavHost `composable()` entries, `BottomNavItem` registrations, `slideIntoContainer` modal transitions, `openTab()` external links)
-3. **Builds a directed graph** of screens and navigation edges; the parser records the raw NavHost route template (`message_detail/{messageId}`) alongside the canonical node ID so the crawler can navigate correctly
-4. **Auto-injects** two files into the prototype at run time:
+2. **Parses** each file for Jetpack Compose navigation patterns (`navController.navigate()`, NavHost `composable()` entries with their `navArgument {...}` declarations, `BottomNavItem` registrations, `slideIntoContainer` modal transitions, `openTab()` external links)
+3. **Extracts seed IDs** from ViewModel source — the parser scans `MutableStateFlow(...)` initializers and `fun default*()` bodies for top-level `id = "..."` literals, plus the return type of `fun get<Xxx>(...)`. When a screen's lambda calls `vm.getTrustedPerson(id)` for a `{id}` param, the parser links that nav arg to a concrete seeded ID so the test can navigate with real data instead of blanks
+4. **Builds a directed graph** of screens and navigation edges; the parser records the raw NavHost route template (`message_detail/{messageId}`) and the resolved nav args on each node
+5. **Auto-injects** two files into the prototype at run time:
    - `navigation/TestHooks.kt` — a `@VisibleForTesting` singleton exposing `NavHostController?`
    - A single `LaunchedEffect(navController) { TestHooks.navController = navController }` line into whichever `.kt` file hosts the `NavHost` — both are idempotent (skipped if already present)
-5. **Generates a temporary `FlowMapCapture.kt`** instrumented test that navigates to each screen by calling `navController.navigate("<rawRoute>")` directly (not by tapping UI) and captures via `composeTestRule.onRoot().captureToImage()`
-6. **Builds debug + androidTest APKs**, installs them, runs `am instrument` directly on the device (skipping `connectedDebugAndroidTest` because that task uninstalls the app before screenshots can be pulled), `adb pull`s PNGs off the device, then uninstalls
-7. **Restores all injected files and animation settings** in a `finally` block, leaving the prototype's git status unchanged
-8. **Generates a static HTML viewer** with the graph and screenshots embedded
+6. **Generates a temporary `FlowMapCapture.kt`** instrumented test that navigates to each screen by calling `navController.navigate("<resolvedRoute>")` directly (not by tapping UI) and captures via `composeTestRule.onRoot().captureToImage()`. Parameterized routes are resolved per placeholder with priority: config override → declared `navArgument` `defaultValue` → extracted seed ID → type-aware fallback (`StringType` → `"1"`, `BoolType` → `"false"`, `Int/LongType` → `"0"`, `FloatType` → `"0.0"`)
+7. **Builds debug + androidTest APKs**, installs them, runs `am instrument` directly on the device (skipping `connectedDebugAndroidTest` because that task uninstalls the app before screenshots can be pulled), `adb pull`s PNGs off the device, then uninstalls
+8. **Restores all injected files and animation settings** in a `finally` block, leaving the prototype's git status unchanged
+9. **Generates a static HTML viewer** with the graph and screenshots embedded
 
-Screens whose route has parameters (`{id}` placeholders) are skipped by default; provide concrete values in `flow-map.config.yml`:
+Most parameterized routes resolve automatically. Override values in `flow-map.config.yml` only when you want a specific seed record, or when the auto-resolved fallback hits a dead end:
 
 ```yaml
 overrides:
   message_detail:
     route: "message_detail/demo-msg-1"
+  familyCarer/trusted:
+    params:
+      id: "trusted-2"
 ```
 
 ## Canonical deduplication

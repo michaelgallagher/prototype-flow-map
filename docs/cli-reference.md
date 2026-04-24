@@ -61,7 +61,7 @@ npx prototype-flow-map /path/to/prototype --name screening-case-management --tit
 | `--title` | prototype folder name | Human-readable map title shown in index |
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
 | `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas) or `snapshot` (A3 fit-to-screen) |
-| `--platform` | auto-detected | Project platform: `web` or `ios` |
+| `--platform` | auto-detected | Project platform: `web`, `ios`, or `android`. Android uses `ANDROID_SERIAL` env var to pick a device when multiple are attached |
 | `--no-open` | — | Don't automatically open the viewer in a browser |
 
 `--record` cannot be combined with `--mode`, `--scenario`, or `--scenario-set`.

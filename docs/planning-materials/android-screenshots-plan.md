@@ -205,13 +205,16 @@ node bin/cli.js ~/Repos/native-nhsapp-android-prototype/DemoNHSApp2 -o /tmp/andr
 - [x] Step 2 — `src/kotlin-crawler.js` *(commit `269c79d`)*
 - [x] Step 3 — `src/index.js` wiring *(commit `269c79d`)*
 - [x] Step 4 — smoke test against DemoNHSApp2 *(18/18 distinct PNGs, prototype clean)*
-- [x] Step 5 — docs + memory *(this commit)*
+- [x] Step 5 — docs + memory *(initial docs commit)*
+- [x] Step 6 — phantom-node fix in NavHost body extraction *(2026-04-24)* — `extractNavHostEntries` replaced its hardcoded 20 000-char scan window with a proper `findClosureAt` on the trailing lambda, so `composable(...)` calls near the end of long `AppNavigation.kt` files are no longer silently dropped.
+- [x] Step 7 — parameterized-route auto-resolution *(2026-04-24)* — parser now extracts `navArgument` declarations (name, type, `defaultValue`) and seed IDs from ViewModel sources (`MutableStateFlow(...)` and `fun default*()` bodies). Generator substitutes `{placeholder}` tokens using: config override → declared default → extracted seed ID → type-aware fallback.
 
-**Final result on DemoNHSApp2:** 35 graph nodes → 18 screenshots captured, 10 skipped as parameterized (need `overrides.<id>.route` config), 3 skipped as phantom nodes (no NavHost entry), 4 external URL nodes (no capture needed). All 18 PNGs have distinct MD5 hashes — no duplicate home-screen captures. Prototype git status identical before/after the run.
+**Final result on DemoNHSApp2 (post Steps 6–7):** 33 of 33 reachable screens captured (up from 18/33). All parameterized routes now resolve automatically using seeded data — e.g. `familyCarer/trusted/{id}` picks up `trusted-1` from `TrustedPerson.kt`'s `MutableStateFlow(...)` initializer, and `message_detail/{messageId}` resolves against `MessagesViewModel`. External URL nodes (4) still render as flat chips — covered by the separate "web jump-offs" project. Prototype git status identical before/after the run.
 
 **Known follow-ups not addressed here:**
-- Phantom nodes (`archived_messages`, `message_detail`, `prescriptionAdditionalDetail`) — these navigate() call targets have no NavHost entry per the parser's view, which is likely a parser bug with how routes created via helper functions or string interpolation propagate into the screens list. Separate task.
-- Compose `captureToImage()` covers the Compose tree only — screens embedding `AndroidView { WebView(...) }` may render blank regions. If this bites on overlay-browser screens, fall back to UiAutomator `takeScreenshot` for those specific nodes via an override step language (not yet implemented on Android).
+- **Web jump-offs** — external `safari` edges still render as flat nodes. Plan tracked separately as a project memory: embed linked web prototypes as first-class subgraphs via a headless crawler.
+- **Compose `captureToImage()` vs WebView** — Compose `onRoot()` covers the Compose tree only. Screens embedding `AndroidView { WebView(...) }` may render blank regions. If this bites on overlay-browser screens, fall back to UiAutomator `takeScreenshot` for those specific nodes via an override step language (not yet implemented on Android).
+- **Onboarding shared-pref name** — currently hardcoded to `"onboarding"/"completed"` in the generated `@BeforeClass`. Parameterize if a future prototype uses different keys.
 
 ## Commit strategy
 

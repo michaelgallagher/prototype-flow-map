@@ -1,6 +1,6 @@
 # Prototype flow map
 
-Generate interactive flow maps from Express/Nunjucks prototype kit projects (NHS Prototype Kit, GOV.UK Prototype Kit, etc.). Also supports native iOS/SwiftUI prototypes.
+Generate interactive flow maps from Express/Nunjucks prototype kit projects (NHS Prototype Kit, GOV.UK Prototype Kit, etc.). Also supports native iOS/SwiftUI and Android/Jetpack Compose prototypes.
 
 The tool analyses your prototype's templates, routes, and runtime behaviour to produce a visual map of every screen and the connections between them, with screenshots.
 
@@ -16,6 +16,7 @@ The tool analyses your prototype's templates, routes, and runtime behaviour to p
 - **Interactive viewer** — pan, zoom, search, drag nodes, filter by provenance
 - **Static analysis** — auto-discovers pages from Nunjucks templates and Express route handlers
 - **iOS/SwiftUI support** — parses SwiftUI navigation patterns and captures screenshots via XCUITest
+- **Android/Jetpack Compose support** — parses Compose navigation + NavHost registrations and captures screenshots via Compose instrumented tests, with automatic seed-ID resolution for parameterized routes
 - **PDF export** — optional full-canvas or fit-to-screen PDF output
 
 ## Quick start
@@ -73,7 +74,8 @@ A toolbar at the top of the browser controls the recording. Click through your l
 | [Writing scenarios](docs/scenarios.md) | `.flow` file format, fragments, scenario sets, visit-driven vs BFS modes |
 | [Recording scenarios](docs/recording.md) | Record a flow map by clicking through your prototype in a browser |
 | [iOS/SwiftUI support](docs/ios-support.md) | Setup, navigation patterns detected, config overrides |
-| [How it works](docs/how-it-works.md) | Architecture overview for each mode (scenario, static, iOS) |
+| [Android/Compose support](docs/android-support.md) | Setup, navigation patterns detected, parameterized-route resolution, config overrides |
+| [How it works](docs/how-it-works.md) | Architecture overview for each mode (scenario, static, iOS, Android) |
 | [Editor support](editor/README.md) | Syntax highlighting for `.flow` files in VS Code, Zed, Sublime Text, and others |
 
 ## Planning and design
@@ -83,5 +85,6 @@ Design rationale, roadmaps, and option analyses are in [`docs/planning-materials
 ## Prerequisites
 
 - Node.js 20+
-- The prototype must be installable and runnable via `node app.js`
+- For web prototypes: the prototype must be installable and runnable via `node app.js`
 - For iOS: Xcode with iOS Simulator
+- For Android: Android SDK with `adb` on `PATH`, plus a running emulator or attached device
