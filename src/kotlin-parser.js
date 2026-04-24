@@ -931,7 +931,15 @@ function extractFirstArg(raw) {
 }
 
 /**
- * Extract openTab(context, "url") calls from screen files.
+ * Extract external / web-handoff URLs from screen files. Recognizes:
+ *   openTab(context, "https://...")                     — Chrome Custom Tabs helper
+ *   InAppBrowser(url = "https://...", ...)              — embedded WebView composable
+ *   InAppBrowser("https://...", ...)                    — positional variant
+ *   CustomTabsIntent.Builder()...launchUrl(ctx, Uri.parse("https://..."))
+ *
+ * InAppBrowser calls where `url = config.url` / `url = activeWebFlow!!.url` are
+ * indirected via a runtime object and can't be resolved statically — those are
+ * skipped (caught by a follow-up scenario-style driver if needed).
  */
 function extractExternalLinks(content, filePath, relativePath, screensByRoute) {
   const funRe = /\bfun\s+([A-Z][A-Za-z0-9]+)\s*\(/g;
@@ -948,12 +956,32 @@ function extractExternalLinks(content, filePath, relativePath, screensByRoute) {
     if (!body) continue;
 
     const externalLinks = [];
+    const pushUnique = (link) => {
+      if (!externalLinks.some((l) => l.url === link.url)) externalLinks.push(link);
+    };
 
     // openTab(context, "https://...")
     const openTabRe = /openTab\s*\(\s*\w+\s*,\s*"(https?:\/\/[^"]+)"\s*\)/g;
     let otMatch;
     while ((otMatch = openTabRe.exec(body.content)) !== null) {
-      externalLinks.push({ url: otMatch[1], label: null });
+      pushUnique({ url: otMatch[1], label: null });
+    }
+
+    // InAppBrowser(url = "https://...", ...) and InAppBrowser("https://...", ...)
+    const inAppRe = /\bInAppBrowser\s*\(\s*(?:url\s*=\s*)?"(https?:\/\/[^"]+)"/g;
+    let iaMatch;
+    while ((iaMatch = inAppRe.exec(body.content)) !== null) {
+      pushUnique({ url: iaMatch[1], label: null });
+    }
+
+    // CustomTabsIntent.Builder()...launchUrl(ctx, Uri.parse("https://..."))
+    // Only matches a literal URL inside Uri.parse(); dynamically-built URLs are
+    // skipped. Allows an intervening chain of .setShowTitle(...), .build(), etc.
+    const ctiRe =
+      /CustomTabsIntent\.Builder\s*\(\s*\)[\s\S]{0,2000}?\.launchUrl\s*\(\s*\w+\s*,\s*Uri\.parse\s*\(\s*"(https?:\/\/[^"]+)"/g;
+    let ctiMatch;
+    while ((ctiMatch = ctiRe.exec(body.content)) !== null) {
+      pushUnique({ url: ctiMatch[1], label: null });
     }
 
     if (externalLinks.length > 0) {

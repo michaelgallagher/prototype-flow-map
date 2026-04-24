@@ -500,8 +500,26 @@ function extractPresentedContent(closureContent, result, edgeType, fullContent, 
  *   WebView(url: URL(string: "..."))
  *   activeCover = .webView(URL(string: "..."), userData)
  *   WebLink(url: URL(string: "..."))  [with nearby Button label]
+ *   UIApplication.shared.open(URL(string: "..."))
+ *
+ * Also resolves file-local URL constants like
+ *   private static let startURL = URL(string: "https://...")!
+ * when referenced via `Self.startURL` or bare `startURL` in a `.webView(...)`
+ * enum cover — common pattern for web-flow start URLs.
  */
 function extractWebLinks(content, result) {
+  // Build a map of file-local URL constants for indirection resolution.
+  //   let foo = URL(string: "https://...")!
+  //   static let bar = URL(string: "...")
+  //   private static let baz = URL(string: "...")
+  const urlConstants = new Map();
+  const urlConstRe =
+    /\b(?:(?:public|private|internal|fileprivate)\s+)?(?:static\s+)?let\s+(\w+)\s*(?::\s*URL\s*)?=\s*URL\s*\(\s*string\s*:\s*"(https?:\/\/[^"]+)"\s*\)!?/g;
+  let constMatch;
+  while ((constMatch = urlConstRe.exec(content)) !== null) {
+    urlConstants.set(constMatch[1], constMatch[2]);
+  }
+
   // Standalone WebView(url: URL(string: "..."))
   const webViewRe = /\bWebView\s*\(\s*url\s*:\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/g;
   let match;
@@ -511,11 +529,21 @@ function extractWebLinks(content, result) {
     }
   }
 
-  // .webView(URL(string: "..."), ...) — enum-based webview cover
+  // .webView(URL(string: "..."), ...) — enum-based webview cover (literal URL)
   const covWebViewRe = /\.webView\s*\(\s*URL\s*\(\s*string\s*:\s*"([^"]+)"\s*\)/g;
   while ((match = covWebViewRe.exec(content)) !== null) {
     if (!result.webLinks.some((l) => l.url === match[1])) {
       result.webLinks.push({ url: match[1], label: null, mode: "custom-webview" });
+    }
+  }
+
+  // .webView(Self.foo, ...) or .webView(foo, ...) — resolve via urlConstants map
+  const covRefRe = /\.webView\s*\(\s*(?:Self\.)?(\w+)\b/g;
+  while ((match = covRefRe.exec(content)) !== null) {
+    const url = urlConstants.get(match[1]);
+    if (!url) continue;
+    if (!result.webLinks.some((l) => l.url === url)) {
+      result.webLinks.push({ url, label: null, mode: "custom-webview" });
     }
   }
 
@@ -531,6 +559,16 @@ function extractWebLinks(content, result) {
     const label = btnMatch ? btnMatch[1] : null;
 
     result.webLinks.push({ url, label, mode: "safari" });
+  }
+
+  // UIApplication.shared.open(URL(string: "...")) — full handoff to native Safari.
+  // Skips non-http schemes (tel:, mailto:, etc.) and dynamically-built URLs.
+  const sharedOpenRe =
+    /UIApplication\.shared\.open\s*\(\s*(?:url\s*:\s*)?URL\s*\(\s*string\s*:\s*"(https?:\/\/[^"]+)"\s*\)/g;
+  while ((match = sharedOpenRe.exec(content)) !== null) {
+    if (!result.webLinks.some((l) => l.url === match[1])) {
+      result.webLinks.push({ url: match[1], label: null, mode: "safari" });
+    }
   }
 }
 
