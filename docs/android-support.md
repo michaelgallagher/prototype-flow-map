@@ -83,7 +83,9 @@ The iOS `steps: [...]` form is ignored on Android; Android's `route` / `params` 
 
 ## Web jump-offs
 
-When an Android prototype hands off to a hosted web prototype (via `openTab`, `InAppBrowser`, or `CustomTabsIntent.Builder`), add `--web-jumpoffs` to crawl the linked web journey and splice it into the map. See the "Native + web prototype joining" section in `docs/planning-materials/plans.md` for the config options (`webJumpoffs.maxDepth`, `maxPages`, `allowlist`, etc.) and current tuning work.
+When an Android prototype hands off to a hosted web prototype (via `openTab`, `InAppBrowser`, `CustomTabsIntent.Builder`, or a `WebFlowConfig(url = ...)` binding), add `--web-jumpoffs` to crawl the linked web journey and splice it into the map. The crawler's screenshots match what the user sees inside the production native InAppBrowser (chrome-stripped, viewport-clipped to native portrait dimensions), and a per-page disk cache means a second run against your iOS prototype reuses anything this run already captured.
+
+See [Web jump-offs](web-jumpoffs.md) for the full feature reference — detected handoff patterns, config block, allowlist, caching, CLI flags.
 
 ## Limitations
 

@@ -25,6 +25,9 @@ npx prototype-flow-map /path/to/ios-prototype --platform ios
 - `RowLink`, `HubRowLink` — custom push navigation components
 - `WebView(url:)` — web view edges
 - `WebLink(url:)` — external Safari links
+- `UIApplication.shared.open(URL(string:))` — full handoff to native Safari
+- `.webView(URL(string:), ...)` and `.webView(Self.startURL, ...)` — enum-based full-screen covers, with file-local `private static let startURL = URL(...)!` indirection resolved
+- `enum X: ..., WebFlowConfig` — cross-file resolution of `var url: URL { switch self { case .a: URL(...)! } }` bodies, looked up from `activeCover = .caseName` assignments at call sites. Optional `var title: String { ... }` provides labels. The `struct X: WebFlowConfig` form (constructor-bound URL) is skipped because the URL is only known at runtime.
 
 ## Requirements
 
@@ -72,3 +75,9 @@ A map of view name to custom test steps. Each step is a string in the format `co
 | `swipeLeft:firstCell` | `swipeLeft:firstCell` | Swipe left on the first cell |
 | `swipeLeft:index` | `swipeLeft:2` | Swipe left on a cell at a specific index |
 | `wait:seconds` | `wait:1.5` | Wait for a number of seconds |
+
+## Web jump-offs
+
+When an iOS prototype hands off to a hosted web prototype (via `WebView`, `UIApplication.shared.open`, a `.webView(...)` cover, or an `enum X: ..., WebFlowConfig` binding), add `--web-jumpoffs` to crawl the linked web journey and splice it into the map. The crawler's screenshots match what the user sees inside the production WKWebView (chrome-stripped via the same CSS the production app injects, viewport-clipped to native portrait dimensions), and a per-page disk cache means a second run against your Android prototype reuses anything this run already captured.
+
+See [Web jump-offs](web-jumpoffs.md) for the full feature reference — detected handoff patterns, config block, allowlist, caching, CLI flags.

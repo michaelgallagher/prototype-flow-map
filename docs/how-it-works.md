@@ -79,6 +79,20 @@ overrides:
       id: "trusted-2"
 ```
 
+## Web jump-offs (iOS + Android)
+
+When `--web-jumpoffs` is set on a native run, after the native graph is built but before screenshot capture:
+
+1. **Collects seed URLs** from every `type: "external"` / `web-view` node whose origin is on the configured `webJumpoffs.allowlist`. Native parsers feed in URLs from `WebView`, `WebLink`, `UIApplication.shared.open`, `.webView(...)` covers, `enum X: ..., WebFlowConfig` enums (iOS), and `openTab` / `InAppBrowser` / `CustomTabsIntent.Builder` / `WebFlowConfig(url=...)` bindings (Android)
+2. **Per-origin browser context** — each origin gets its own Playwright `BrowserContext` with `addInitScript` injecting the chrome-stripping CSS that the production native InAppBrowser uses (`.hide-on-native { display: none }` plus NHS prototype-kit wrapper paddings, plus belt-and-braces selectors for prototypes that don't tag their chrome with `.hide-on-native`)
+3. **Two-phase BFS budget** — phase 1 visits every seed across every origin (so each native handoff gets its root node + screenshot even under tight budgets), phase 2 does round-robin BFS expansion across origin queues until `maxPages` is exhausted
+4. **Per-page disk cache** — every visited URL's metadata + screenshot are cached on disk keyed by `sha256(canonical_url + config_fingerprint)`, where the fingerprint covers viewport, `hideNativeChrome`, `injectCss`, screenshots-enabled. Subsequent runs (e.g. running against your iOS prototype after running against the Android one) hit the cache for any URL the first run touched. 24h TTL, errors not cached
+5. **Screenshot capture** — `clip: { x: 0, y: 0, width, height }` so web screenshots match the native portrait aspect ratio (375×812 → 750×1624 PNG with deviceScaleFactor 2). Cache hits skip the network round-trip and copy the cached PNG into the run's output dir
+6. **Splice into native graph** — pre-existing `external` / `web-view` nodes are upgraded in place: `type` becomes `web-page`, the id is normalised to canonical URL form, pre-existing edges are retargeted, and `subgraphOwner` + `layoutRank` are BFS-propagated from each upgraded root to its descendants so the column-packed viewer layout places the whole web subgraph under its native handoff
+7. **Native screenshot phase runs after the splice** so the iOS/Android crawlers never see web nodes
+
+Key files: `src/web-jumpoff-crawler.js` (Playwright BFS + cache integration), `src/web-jumpoff-cache.js` (per-page disk cache), `src/splice-web-subgraphs.js` (in-place node upgrade + rank propagation). See [Web jump-offs](web-jumpoffs.md) for the user-facing reference.
+
 ## Canonical deduplication
 
 The tool automatically deduplicates parameterised routes. URLs like `/participants/abc123` and `/participants/def456` are recognised as the same canonical pattern (`/participants/:id`), and the crawler visits at most 3 instances per pattern. This prevents the map from exploding when there are hundreds of entity pages.

@@ -17,6 +17,7 @@ The tool analyses your prototype's templates, routes, and runtime behaviour to p
 - **Static analysis** — auto-discovers pages from Nunjucks templates and Express route handlers
 - **iOS/SwiftUI support** — parses SwiftUI navigation patterns and captures screenshots via XCUITest
 - **Android/Jetpack Compose support** — parses Compose navigation + NavHost registrations and captures screenshots via Compose instrumented tests, with automatic seed-ID resolution for parameterized routes
+- **Native + web journey joining** — when a native (iOS or Android) prototype hands off to a hosted web prototype, the tool crawls the linked web journey and splices it into the same map, with screenshots that match what the user sees inside the production in-app web view. Per-page disk cache means a second platform run reuses anything the first already captured
 - **PDF export** — optional full-canvas or fit-to-screen PDF output
 
 ## Quick start
@@ -75,6 +76,7 @@ A toolbar at the top of the browser controls the recording. Click through your l
 | [Recording scenarios](docs/recording.md) | Record a flow map by clicking through your prototype in a browser |
 | [iOS/SwiftUI support](docs/ios-support.md) | Setup, navigation patterns detected, config overrides |
 | [Android/Compose support](docs/android-support.md) | Setup, navigation patterns detected, parameterized-route resolution, config overrides |
+| [Web jump-offs](docs/web-jumpoffs.md) | Crawling hosted web prototypes linked from native apps; allowlist, chrome stripping, caching |
 | [How it works](docs/how-it-works.md) | Architecture overview for each mode (scenario, static, iOS, Android) |
 | [Editor support](editor/README.md) | Syntax highlighting for `.flow` files in VS Code, Zed, Sublime Text, and others |
 

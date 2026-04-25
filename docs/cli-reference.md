@@ -62,6 +62,10 @@ npx prototype-flow-map /path/to/prototype --name screening-case-management --tit
 | `--export-pdf` | `false` | Generate a PDF of the flow map (`map.pdf`) |
 | `--pdf-mode` | `canvas` | PDF mode: `canvas` (full-canvas) or `snapshot` (A3 fit-to-screen) |
 | `--platform` | auto-detected | Project platform: `web`, `ios`, or `android`. Android uses `ANDROID_SERIAL` env var to pick a device when multiple are attached |
+| `--web-jumpoffs` | — | iOS/Android only — crawl hosted web prototypes that the native flow links out to and splice them into the map (overrides `webJumpoffs.enabled` in config). See [Web jump-offs](web-jumpoffs.md) |
+| `--no-web-jumpoffs` | — | Force-disable web jump-off crawling for this run |
+| `--no-web-cache` | — | Skip the per-page web-jumpoff cache for this run (forces a fresh crawl). Cache on disk is preserved |
+| `--clear-web-cache` | — | Wipe the web-jumpoff cache directory before crawling, then continue |
 | `--no-open` | — | Don't automatically open the viewer in a browser |
 
 `--record` cannot be combined with `--mode`, `--scenario`, or `--scenario-set`.
