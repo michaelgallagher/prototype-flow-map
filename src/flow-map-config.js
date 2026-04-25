@@ -158,6 +158,26 @@ function defaultConfig() {
       // string; injected at document start before any page script runs.
       injectCss: null,
       allowlist: [],
+      // Per-page disk cache for crawled web subgraphs. When iOS and
+      // Android prototypes both link to the same Heroku origins, the
+      // second platform's run hits the cache for any URL the first run
+      // already captured — no network round-trip, no fresh screenshot.
+      // Cache key includes a fingerprint of the fields that affect a
+      // single page's output (viewport, hideNativeChrome, injectCss),
+      // so changing those auto-invalidates without manual intervention.
+      cache: {
+        enabled: true,
+        // 24 hours. Pages older than this re-crawl. Trade-off: longer
+        // TTL saves more bandwidth but risks showing stale screenshots
+        // when the hosted prototype changes. The hosted Heroku
+        // prototypes change rarely enough that 24h is a sensible
+        // default; tune via config if you're iterating on a hosted
+        // prototype actively.
+        ttlMs: 24 * 60 * 60 * 1000,
+        // Optional override; defaults to
+        // `$XDG_CACHE_HOME/prototype-flow-map/web-pages/`.
+        dir: null,
+      },
     },
     fragments: {},
     scenarioSets: {},
@@ -266,6 +286,17 @@ function validateConfig(raw) {
             return o; // leave malformed entries; they simply won't match anything
           }
         });
+    }
+    if (wj.cache && typeof wj.cache === "object") {
+      if (typeof wj.cache.enabled === "boolean") {
+        config.webJumpoffs.cache.enabled = wj.cache.enabled;
+      }
+      if (typeof wj.cache.ttlMs === "number" && wj.cache.ttlMs > 0) {
+        config.webJumpoffs.cache.ttlMs = Math.floor(wj.cache.ttlMs);
+      }
+      if (typeof wj.cache.dir === "string" && wj.cache.dir.trim()) {
+        config.webJumpoffs.cache.dir = wj.cache.dir;
+      }
     }
   }
 

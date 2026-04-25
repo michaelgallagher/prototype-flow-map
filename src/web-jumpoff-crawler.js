@@ -6,6 +6,13 @@ const {
   canonicalizePath,
   urlToFilename,
 } = require("./crawler");
+const {
+  buildFingerprint,
+  readCache,
+  writeCache,
+  pruneExpired,
+  DEFAULT_TTL_MS,
+} = require("./web-jumpoff-cache");
 
 /**
  * Crawl one or more externally-hosted web prototypes that a native (iOS /
@@ -50,15 +57,48 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
     allowlist = [],
     hideNativeChrome = true,
     injectCss = null,
+    cache: cacheConfig = {},
   } = config || {};
 
   const effectiveViewport = viewport || { width: 375, height: 812 };
+
+  // Per-page cache: a hit short-circuits the network round-trip for any
+  // URL that was crawled on a previous run with the same fingerprint.
+  // Disabled gracefully if the cache module isn't reachable.
+  const cacheEnabled = cacheConfig.enabled !== false;
+  const cacheTtlMs =
+    typeof cacheConfig.ttlMs === "number" && cacheConfig.ttlMs > 0
+      ? cacheConfig.ttlMs
+      : DEFAULT_TTL_MS;
+  const cacheDir = cacheConfig.dir || undefined; // undefined → use default
+  const cacheFingerprint = cacheEnabled
+    ? buildFingerprint(
+        {
+          hideNativeChrome,
+          injectCss,
+          screenshots: screenshotsEnabled,
+        },
+        effectiveViewport,
+      )
+    : null;
+
+  // Best-effort prune of expired entries before this run. Keeps the cache
+  // dir from growing unbounded; failure is silent.
+  if (cacheEnabled) {
+    try {
+      pruneExpired({ cacheDir, ttlMs: cacheTtlMs });
+    } catch {
+      /* ignore */
+    }
+  }
 
   const stats = {
     seedsRequested: seedUrls.length,
     seedsCrawled: 0,
     pagesVisited: 0,
     pagesFailed: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
     originsSkipped: [],
   };
 
@@ -245,7 +285,69 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
       node.subgraphRoot = true;
     }
 
+    // Cache hit path: skip the network round-trip + screenshot capture and
+    // replay the cached children into the BFS queue. Always check before
+    // launching a page (Playwright contexts cost a few ms per page open).
+    if (cacheEnabled && cacheFingerprint) {
+      const hit = readCache(canonical, cacheFingerprint, {
+        cacheDir,
+        ttlMs: cacheTtlMs,
+      });
+      if (hit) {
+        if (hit.meta.label) node.label = hit.meta.label;
+
+        // Copy the cached PNG into this run's output dir if screenshots
+        // are still enabled. If the original run had screenshots off
+        // there's nothing to copy — leave node.screenshot null.
+        if (screenshotsDir && hit.screenshotPath) {
+          try {
+            const filename = webScreenshotName(canonical);
+            const outPath = path.join(screenshotsDir, filename);
+            fs.copyFileSync(hit.screenshotPath, outPath);
+            node.screenshot = `screenshots/web/${filename}`;
+          } catch (copyErr) {
+            node.screenshotError = copyErr.message;
+          }
+        }
+
+        // Replay child links — same as the live crawl, just without
+        // re-fetching HTML to extract them.
+        if (depth < maxDepth && Array.isArray(hit.meta.children)) {
+          for (const childCanonical of hit.meta.children) {
+            if (sameOriginOnly) {
+              try {
+                if (new URL(childCanonical).origin !== origin) continue;
+              } catch {
+                continue;
+              }
+            }
+            addEdge(edges, edgeKeys, {
+              source: canonical,
+              target: childCanonical,
+              type: "link",
+            });
+            if (!state.visited.has(childCanonical)) {
+              state.queue.push({
+                canonical: childCanonical,
+                depth: depth + 1,
+                isSeed: false,
+              });
+            }
+          }
+        }
+
+        stats.pagesVisited += 1;
+        stats.cacheHits += 1;
+        totalPagesCrawled += 1;
+        if (isSeed) stats.seedsCrawled += 1;
+        return;
+      }
+      stats.cacheMisses += 1;
+    }
+
     const page = await state.context.newPage();
+    let outPath = null; // remembered so we can write to cache after capture
+    const childCanonicals = []; // children discovered live, persisted on success
     try {
       const response = await page.goto(canonical, {
         waitUntil: "domcontentloaded",
@@ -274,7 +376,7 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
       if (screenshotsDir) {
         try {
           const filename = webScreenshotName(canonical);
-          const outPath = path.join(screenshotsDir, filename);
+          outPath = path.join(screenshotsDir, filename);
           await dismissOverlays(page);
           // Clip to viewport size so web screenshots have the same aspect
           // ratio as native screenshots. Without this, fullPage:true would
@@ -293,6 +395,7 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
           node.screenshot = `screenshots/web/${filename}`;
         } catch (shotErr) {
           node.screenshotError = shotErr.message;
+          outPath = null;
         }
       }
 
@@ -310,6 +413,7 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
               continue;
             }
           }
+          childCanonicals.push(childCanonical);
           addEdge(edges, edgeKeys, {
             source: canonical,
             target: childCanonical,
@@ -323,6 +427,23 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
             });
           }
         }
+      }
+
+      // Persist successful capture to cache. Errors aren't cached — let
+      // them retry on the next run, since they're often transient.
+      if (cacheEnabled && cacheFingerprint && !node.error) {
+        writeCache(
+          canonical,
+          cacheFingerprint,
+          {
+            label: node.label,
+            urlPath: node.urlPath,
+            children: childCanonicals,
+            cachedAt: Date.now(),
+          },
+          outPath,
+          { cacheDir },
+        );
       }
     } catch (err) {
       stats.pagesFailed += 1;

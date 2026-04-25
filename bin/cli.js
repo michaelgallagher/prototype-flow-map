@@ -117,6 +117,14 @@ program
     "--no-web-jumpoffs",
     "Skip web jump-off crawling (overrides webJumpoffs.enabled)",
   )
+  .option(
+    "--no-web-cache",
+    "Skip the per-page web-jumpoff cache for this run (forces a fresh crawl)",
+  )
+  .option(
+    "--clear-web-cache",
+    "Wipe the web-jumpoff cache directory before crawling, then continue",
+  )
   .action(async (prototypePath, options) => {
     const resolvedPath = path.resolve(prototypePath);
     const prototypeDirName = path.basename(resolvedPath);
@@ -224,6 +232,23 @@ program
       config.webJumpoffs.enabled = false;
     } else if (process.argv.includes("--web-jumpoffs")) {
       config.webJumpoffs.enabled = true;
+    }
+
+    // Web-cache CLI overrides. Both flags are independent toggles —
+    // `--clear-web-cache` wipes the cache and continues (useful when a
+    // hosted prototype has changed and you want a fresh crawl without
+    // editing config); `--no-web-cache` skips lookups for this run only.
+    if (process.argv.includes("--clear-web-cache")) {
+      try {
+        const { clearCache } = require("../src/web-jumpoff-cache");
+        const dir = clearCache({ cacheDir: config.webJumpoffs.cache.dir });
+        console.log(`   Cleared web-jumpoff cache${dir ? "" : ""}`);
+      } catch (err) {
+        console.warn(`   Warning: failed to clear web cache: ${err.message}`);
+      }
+    }
+    if (process.argv.includes("--no-web-cache")) {
+      config.webJumpoffs.cache.enabled = false;
     }
 
     // Handle --list-scenarios

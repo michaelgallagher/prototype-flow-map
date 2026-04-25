@@ -337,6 +337,12 @@ async function generateNative(options) {
       console.log(
         `   Added ${nodesAdded} web-page node(s), upgraded ${nodesUpgraded} native jump-off(s), added ${edgesAdded} link edge(s)`,
       );
+      const { cacheHits = 0, cacheMisses = 0 } = webResult.stats;
+      if (cacheHits > 0 || cacheMisses > 0) {
+        console.log(
+          `   Cache: ${cacheHits} hit(s), ${cacheMisses} miss(es)`,
+        );
+      }
       if (webResult.stats.pagesFailed > 0) {
         console.log(
           `   ⚠️  ${webResult.stats.pagesFailed} web page(s) failed to load`,
