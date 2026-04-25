@@ -140,20 +140,24 @@ Native (iOS + Android) prototypes link out to hosted web prototypes (NHS Prototy
 
 **Verified** on `~/Repos/native-nhsapp-android-prototype/DemoNHSApp2`: 12 native jump-offs upgraded, 28 BFS-discovered pages added, 460+ link edges, all with screenshots, all positioned in-column under their native handoff.
 
-### 1a. Next session — web journey tuning
+### 1a. Web journey tuning — **delivered**
 
-The MVP renders the full journey; these items polish how each web screen looks inside the map.
+The MVP rendered the full journey; this round polished how each web screen looks inside the map.
 
-**Task 1 — uniform aspect ratio on web screenshots**
-Native screenshots are portrait (375×812 iPhone / similar on Android). Web screenshots are currently `fullPage: true` (see `src/web-jumpoff-crawler.js` `page.screenshot({ path, fullPage: true })`), so a long content page produces a tall thumbnail that visually dominates the row. Crop/fit web screenshots to match the native viewport aspect ratio (probably 375×812 at `clip: { x: 0, y: 0, width, height }` with `fullPage: false`, OR keep fullPage capture and set `screenshotAspectRatio` on the node so the viewer's `getNodeDims` renders it in a fixed-height box). Decide between crop-at-capture vs resize-at-render — the viewer already has `thumbnailMode: 'xMidYMin slice'` which crops to the top portion of any screenshot; may be enough without touching the crawler. See `src/build-viewer.js:1190`.
+**Task 1 — uniform aspect ratio on web screenshots — done.** `src/web-jumpoff-crawler.js` now passes `clip: { x: 0, y: 0, width, height }` and `fullPage: false` to `page.screenshot`, with width/height drawn from the run's viewport (defaults to 375×812 at deviceScaleFactor 2 → 750×1624 PNG). Web thumbnails sit in a row alongside native portrait screens without visually dominating it.
 
-**Task 2 — strip web chrome (header / tab bar / footer) from web screenshots**
-In the real app, the in-app WebView uses user-agent detection + injected JavaScript to hide the hosted web prototype's own header, bottom tab bar, and footer so the page looks native. We should mimic this in our crawl so the map screenshots match what the user actually sees in the app. Two approaches:
+**Task 2 — strip web chrome from web screenshots — done.** Implemented as a CSS init script (Playwright's `context.addInitScript({ content })`, equivalent to iOS's `WKUserScript(.atDocumentStart)` and stricter than Android's `onPageFinished` because chrome never paints). The injected stylesheet has two layers:
 
-- **UA match**: set the crawler's User-Agent to whatever string the real app uses, and rely on the hosted prototype's existing JS to self-hide chrome. Cleanest — same code path as production. Check what UA the DemoNHSApp2 WKWebView / Custom Tab sends; plumb it through `browser.newContext({ userAgent })` in `src/web-jumpoff-crawler.js`.
-- **JS injection fallback**: if UA sniffing isn't enough (or prototypes don't implement it), extend `dismissOverlays` in the crawler to also strip common NHS-prototype chrome selectors (`.nhsuk-header`, `.nhsapp-tab-bar`, `.nhsuk-footer`, etc.) via `page.evaluate`.
+1. **Production parity rules** mirror the four CSS declarations the real native InAppBrowser injects (`.hide-on-native { display:none }`, plus three NHS prototype-kit padding/margin tweaks). On hosted prototypes that wrap their chrome in `<div class="hide-on-native">` (e.g. `native-nhsapp-prototype-web-test`), this is sufficient.
+2. **Belt-and-braces selectors** target the well-known NHS prototype-kit chrome classes/ids directly (`.app-global-navigation-native`, `.app-bottom-navigation`, `#bottomNav`, `.nhsuk-header`, `.nhsuk-footer`, plus `#nhsuk-cookie-banner`/`.nhsuk-cookie-banner` for nhs.uk pages). Needed because some hosted prototypes (e.g. `nhsapp-prototype-prescriptions`) render the same chrome raw without the wrapper. Selector-only — safe no-op on prototypes that don't use these conventions.
 
-Probably want both: UA first (pure), JS fallback as a config option.
+Why CSS injection over UA matching: tested production-style UA strings (`NHSApp/native`, Android+suffix, iOS+suffix) against the deployed prototypes and none hid the chrome — the hosted apps don't actually sniff UA, the production InAppBrowser injects CSS post-load. Mirroring the CSS path is the same code path production uses, with the belt-and-braces additions to handle prototype variation.
+
+One subtlety the implementation accounts for: chromium's init scripts fire before `document.documentElement` exists, so a naive `(document.head || document.documentElement).appendChild(style)` throws `Cannot read properties of null` and silently aborts. The implementation retries from `readystatechange`, `DOMContentLoaded`, and a `MutationObserver` on `document` until a target node is available.
+
+Config knobs (`webJumpoffs.hideNativeChrome` defaults true, `webJumpoffs.injectCss` for project-specific extra rules) are validated in `src/flow-map-config.js`.
+
+Verified on `~/Repos/native-nhsapp-android-prototype/DemoNHSApp2`: 40 web screenshots, all 750×1624, no visible header/bottom nav/cookie banner across the GP appointment, prescriptions, and `nhs.uk` mental-health pages.
 
 ### 1b. Follow-ups deferred from the MVP
 

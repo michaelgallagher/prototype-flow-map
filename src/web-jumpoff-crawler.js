@@ -48,7 +48,11 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
     sameOriginOnly = true,
     screenshots: screenshotsEnabled = true,
     allowlist = [],
+    hideNativeChrome = true,
+    injectCss = null,
   } = config || {};
+
+  const effectiveViewport = viewport || { width: 375, height: 812 };
 
   const stats = {
     seedsRequested: seedUrls.length,
@@ -105,13 +109,110 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
   // budget before other origins are touched.
   const originState = new Map(); // origin -> { context, visited, queue }
 
+  // CSS injection mirrors the production native InAppBrowser (Android
+   // `WebView.evaluateJavascript` in onPageFinished, iOS WKWebView via
+   // `WKUserScript(.atDocumentStart)`). Both apps inject the same four
+   // base rules so hosted prototypes can opt in to "in-app mode" by
+   // tagging chrome with `.hide-on-native` and adjusting NHS prototype-kit
+   // wrapper paddings.
+   //
+   // We use Playwright's addInitScript (runs before any page script) so
+   // chrome never paints — equivalent to iOS's .atDocumentStart and
+   // stricter than Android's onPageFinished (which briefly flashes
+   // chrome). The screenshots match what the user actually sees in the
+   // native app, not what the URL serves to a plain browser.
+   //
+   // The "Belt-and-braces" block is a fallback that targets the
+   // well-known NHS prototype-kit chrome selectors directly. Some hosted
+   // prototypes (e.g. the GP-appointment one in
+   // `native-nhsapp-prototype-web-test`) wrap their header and bottom
+   // nav in `<div class="hide-on-native">`, so the first rule is enough.
+   // Others (e.g. `nhsapp-prototype-prescriptions`) render the chrome
+   // raw, so we also hide the chrome containers by class/id. Rules only
+   // fire when the selector matches — safe no-op on prototypes that
+   // don't use these conventions.
+  const NATIVE_APP_CSS = `
+    /* Production InAppBrowser rules — match what the real app injects */
+    .hide-on-native { display: none !important; }
+    .nhsuk-back-link { margin-bottom: 0 !important; margin-top: 16px !important; }
+    .nhsuk-main-wrapper { padding-top: 16px !important; }
+    .app-width-container { padding-top: 0 !important; }
+
+    /* Belt-and-braces: NHS prototype-kit chrome that some hosted
+       prototypes don't wrap in .hide-on-native */
+    .app-global-navigation-native,
+    .app-global-navigation-web,
+    header.nhsuk-header,
+    .nhsuk-header,
+    .app-bottom-navigation,
+    #bottomNav,
+    .nhsapp-tab-bar,
+    .nhsuk-footer-container,
+    .nhsuk-footer,
+    /* Cookie / consent banners on nhs.uk and similar */
+    #nhsuk-cookie-banner,
+    .nhsuk-cookie-banner,
+    #cookiebanner { display: none !important; }
+  `;
+
+  function buildInitScript() {
+    const parts = [];
+    if (hideNativeChrome) parts.push(NATIVE_APP_CSS);
+    if (typeof injectCss === "string" && injectCss.trim()) {
+      parts.push(injectCss);
+    }
+    if (parts.length === 0) return null;
+    // Escape the CSS so it survives being embedded as a JS string literal.
+    const css = JSON.stringify(parts.join("\n"));
+    // Init scripts on chromium fire BEFORE document.documentElement exists,
+    // so any naive `appendChild` call throws "Cannot read properties of null"
+    // and the script silently aborts. We retry from multiple lifecycle
+    // hooks until a target node exists.
+    return `(() => {
+      const CSS = ${css};
+      const apply = () => {
+        if (typeof document === 'undefined') return false;
+        if (document.getElementById('flow-map-native-styles')) return true;
+        const target = document.head || document.documentElement;
+        if (!target) return false;
+        const style = document.createElement('style');
+        style.id = 'flow-map-native-styles';
+        style.textContent = CSS;
+        target.appendChild(style);
+        return true;
+      };
+      if (apply()) return;
+      // documentElement not yet available — try again on every readystate
+      // change and once DOMContentLoaded fires. Also observe document for
+      // mutations so we catch the moment <html> is parsed.
+      const tryAgain = () => { if (apply()) cleanup(); };
+      const cleanup = () => {
+        document.removeEventListener('readystatechange', tryAgain);
+        document.removeEventListener('DOMContentLoaded', tryAgain);
+        if (obs) obs.disconnect();
+      };
+      document.addEventListener('readystatechange', tryAgain);
+      document.addEventListener('DOMContentLoaded', tryAgain);
+      let obs = null;
+      if (typeof MutationObserver === 'function') {
+        obs = new MutationObserver(() => { tryAgain(); });
+        try { obs.observe(document, { childList: true, subtree: true }); }
+        catch (_) { obs = null; }
+      }
+    })();`;
+  }
+  const initScript = buildInitScript();
+
   async function ensureContext(origin) {
     let state = originState.get(origin);
     if (!state) {
       const context = await browser.newContext({
-        viewport: viewport || { width: 375, height: 812 },
+        viewport: effectiveViewport,
         deviceScaleFactor: 2,
       });
+      if (initScript) {
+        await context.addInitScript({ content: initScript });
+      }
       state = { context, visited: new Set(), queue: [] };
       originState.set(origin, state);
     }
@@ -175,7 +276,20 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
           const filename = webScreenshotName(canonical);
           const outPath = path.join(screenshotsDir, filename);
           await dismissOverlays(page);
-          await page.screenshot({ path: outPath, fullPage: true });
+          // Clip to viewport size so web screenshots have the same aspect
+          // ratio as native screenshots. Without this, fullPage:true would
+          // capture a long page in its entirety, producing a tall thumbnail
+          // that visually dominates a row of native portrait screens.
+          await page.screenshot({
+            path: outPath,
+            fullPage: false,
+            clip: {
+              x: 0,
+              y: 0,
+              width: effectiveViewport.width,
+              height: effectiveViewport.height,
+            },
+          });
           node.screenshot = `screenshots/web/${filename}`;
         } catch (shotErr) {
           node.screenshotError = shotErr.message;

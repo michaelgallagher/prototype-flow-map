@@ -147,6 +147,16 @@ function defaultConfig() {
       timeoutMs: 15000,
       sameOriginOnly: true,
       screenshots: true,
+      // When true (default), inject the same CSS the production native
+      // InAppBrowser injects (`.hide-on-native { display: none }` plus a
+      // few NHS-prototype-kit wrapper paddings) so web screenshots match
+      // what the user sees in the app, not what the URL serves to a plain
+      // browser. Set to false to capture pages with their full chrome.
+      hideNativeChrome: true,
+      // Optional extra CSS appended to the chrome-stripping CSS — useful
+      // when a prototype uses non-standard chrome selectors. Plain CSS
+      // string; injected at document start before any page script runs.
+      injectCss: null,
       allowlist: [],
     },
     fragments: {},
@@ -237,6 +247,12 @@ function validateConfig(raw) {
     }
     if (typeof wj.screenshots === "boolean") {
       config.webJumpoffs.screenshots = wj.screenshots;
+    }
+    if (typeof wj.hideNativeChrome === "boolean") {
+      config.webJumpoffs.hideNativeChrome = wj.hideNativeChrome;
+    }
+    if (typeof wj.injectCss === "string") {
+      config.webJumpoffs.injectCss = wj.injectCss;
     }
     if (Array.isArray(wj.allowlist)) {
       // Normalize each allowlist entry to its origin form (protocol + host)
