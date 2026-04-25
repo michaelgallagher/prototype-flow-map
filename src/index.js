@@ -15,7 +15,7 @@ const { buildMermaid } = require("./build-mermaid");
 const { exportPdf } = require("./export-pdf");
 const { buildIndex } = require("./build-index");
 const { scanSwiftFiles } = require("./swift-scanner");
-const { parseSwiftFile } = require("./swift-parser");
+const { parseSwiftFile, parseSwiftProject } = require("./swift-parser");
 const { buildSwiftGraph } = require("./swift-graph-builder");
 const { crawlAndScreenshotIos } = require("./swift-crawler");
 const { scanKotlinFiles } = require("./kotlin-scanner");
@@ -291,13 +291,12 @@ async function generateNative(options) {
     const swiftFiles = scanSwiftFiles(prototypePath);
     console.log(`   Found ${swiftFiles.length} Swift files`);
 
-    // Step 2: Parse each file for navigation patterns
+    // Step 2: Parse each file for navigation patterns. Two-pass — pass 1
+    // harvests project-wide WebFlowConfig URL bindings (enum-based static
+    // web flows declared in their own file from the call sites), pass 2
+    // parses each file with bindings available for indirection lookup.
     console.log("2️⃣  Parsing views for navigation...");
-    const parsedViews = [];
-    for (const file of swiftFiles) {
-      const parsed = parseSwiftFile(file, prototypePath);
-      if (parsed) parsedViews.push(parsed);
-    }
+    const parsedViews = parseSwiftProject(swiftFiles, prototypePath);
     console.log(`   Parsed ${parsedViews.length} SwiftUI views`);
 
     // Step 3: Build the graph

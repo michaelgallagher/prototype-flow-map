@@ -86,7 +86,7 @@ function stripSwiftComments(src) {
   return out;
 }
 
-function parseSwiftFile(filePath, projectPath) {
+function parseSwiftFile(filePath, projectPath, urlBindings = null) {
   const raw = fs.readFileSync(filePath, "utf-8");
   const content = stripSwiftComments(raw);
   const relativePath = path.relative(projectPath, filePath);
@@ -113,11 +113,41 @@ function parseSwiftFile(filePath, projectPath) {
   extractPushLinks(content, result);
   extractSheets(content, result);
   extractFullScreenCovers(content, result);
-  extractWebLinks(content, result);
+  extractWebLinks(content, result, urlBindings);
   extractTabChildren(content, result);
   extractNavigationDestinations(content, result);
 
   return result;
+}
+
+/**
+ * Two-pass Swift parsing entry point. Pass 1 harvests project-wide URL
+ * bindings (currently `enum X: ..., WebFlowConfig` declarations whose `var
+ * url: URL { switch self { ... } }` body resolves each case to a literal
+ * URL). Pass 2 runs the existing per-file parser but threads the bindings
+ * through so call sites that say `activeCover = .caseName` in a different
+ * file can be resolved.
+ *
+ * Returns `parsed[]` in the same shape as a series of `parseSwiftFile`
+ * calls — `null`-returning files (no `struct ... : View`) are filtered out.
+ */
+function parseSwiftProject(swiftFiles, projectPath) {
+  const urlBindings = new Map();
+
+  // Pass 1 — harvest enum-based WebFlowConfig URL bindings across the project.
+  for (const filePath of swiftFiles) {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const content = stripSwiftComments(raw);
+    extractEnumWebFlowBindings(content, urlBindings);
+  }
+
+  // Pass 2 — parse each file with bindings available for indirection lookup.
+  const parsed = [];
+  for (const filePath of swiftFiles) {
+    const view = parseSwiftFile(filePath, projectPath, urlBindings);
+    if (view) parsed.push(view);
+  }
+  return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +537,7 @@ function extractPresentedContent(closureContent, result, edgeType, fullContent, 
  * when referenced via `Self.startURL` or bare `startURL` in a `.webView(...)`
  * enum cover — common pattern for web-flow start URLs.
  */
-function extractWebLinks(content, result) {
+function extractWebLinks(content, result, urlBindings = null) {
   // Build a map of file-local URL constants for indirection resolution.
   //   let foo = URL(string: "https://...")!
   //   static let bar = URL(string: "...")
@@ -570,6 +600,187 @@ function extractWebLinks(content, result) {
       result.webLinks.push({ url: match[1], label: null, mode: "safari" });
     }
   }
+
+  // Resolve `activeCover = .caseName` (or any state-var assignment to a bare
+  // enum case) against the project-wide WebFlowConfig bindings harvested by
+  // `extractEnumWebFlowBindings`. The enum body lives in a different file
+  // (e.g. PrescriptionFlow.swift) from the call site (PrescriptionsView.swift),
+  // so this is the iOS analogue of the Kotlin `activeWebFlow = X.Y` resolution.
+  if (urlBindings && urlBindings.size > 0) {
+    // First, build a state-var → enum-type map from declarations in this file:
+    //   @State private var activeCover: PrescriptionFlow? = nil
+    //   @State var foo: SomeEnum?
+    //   private var bar: SomeEnum? = nil
+    // Captures the optional enum type so we can prefer qualified lookups.
+    const stateVarTypes = new Map();
+    const stateVarRe =
+      /(?:@State\s+)?(?:public\s+|private\s+|internal\s+|fileprivate\s+)?(?:var|let)\s+(\w+)\s*:\s*([A-Z]\w*)\?\s*(?:=|$)/gm;
+    let svMatch;
+    while ((svMatch = stateVarRe.exec(content)) !== null) {
+      stateVarTypes.set(svMatch[1], svMatch[2]);
+    }
+
+    // Then find every `IDENT = .caseName` assignment. The LHS can be a state
+    // var declared above or an arbitrary identifier (binding form) — we try
+    // qualified lookup first when we know the type, otherwise fall back to
+    // the bare case name.
+    const assignRe = /\b(\w+)\s*=\s*\.(\w+)\b/g;
+    const seenRefs = new Set();
+    let amatch;
+    while ((amatch = assignRe.exec(content)) !== null) {
+      const lhs = amatch[1];
+      const caseName = amatch[2];
+      const refKey = `${lhs}.${caseName}`;
+      if (seenRefs.has(refKey)) continue;
+      seenRefs.add(refKey);
+
+      const enumType = stateVarTypes.get(lhs);
+      const binding =
+        (enumType && urlBindings.get(`${enumType}.${caseName}`)) ||
+        urlBindings.get(caseName);
+      if (!binding) continue;
+
+      if (result.webLinks.some((l) => l.url === binding.url)) continue;
+      result.webLinks.push({
+        url: binding.url,
+        label: binding.label || null,
+        mode: "custom-webview",
+      });
+    }
+  }
+}
+
+/**
+ * Harvest WebFlowConfig-style URL bindings from a single file.
+ *
+ * Detects the iOS pattern:
+ *
+ *   enum PrescriptionFlow: String, WebFlowConfig {
+ *       case repeatPrescription
+ *       case chosenPharmacy
+ *
+ *       var url: URL {
+ *           switch self {
+ *           case .repeatPrescription:
+ *               URL(string: "https://...")!        // implicit return (Swift 5.9+)
+ *           case .chosenPharmacy:
+ *               URL(string: "https://...")!
+ *           }
+ *       }
+ *
+ *       var title: String {
+ *           switch self {
+ *           case .repeatPrescription: return "..."  // explicit return
+ *           case .chosenPharmacy:     return "..."
+ *           }
+ *       }
+ *   }
+ *
+ * Builds bindings keyed on both bare and enum-qualified case names so that
+ * downstream lookup at call sites (`activeCover = .repeatPrescription`)
+ * resolves to `{ url, label }`.
+ *
+ * Skips:
+ *   - Enums that don't conform to `WebFlowConfig` (keeps noise low — this
+ *     is the project-wide convention for declaring static web flows).
+ *   - Enums whose `url:` body uses runtime-built URLs (e.g. `URL(string:
+ *     someProperty)`) — cannot be statically resolved.
+ *   - The `struct X: WebFlowConfig` form (e.g. `MessageWebFlow`) where the
+ *     URL is a stored property bound at runtime from the constructor.
+ *
+ * Both the bare key (`repeatPrescription`) and the qualified key
+ * (`PrescriptionFlow.repeatPrescription`) are written. When two enums share
+ * a case name, the qualified key disambiguates and the bare-key writer
+ * skips if the bare key is already claimed (matches the Kotlin policy).
+ */
+function extractEnumWebFlowBindings(content, bindings) {
+  // Find every enum declared as conforming to WebFlowConfig. The `:` clause
+  // can include other conformances (e.g. `String, Identifiable, WebFlowConfig`)
+  // — match anywhere in the inheritance list.
+  const enumRe = /\benum\s+(\w+)\s*:\s*([^{]+?)\{/g;
+  let enumMatch;
+  while ((enumMatch = enumRe.exec(content)) !== null) {
+    const enumName = enumMatch[1];
+    const inheritance = enumMatch[2];
+    if (!/\bWebFlowConfig\b/.test(inheritance)) continue;
+
+    const enumBraceIdx = content.indexOf("{", enumMatch.index);
+    if (enumBraceIdx === -1) continue;
+    const enumBody = extractClosureAt(content, enumBraceIdx);
+    if (!enumBody) continue;
+
+    // Find `var url: URL { ... }` inside the enum body. Allow `static`,
+    // `nonisolated`, access modifiers, and an optional body type annotation.
+    const urlVarRe =
+      /\b(?:nonisolated\s+|static\s+|public\s+|private\s+|internal\s+|fileprivate\s+)*var\s+url\s*:\s*URL\s*\{/g;
+    const urlVarMatch = urlVarRe.exec(enumBody.content);
+    if (!urlVarMatch) continue;
+
+    const urlBlockBrace =
+      enumBody.content.indexOf("{", urlVarMatch.index + urlVarMatch[0].length - 1);
+    if (urlBlockBrace === -1) continue;
+    const urlBlock = extractClosureAt(enumBody.content, urlBlockBrace);
+    if (!urlBlock) continue;
+
+    // Optional `var title: String { ... }` for labels — same modifier prefix.
+    const titleVarRe =
+      /\b(?:nonisolated\s+|static\s+|public\s+|private\s+|internal\s+|fileprivate\s+)*var\s+title\s*:\s*String\s*\{/g;
+    const titleVarMatch = titleVarRe.exec(enumBody.content);
+    let titleByCase = new Map();
+    if (titleVarMatch) {
+      const titleBlockBrace =
+        enumBody.content.indexOf("{", titleVarMatch.index + titleVarMatch[0].length - 1);
+      if (titleBlockBrace !== -1) {
+        const titleBlock = extractClosureAt(enumBody.content, titleBlockBrace);
+        if (titleBlock) titleByCase = extractTitleCases(titleBlock.content);
+      }
+    }
+
+    // Walk `case .NAME:` … URL extractors inside the url block. The body
+    // between two case labels (or between the last case and the end of the
+    // switch) holds the URL expression.
+    const caseRe = /\bcase\s+\.(\w+)\s*:/g;
+    const caseStarts = [];
+    let cmatch;
+    while ((cmatch = caseRe.exec(urlBlock.content)) !== null) {
+      caseStarts.push({ name: cmatch[1], start: cmatch.index + cmatch[0].length });
+    }
+    for (let i = 0; i < caseStarts.length; i++) {
+      const cs = caseStarts[i];
+      const next = caseStarts[i + 1];
+      const segment = urlBlock.content.slice(cs.start, next ? next.start - "case ".length : urlBlock.content.length);
+      // Match the first URL(string: "...") in this case's segment. Tolerates
+      // `return`, leading whitespace, a force-unwrap `!`, and parens around
+      // the constructor.
+      const urlMatch = /URL\s*\(\s*string\s*:\s*"(https?:\/\/[^"]+)"\s*\)/.exec(segment);
+      if (!urlMatch) continue;
+      const url = urlMatch[1];
+      const label = titleByCase.get(cs.name) || null;
+      const entry = { url, label };
+
+      // Always write the qualified form; only write the bare form if not
+      // already claimed (preserves disambiguation if a later enum has the
+      // same case name).
+      bindings.set(`${enumName}.${cs.name}`, entry);
+      if (!bindings.has(cs.name)) bindings.set(cs.name, entry);
+    }
+  }
+}
+
+/**
+ * Walk a `var title: String { switch self { case .X: return "..." } }` body
+ * and return a `Map<caseName, label>`. Both implicit and explicit `return`
+ * forms are accepted.
+ */
+function extractTitleCases(body) {
+  const out = new Map();
+  // Match `case .NAME: <maybe return> "literal"` — single-case-per-line.
+  const re = /\bcase\s+\.(\w+)\s*:\s*(?:return\s+)?"((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    out.set(m[1], m[2]);
+  }
+  return out;
 }
 
 /**
@@ -648,4 +859,4 @@ function toLabel(viewName) {
     .trim();
 }
 
-module.exports = { parseSwiftFile, toLabel };
+module.exports = { parseSwiftFile, parseSwiftProject, toLabel };
