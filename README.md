@@ -82,7 +82,14 @@ A toolbar at the top of the browser controls the recording. Click through your l
 
 ## Planning and design
 
-Design rationale, roadmaps, and option analyses are in [`docs/planning-materials/`](docs/planning-materials/).
+Forward-looking docs live in [`docs/plans/`](docs/plans/):
+
+- [`docs/plans/roadmap.md`](docs/plans/roadmap.md) — active workstreams with implementation detail
+- [`docs/plans/future-ideas.md`](docs/plans/future-ideas.md) — deferred items
+- [`docs/plans/design-decisions.md`](docs/plans/design-decisions.md) — architectural rationale
+- [`docs/plans/archive/`](docs/plans/archive/) — completed plans, kept for context
+
+See [`docs/README.md`](docs/README.md) for the full doc index.
 
 ## Prerequisites
 

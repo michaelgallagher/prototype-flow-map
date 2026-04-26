@@ -73,7 +73,7 @@ Click "a[href*='/medical-information']"
 Snapshot
 ```
 
-For more detailed examples, you can check out the exampoles in `docs/example-scenarios/`.
+For more detailed examples, you can check out the examples in `docs/example-scenarios/`.
 
 ### Header directives
 

@@ -1,6 +1,8 @@
 # Web App & Collaboration Plan
 
-> **Status: Phase 1 in progress.** This document describes the plan to evolve prototype-flow-map from a local CLI tool into a deployable web application that teams can use collaboratively.
+> **Status: Phase 1 partially delivered, Phases 2–5 still future work.** Archived for historical context. The Phase 1 server (Express + positions API, `serve` subcommand, `Procfile`, position carry-forward at build time, `__SAVED_POSITIONS__` injection, dirty/saved button states) landed via cherry-pick from the `build-a-server` branch. Still outstanding from Phase 1: Heroku deployment hasn't been validated end-to-end. Phases 2–5 (comments, identity/SQLite, real-time, web-triggered generation) have been folded into [`../future-ideas.md`](../future-ideas.md).
+>
+> Original plan retained below for context.
 
 ## Current State
 

@@ -1,0 +1,183 @@
+# Future ideas
+
+> Items not yet promoted to active workstreams. Each entry has enough context to be picked up when its time comes — but they're explicitly NOT scheduled. The active list is in [`roadmap.md`](roadmap.md).
+>
+> Items here may eventually:
+> - Get promoted to a roadmap workstream (when the user signals it's time)
+> - Get formally deprecated (move to `archive/` with a "rejected" status)
+> - Stay here indefinitely as parking-lot ideas
+
+---
+
+## Server collaboration features (Phases 2–5)
+
+Originally documented in [`archive/webapp-collaboration.md`](archive/webapp-collaboration.md). Phase 1 (server + positions) is delivered; what's below is what remains.
+
+### Comments and annotations (Phase 2)
+
+Allow users to leave notes on maps and individual nodes for review/discussion.
+
+**API endpoints:**
+- `GET /api/maps/:name/comments` — list all comments for a map
+- `POST /api/maps/:name/comments` — add a comment, optionally with `nodeId` to attach to a specific node
+- `PATCH /api/maps/:name/comments/:id` — edit/resolve
+- `DELETE /api/maps/:name/comments/:id`
+
+**Data model:** `{ id, nodeId?, text, author, createdAt, resolved }` stored in `comments.json`.
+
+**Viewer UI:**
+- Comment icon/badge on nodes that have comments
+- Comment thread in the node detail panel
+- General "page comments" panel for non-node-specific notes
+- Simple "What's your name?" prompt on first comment, stored in localStorage
+
+**Why deferred:** the user hasn't asked for it yet, and the use case (collaborative review of generated maps) is downstream of more pressing items.
+
+### Lightweight identity + SQLite (Phase 3)
+
+Currently positions and (future) comments are stored as JSON files. As the data grows, JSON-on-disk becomes harder to manage (concurrent writes can corrupt; growing files slow page loads).
+
+**Approach:**
+- Switch from JSON files to SQLite (single `.sqlite` per output dir)
+- Simple identity: "What's your name?" prompt on first visit, stored as a cookie (no passwords, no OAuth)
+- Change attribution: positions and comments record who and when
+- Optional "last edited by X, 2 hours ago" indicators
+
+**Why deferred:** SQLite adds a native dependency (`better-sqlite3`) and migration complexity. Worth it once we have ≥2 collaborative features sharing the data layer.
+
+### Real-time sync (Phase 4)
+
+WebSocket layer (Socket.IO or plain `ws`) alongside Express:
+- Drag a node → moves for everyone in real time
+- Comments appear immediately for everyone
+- Presence indicators (who's currently viewing the map)
+- Last-write-wins conflict resolution for positions; comments are append-only
+
+**Why deferred:** large effort, only worth it once Phases 2–3 have generated enough collaborative usage to justify it.
+
+### Web-triggered generation (Phase 5)
+
+Allow non-developers to generate maps without running the CLI locally:
+- UI to point at a Git repo URL or upload a prototype zip
+- Background job runner (worker process)
+- WebSocket-based progress updates
+- Optional scheduled regeneration on Git push via webhook
+
+**Why deferred:** large effort. Currently the CLI-locally workflow is fine for the developer audience. Revisit if non-developer audiences become a real ask.
+
+---
+
+## Layout polish
+
+### Reingold-Tilford / proper subtree-width-aware tree layout
+
+Workstream 2 of the roadmap (Parts A and B) gets the iOS map tree-shaped via dagre + virtual subgraph owners. If that's still not enough, the next step is a proper Reingold-Tilford-style layout that sizes each subtree's horizontal slot based on its descendants.
+
+**Why deferred:** Dagre + virtual owners should be sufficient for typical NHS prototype sizes. Only worth pursuing if we hit cases where they aren't.
+
+### iOS tab-pattern detection
+
+Some iOS apps DO use tabs (`TabView`, custom tab containers, etc.). Detecting these natively would replace virtual subgraph inference for those apps and produce a more accurate map.
+
+**Why deferred:** virtual subgraph inference (Workstream 2 Part B) covers the same ground for the no-tabs case, which is the immediate need. iOS-specific tab detection is purely an accuracy improvement.
+
+### Hierarchical clustering for very large graphs
+
+For graphs over ~200 nodes (rare today), the current layout becomes unwieldy. A clustering pass would group related nodes and show clusters at low zoom levels, expanding on zoom-in.
+
+**Why deferred:** no current prototype hits this scale. Revisit if/when one does.
+
+---
+
+## iOS speed (deeper)
+
+### Replace XCUITest with `simctl io` direct screenshots
+
+If Workstream 4 Phases 2–3 don't get iOS within 2× of Android, the next step is to bypass XCUITest entirely and capture Simulator screenshots directly via `xcrun simctl io <device> screenshot`.
+
+**Approach:** instead of running an XCUITest harness that calls `captureToImage()`, use UI automation to navigate to each screen (still via XCUITest or directly via `xcrun simctl ui`), then capture via `simctl io`. Avoids the XCUITest framework overhead per screen.
+
+**Why deferred:** bigger architectural change. Phases 2–3 might be sufficient.
+
+### Parallel Simulator instances
+
+Run two Simulators in parallel, each capturing half the screens.
+
+**Why deferred:** each Simulator boot is heavy and disk-intensive. Unclear it's actually faster — needs investigation. Probably not worth it unless the per-screenshot wall-clock cost dominates.
+
+### Physical-device screenshot capture
+
+Tests on a connected iPhone via USB. Faster than Simulator boot, but adds device-management overhead and doesn't scale to CI.
+
+**Why deferred:** narrow use case (developers with a connected device, not running CI).
+
+---
+
+## Web crawler depth
+
+### Form-gated journey crawl
+
+Web jump-off BFS only follows `<a href>`. Pages reached via `<form method="post">` submission ("Start now" buttons that POST) aren't reached, so prototypes that gate progression behind form submits show only the entry page.
+
+**Approach:** layer a scenario-style driver on top of the crawler. Detect known form patterns (e.g. NHS Prototype Kit's "Start now" button) and synthesize a scenario step that submits the form before continuing BFS.
+
+**Why deferred:** no current smoke target is form-gated. Revisit when one is.
+
+### Authenticated page crawl
+
+Each web jump-off crawl creates a fresh browser context with no cookies. Pages behind a login form are unreachable.
+
+**Approach:** allow the user to specify a setup scenario (`scenarios/web-jumpoff-setup.flow`) that runs once per origin to log in. Subsequent BFS uses the authenticated context.
+
+**Why deferred:** hosted NHS prototypes are typically auth-free. Revisit if we encounter auth-gated content worth crawling.
+
+### JS-only navigation extraction
+
+Links that exist only as JavaScript click handlers (no `<a href>`) aren't extracted. Could be addressed by injecting a click-trap that records `event.target` for synthetic navigation.
+
+**Why deferred:** vanishingly rare in NHS prototype kit content; not worth the implementation cost yet.
+
+---
+
+## Tooling and DX
+
+### Mural export (resurrect or formally drop)
+
+The `mural-export` branch contains a `src/export-mural.js` (302 lines) implementing a Mural board export, with the commit message "doesn't actually work yet". Either:
+- **Resurrect**: finish the implementation, support exporting a flow map to a Mural board for collaborative annotation
+- **Formally drop**: delete the branch with a note that Mural export was explored and abandoned
+
+**Why deferred:** unclear whether Mural is actually a valuable export target compared to direct collaborative features in our own viewer (covered by server Phases 2–4). Decision needed before further investment.
+
+### Automated tests
+
+The test infrastructure exists (`package.json` has `"test": "node --test src/**/*.test.js"`) but coverage is sparse. Priorities for testing:
+
+- **`.flow` parser** (`src/flow-parser.js`) — well-defined input/output, easy unit test target
+- **Config validation** (`src/flow-map-config.js`) — many edge cases, currently only manually verified
+- **Scenario runner** (`src/scenario-runner.js`) — needs Playwright fixtures, harder but high value
+- **Web jump-off cache** (`src/web-jumpoff-cache.js`) — pure function, easy target
+
+Plus error-recovery tests: what happens when an interactive step fails mid-scenario? The current behavior is "fail the scenario"; we may want "skip to next scenario" with a clear failure indicator.
+
+**Why deferred:** active feature work has been the priority; tests will be added once the surface area stabilises.
+
+### CLI improvements
+
+- **Auto-detection improvements.** Currently auto-detects iOS/Android by file presence. Could be more aggressive (read `package.json` to detect web prototype kit, etc.).
+- **`prototype-flow-map init`.** Generate a starter `flow-map.config.yml` based on auto-detection.
+- **`prototype-flow-map list`.** Show all generated maps in the output dir with metadata (generated date, run duration, node count).
+
+**Why deferred:** quality-of-life only, no active blockers.
+
+---
+
+## Open design questions
+
+These don't have clear answers yet — leaving them parked for now:
+
+- **Visit-driven vs BFS auto-detection.** Should the tool auto-detect when scenario steps form a complete journey (visit-driven) versus when BFS expansion is needed? Currently explicit in config.
+- **More than two scenarios in merged maps.** Combined views currently support 2-up; should they support arbitrary scenario counts in a grid?
+- **Cross-prototype stitching.** When a `WebView` URL in the iOS app matches a web prototype page we've also generated a map for, should we stitch them together at viewer load time? (Different from web jump-offs, which crawl hosted prototypes — this would link iOS+web prototypes the user owns.)
+- **Per-edge "via" provenance.** "This page was reachable via the bottom nav, which is why we hid it." Possible v2 of hidden-link filtering. Useful for debugging but adds UI complexity.
+- **Shared "anchor" nodes across scenarios beyond automatic dedup.** Allow scenarios to declare `Anchor /dashboard` so all scenarios pin the dashboard at the same coordinates.

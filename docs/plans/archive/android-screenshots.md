@@ -1,6 +1,8 @@
 # Plan — Android screenshot capture
 
-> Reviewable, editable plan for adding screenshot capture to the Android branch of prototype-flow-map.
+> **Status: delivered.** Archived for historical context. The Android screenshot pipeline described here is implemented across `src/kotlin-parser.js`, `src/kotlin-graph-builder.js`, `src/kotlin-crawler.js`, and `src/android-test-generator.js`. See [`../../android-support.md`](../../android-support.md) for the current user-facing reference, and [`../../how-it-works.md`](../../how-it-works.md) for the architecture overview.
+
+> Originally: reviewable plan for adding screenshot capture to the Android branch of prototype-flow-map.
 > Based on the **existing proof-of-concept** in `~/Repos/native-nhsapp-android-prototype/DemoNHSApp2` (not committed), not the iOS pipeline.
 
 ## Goal

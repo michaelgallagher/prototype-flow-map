@@ -1,6 +1,8 @@
 # Saving layout positions
 
-> **Status: not yet implemented.** This is a design proposal for a future feature. The viewer currently supports drag-to-reposition with localStorage persistence only.
+> **Status: Option 4 (server-side persistence) delivered.** Archived for historical context. The selected approach lives in `src/server.js` (Express, REST API for positions) and the viewer-side wiring in `src/build-viewer.js`. See [`../roadmap.md`](../roadmap.md) for what remains around the server (additional endpoints, viewer fallback UX, `--serve` flag exists but isn't yet auto-invoked).
+>
+> Options 1, 2, and 3 below were considered and rejected — kept here so the rationale is preserved.
 
 ## Current behaviour
 

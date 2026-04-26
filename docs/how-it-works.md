@@ -48,7 +48,7 @@ Key files: `src/recorder.js`, `src/recorder-inject.js`, `src/flow-serializer.js`
 ## iOS prototypes
 
 1. **Scans** for all `.swift` files in the project
-2. **Parses** each file for SwiftUI navigation patterns
+2. **Parses each file twice.** Pass 1 walks every file harvesting a project-wide `urlBindings` map from `enum X: ..., WebFlowConfig { var url: URL { switch self { case .name: URL(...)! } } }` declarations (cross-file resolution for native→web handoffs). Pass 2 parses each file's SwiftUI navigation patterns (`NavigationLink`, `.sheet`, `.fullScreenCover`, `.navigationDestination`, web-view covers, `WebView`, `WebLink`, `UIApplication.shared.open`), threading `urlBindings` through to resolve `activeCover = .caseName` assignments via `@State var foo: SomeEnum?` type qualification.
 3. **Builds a directed graph** of screens and navigation edges
 4. **Generates a temporary XCUITest** that navigates to each screen and takes a screenshot
 5. **Runs `xcodebuild test`** in the iOS Simulator, collects the PNG files
@@ -92,6 +92,24 @@ When `--web-jumpoffs` is set on a native run, after the native graph is built bu
 7. **Native screenshot phase runs after the splice** so the iOS/Android crawlers never see web nodes
 
 Key files: `src/web-jumpoff-crawler.js` (Playwright BFS + cache integration), `src/web-jumpoff-cache.js` (per-page disk cache), `src/splice-web-subgraphs.js` (in-place node upgrade + rank propagation). See [Web jump-offs](web-jumpoffs.md) for the user-facing reference.
+
+### Hidden-link filtering
+
+When `webJumpoffs.hideNativeChrome` is true (the default), the BFS link extractor in `src/crawler.js` (`extractRuntimeLinks`) walks each `<a>`'s ancestor chain and skips links whose own or ancestor's computed `display`/`visibility` makes them invisible. Mirrors what the user can actually click inside the production InAppBrowser — pages reachable only via hidden chrome (bottom nav, header logo, footer, cookie banner) don't appear as nodes. Reduced edge counts on the Android smoke target from 460 → 152.
+
+## Serving generated maps
+
+The tool can run as a local web server over an output directory:
+
+```bash
+npx prototype-flow-map serve ./flow-map-output --port 3000
+```
+
+When the viewer detects it's being served (via `GET /api/health`), it switches from `localStorage`-only persistence to API-backed persistence. Layout positions saved with the "Save layout" button go to `PUT /api/maps/:name/positions` and are written to `<output>/maps/<name>/positions.json`. Viewers opened directly from disk (file://) fall back to `localStorage`.
+
+On regeneration, `buildViewer` reads the existing `positions.json` and embeds it as `window.__SAVED_POSITIONS__` so manual layout adjustments survive map updates (for nodes whose IDs still exist).
+
+Key files: `src/server.js`, `src/build-viewer.js`. See [`viewer.md`](viewer.md#repositioning-nodes) for the position-loading priority chain.
 
 ## Canonical deduplication
 
