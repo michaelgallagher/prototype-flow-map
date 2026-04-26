@@ -133,6 +133,29 @@ Tests on a connected iPhone via USB. Faster than Simulator boot, but adds device
 
 ---
 
+## Native screenshot capture coverage
+
+### Investigate why iOS captures fewer screenshots than expected
+
+The Phase 1 baseline run against `~/Repos/nhsapp-ios-demo-v2` reported `Captured 17 of 45 screens` — i.e. 28 of the 45 graph nodes did not produce a PNG. The XCUITest harness was generated for 42 nodes (3 nodes correctly skipped — likely external/web-view types that aren't navigable in iOS UI), but only 17 of those 42 tests successfully captured a screenshot.
+
+This was latent before Phase 1 because there was no run-summary line surfacing the ratio. Now visible, worth investigating.
+
+**Possible causes:**
+
+- Parameterised iOS routes the resolver can't fill (e.g. detail screens needing a bound `id`). Compare to Android's explicit override mechanism for parameterised routes.
+- Screens needing session state not present at test launch (e.g. logged-in-only screens; iOS doesn't have an equivalent of Android's onboarding shared-pref bypass).
+- XCUITest tap-by-label sequences in the generated test that don't find their target (e.g. labels changed, screen needs scrolling first, accessibility identifier missing).
+- Generated test code paths that throw mid-test, skipping subsequent captures in the same test file.
+
+**First step:** parse the `xcodebuild test` output more carefully — flow-map already filters lines containing `[flow-map]` for tap diagnostics, but failed-test reasons may be in other parts of the output. Add a "captures attempted vs succeeded vs failed-with-reason" breakdown to the summary log.
+
+**Second step:** for each failed capture, identify the cause and pattern-match against the four hypotheses above. Some may be config-fixable (overrides for parameterised routes), some may be code-fixable (improve the tap-by-label fallback chain), some may be prototype-specific (the test prototype is missing accessibility labels).
+
+**Why deferred:** correctness rather than speed; the iOS speed workstream (active in the roadmap) is independently valuable. Pick this up after Phase 2 + 3 land. Tracked here so it doesn't get lost.
+
+---
+
 ## Web crawler depth
 
 ### Form-gated journey crawl
