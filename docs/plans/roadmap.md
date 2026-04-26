@@ -45,39 +45,13 @@ Three-phase approach: instrument first to confirm where time goes, then attack t
 
 ### Approach
 
-#### Phase 1 — instrument
+#### Phase 1 — instrument ✓ delivered
 
-Add per-phase timing across the iOS pipeline. Print a summary at the end:
+Top-level per-phase timing across `generate`, `generateNative`, and `generateScenario`. Prints a `📊 Run summary` block at the end of every run, with phase names + durations + a Total. Last-run total persisted per absolute prototype path to `~/.cache/prototype-flow-map/last-run.json`; CLI startup banner shows "Last run: Xm Ys (timestamp)" when a prior run exists. See `src/phase-timer.js` and `src/last-run-cache.js`.
 
-```
-Run summary
-  Parse:        12s
-  Web jumpoffs: 18s (cache: 24 hit, 8 miss)
-  Build:        3m 42s
-  Test/capture: 5m 20s
-  Pull/process: 1m 8s
-  Viewer:       4s
-  Total:        11m 4s   (last run: 12m 18s)
-```
+What's instrumented today: `Parse` (file scan + parse + graph build), `Web jumpoffs`, `Screenshots` (the big one for native), `Viewer`, plus `Static analysis` and `Scenarios` for the web scenario pipeline.
 
-A small `src/phase-timer.js` module:
-
-```js
-function createTimer() {
-  const phases = [];
-  let active = null;
-  return {
-    start(name) { active = { name, t0: Date.now() }; },
-    stop() { if (active) { active.dt = Date.now() - active.t0; phases.push(active); active = null; } },
-    summary() { /* formatted output */ },
-    durations() { return phases; }
-  };
-}
-```
-
-Persist last-run total to `~/.cache/prototype-flow-map/last-run.json` keyed by prototype path so iOS and Android are tracked separately. On startup, if a previous run exists for this prototype, print "Last run: 12m 18s" before doing anything.
-
-This Phase 1 work also delivers the "run-time counter and last-run duration" item from [`future-ideas.md`](future-ideas.md).
+What's NOT instrumented yet (out of scope for Phase 1, useful for Phase 2 design): sub-phases inside the iOS `Screenshots` step. The `xcodebuild test` invocation is currently a single black box — to know how much of it is build vs Simulator boot vs test execution vs screenshot extraction, we'd need to either parse `xcodebuild`'s output or restructure the call into separate `build-for-testing` / `test-without-building` invocations. The latter is exactly what Phase 2 does, so the breakdown will fall out naturally there.
 
 #### Phase 2 — parallelise the build
 
@@ -134,19 +108,14 @@ Expected gain: a warm-cache iOS run skips the build entirely → ~5-6 min total 
 
 | File | Change |
 |---|---|
-| `src/phase-timer.js` | **New.** Timer utility per the Phase 1 sketch. |
-| `src/index.js` | Phase 1: wrap each phase with `timer.start()` / `timer.stop()`. Print summary at end. Phase 2: restructure `generateNativeIos` to run build in parallel with graph work. |
+| `src/phase-timer.js` | ✓ delivered. Timer utility (`createTimer`, `formatMs`). |
+| `src/last-run-cache.js` | ✓ delivered. Per-prototype-path cache at `~/.cache/prototype-flow-map/last-run.json`. |
+| `src/index.js` | ✓ Phase 1 timer wired into `generate`, `generateNative`, `generateScenario`. Phase 2: restructure `generateNative` (iOS branch) to run build in parallel with graph work. |
+| `bin/cli.js` | ✓ "Last run: Xm Ys" prints in the startup banner when a prior run exists. |
 | `src/swift-build-runner.js` | **New** (Phase 2). Manages the background `xcodebuild build-for-testing` child process: launch, error capture, await, cleanup. |
 | `src/swift-build-cache.js` | **New** (Phase 3). Hash sources, look up derived-data path, return either "cached, use this path" or "miss, do a fresh build". |
-| `bin/cli.js` | Phase 1: print last-run duration on startup if available. |
 
 ### Verification
-
-**Phase 1:**
-1. Run iOS smoke target. Confirm: phase summary appears at end with sensible numbers.
-2. Confirm: `~/.cache/prototype-flow-map/last-run.json` is written and readable.
-3. Run again. Confirm: "Last run: Xm Ys" prints at startup.
-4. Confirm: Android run also gets timing summary; key is per-prototype-path so iOS and Android last-run values don't collide.
 
 **Phase 2:**
 1. Time a baseline iOS run (Phase 1 timing data is the baseline).

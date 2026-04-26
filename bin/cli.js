@@ -342,6 +342,23 @@ program
     console.log(`   Mode:      ${mode}`);
     console.log(`   Output:    ${path.resolve(options.output)}`);
     console.log(`   Map:       ${mapName}`);
+
+    // If we've run against this prototype before, surface the previous total
+    // so the user can compare. Persisted by src/index.js, see
+    // src/last-run-cache.js.
+    try {
+      const { loadFor: loadLastRun } = require("../src/last-run-cache");
+      const { formatMs } = require("../src/phase-timer");
+      const last = loadLastRun(resolvedPath);
+      if (last && typeof last.totalMs === "number") {
+        const when = last.ranAt ? new Date(last.ranAt).toLocaleString() : "";
+        console.log(
+          `   Last run:  ${formatMs(last.totalMs)}${when ? ` (${when})` : ""}`,
+        );
+      }
+    } catch {
+      // best-effort
+    }
     console.log();
 
     try {

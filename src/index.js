@@ -35,6 +35,8 @@ const {
   collectSeedUrls,
   spliceWebSubgraphs,
 } = require("./splice-web-subgraphs");
+const { createTimer, formatMs } = require("./phase-timer");
+const { saveFor: saveLastRun } = require("./last-run-cache");
 
 async function generate(options) {
   const {
@@ -71,6 +73,10 @@ async function generate(options) {
   // When --name is provided, output goes to maps/<name>/ within the output dir
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
 
+  // Per-phase timing — see src/phase-timer.js
+  const timer = createTimer();
+
+  timer.start("Parse");
   // Step 1: Scan for all template files
   console.log("1️⃣  Scanning templates...");
   const templateFiles = scanTemplates(prototypePath);
@@ -124,6 +130,7 @@ async function generate(options) {
 
   // Step 5: Crawl and screenshot (if enabled)
   if (screenshots) {
+    timer.start("Screenshots");
     console.log("5️⃣  Crawling prototype and capturing screenshots...");
     graph = await crawlAndScreenshot(graph, {
       prototypePath,
@@ -206,6 +213,7 @@ async function generate(options) {
   }
 
   // Step 6: Build the viewer
+  timer.start("Viewer");
   console.log("6️⃣  Building interactive viewer...");
   await buildViewer(graph, mapOutputDir, screenshots, viewport, {
     name,
@@ -250,6 +258,15 @@ async function generate(options) {
     buildIndex(outputDir);
     console.log("   Collection index built");
   }
+
+  timer.stop();
+  console.log("\n📊 Run summary");
+  console.log(timer.summary());
+  saveLastRun(prototypePath, {
+    totalMs: timer.totalMs(),
+    platform: "web",
+    phases: timer.durations(),
+  });
 }
 
 async function generateNative(options) {
@@ -271,6 +288,12 @@ async function generateNative(options) {
   // when callers invoke generateNative() programmatically without a config.
   const config = providedConfig || loadConfig(prototypePath);
 
+  // Per-phase timing — informs optimisation work, particularly the iOS speed
+  // workstream. start() auto-stops the previous phase, so each new phase
+  // marker just needs a single call.
+  const timer = createTimer();
+
+  timer.start("Parse");
   if (platform === "android") {
     // Step 1: Scan for Kotlin source files
     console.log("1️⃣  Scanning Kotlin files...");
@@ -316,6 +339,7 @@ async function generateNative(options) {
   // to, and splice the resulting subgraphs in. Runs before native screenshot
   // capture so the iOS/Android crawlers never see web-page nodes.
   if (config.webJumpoffs && config.webJumpoffs.enabled) {
+    timer.start("Web jumpoffs");
     const seeds = collectSeedUrls(graph, config.webJumpoffs.allowlist);
     if (seeds.length === 0) {
       console.log(
@@ -363,6 +387,7 @@ async function generateNative(options) {
 
   // Step 4: Capture screenshots (if enabled)
   if (screenshots && platform === "ios") {
+    timer.start("Screenshots");
     console.log("4️⃣  Capturing screenshots via XCUITest...");
     graph = await crawlAndScreenshotIos(graph, {
       prototypePath,
@@ -373,6 +398,7 @@ async function generateNative(options) {
       `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
     );
   } else if (screenshots && platform === "android") {
+    timer.start("Screenshots");
     console.log("4️⃣  Capturing screenshots via Android Compose test...");
     graph = await crawlAndScreenshotAndroid(graph, {
       prototypePath,
@@ -387,6 +413,7 @@ async function generateNative(options) {
   }
 
   // Step 5: Build the viewer
+  timer.start("Viewer");
   console.log("5️⃣  Building interactive viewer...");
   await buildViewer(graph, mapOutputDir, screenshots, null, {
     name,
@@ -419,6 +446,15 @@ async function generateNative(options) {
     buildIndex(outputDir);
     console.log("   Collection index built");
   }
+
+  timer.stop();
+  console.log("\n📊 Run summary");
+  console.log(timer.summary());
+  saveLastRun(prototypePath, {
+    totalMs: timer.totalMs(),
+    platform,
+    phases: timer.durations(),
+  });
 }
 
 async function generateScenario(options) {
@@ -471,7 +507,11 @@ async function generateScenario(options) {
     );
   }
 
+  // Per-phase timing — see src/phase-timer.js
+  const timer = createTimer();
+
   // Run static analysis for enrichment
+  timer.start("Static analysis");
   console.log(`\n1️⃣  Running static analysis for enrichment...`);
   const templateFiles = scanTemplates(prototypePath);
   const templateData = [];
@@ -500,6 +540,7 @@ async function generateScenario(options) {
   }
 
   // Run all scenarios
+  timer.start("Scenarios");
   console.log(`\n   Starting prototype server and browser...`);
   const results = await runScenarios(scenarios, {
     prototypePath,
@@ -511,6 +552,7 @@ async function generateScenario(options) {
   });
 
   // Build output for each scenario
+  timer.start("Viewer");
   for (const result of results) {
     const scenarioMapName = scenarioMapNames.get(result.name);
     const mapOutputDir = mapOutputDirs.get(result.name);
@@ -654,6 +696,15 @@ async function generateScenario(options) {
     buildIndex(outputDir);
     console.log(`   Collection index built`);
   }
+
+  timer.stop();
+  console.log("\n📊 Run summary");
+  console.log(timer.summary());
+  saveLastRun(prototypePath, {
+    totalMs: timer.totalMs(),
+    platform: "web",
+    phases: timer.durations(),
+  });
 }
 
 /**

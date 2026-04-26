@@ -143,4 +143,33 @@ maps/
     map.pdf          # PDF export (if --export-pdf)
     screenshots/     # PNG screenshots
     positions.json   # Saved manual node positions (created by serve mode)
+    hidden.json      # Saved hidden-node set (created by serve mode)
 ```
+
+## Run timing
+
+Every run prints a per-phase timing summary at the end:
+
+```
+📊 Run summary
+   Parse:        12s
+   Web jumpoffs: 18s (cache: 24 hit, 8 miss)
+   Screenshots:  5m 20s
+   Viewer:       4s
+   Total:        5m 54s
+```
+
+The total is also persisted to `~/.cache/prototype-flow-map/last-run.json` (or `$XDG_CACHE_HOME/prototype-flow-map/last-run.json`) keyed by absolute prototype path. On the next run against the same prototype, the startup banner shows the previous total so you can spot whether the new run is faster or slower:
+
+```
+📐 Prototype Flow Map
+
+   Prototype: /path/to/your-prototype
+   Platform:  ios
+   Mode:      static
+   Output:    ./flow-map-output
+   Map:       your-prototype
+   Last run:  12m 18s (4/26/2026, 7:37:26 PM)
+```
+
+The cache is best-effort — read/write failures are silently ignored. Different prototype paths are tracked separately, so iOS and Android runs against different projects don't collide.
