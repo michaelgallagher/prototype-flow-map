@@ -13,5 +13,8 @@ Workflow:
 |---|---|
 | [`android-screenshots.md`](android-screenshots.md) | Delivered — Android screenshot pipeline shipped |
 | [`saving-layout-positions.md`](saving-layout-positions.md) | Delivered — Option 4 (server-side persistence) shipped |
-| [`webapp-collaboration.md`](webapp-collaboration.md) | Phase 1 partially delivered, Phases 2–5 in [`../future-ideas.md`](../future-ideas.md) |
+| [`webapp-collaboration.md`](webapp-collaboration.md) | Phase 1 delivered (positions + hidden + serve), Phases 2–5 in [`../future-ideas.md`](../future-ideas.md) |
 | [`web-jumpoffs-mvp.md`](web-jumpoffs-mvp.md) | Delivered — full MVP description with technical decisions |
+| [`node-hiding.md`](node-hiding.md) | Delivered — right-click hide/subgraph-hide with persistence |
+| [`tree-layout.md`](tree-layout.md) | Part A delivered (dagre-X fallback); Part B parked in [`../future-ideas.md`](../future-ideas.md) |
+| [`server-integration.md`](server-integration.md) | Delivered — `/hidden` endpoints, viewer/server wiring, `--serve` flag, `--port` UX rework |
