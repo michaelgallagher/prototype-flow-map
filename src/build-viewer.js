@@ -130,7 +130,7 @@ function generateViewerHtml(
         <option value="">All hubs</option>
       </select>
       <input type="text" id="search" placeholder="Search pages..." />
-      <button id="show-all-btn" onclick="showAllNodes()" style="display:none">Show hidden (0)</button>
+      <button id="show-all-btn" onclick="showHiddenListPopover()" style="display:none">Show hidden (0)</button>
       <button id="reset-positions-btn" onclick="resetPositions()">Reset positions</button>
       <button id="save-layout-btn" onclick="saveLayout()" style="display:none">Save layout</button>
     </div>
@@ -588,6 +588,130 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Right-click context menu on nodes */
+.node-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #1a1f2e;
+  border: 1px solid #3a4258;
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-width: 200px;
+  padding: 4px;
+  font-size: 13px;
+  color: #c4cad6;
+}
+
+.node-context-menu .ncm-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 7px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.node-context-menu .ncm-item:hover {
+  background: #2a3245;
+  color: #ef9a9a;
+}
+
+/* Hidden-list popover (toolbar Show hidden button) */
+.hidden-list-popover {
+  position: fixed;
+  z-index: 1000;
+  background: #1a1f2e;
+  border: 1px solid #3a4258;
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: #c4cad6;
+}
+
+.hidden-list-popover .hlp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #2a3245;
+  background: #161b27;
+  font-weight: 500;
+}
+
+.hidden-list-popover .hlp-restore-all {
+  background: transparent;
+  color: #6b9fd4;
+  border: 1px solid #2a3245;
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.hidden-list-popover .hlp-restore-all:hover {
+  background: #2a3245;
+  color: #8fb8e0;
+}
+
+.hidden-list-popover .hlp-empty {
+  padding: 12px;
+  color: #6c7488;
+  font-style: italic;
+  text-align: center;
+}
+
+.hidden-list-popover .hlp-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+}
+
+.hidden-list-popover .hlp-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 3px;
+}
+
+.hidden-list-popover .hlp-list li:hover {
+  background: #2a3245;
+}
+
+.hidden-list-popover .hlp-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-list-popover .hlp-restore {
+  background: transparent;
+  color: #6b9fd4;
+  border: 1px solid #2a3245;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.hidden-list-popover .hlp-restore:hover {
+  background: #2a3245;
+  color: #8fb8e0;
+}
 `;
 }
 
@@ -614,7 +738,9 @@ function generateViewerJs() {
   let provenanceFilter = '';
 
   // Generation ID — changes each time the map is rebuilt, so stale
-  // localStorage data (positions, hidden nodes) is automatically ignored.
+  // localStorage data (positions) is automatically ignored. Hidden nodes
+  // intentionally use a stable key (pathname only) so user-curated hide
+  // state survives regeneration; see the hiddenStorageKey definition below.
   const genId = window.__GENERATION_ID__ || '';
   const storageSuffix = location.pathname + (genId ? '-' + genId : '');
 
@@ -622,9 +748,14 @@ function generateViewerJs() {
   const viewModeKey = 'flowmap-viewmode-' + location.pathname;
   try { thumbnailMode = localStorage.getItem(viewModeKey) === 'thumbnail'; } catch(e) {}
 
-  // Hidden nodes (viewer-time exclusion, persisted in localStorage)
+  // Hidden nodes (viewer-time exclusion, persisted in localStorage).
+  // Storage key is keyed on pathname only — NOT on storageSuffix — so hidden
+  // state survives regeneration. Stale entries for node IDs that no longer
+  // exist are harmless (the layout filter is a Set membership check; missing
+  // IDs just don't match anything). Server-backed persistence with cross-
+  // device durability is the next step (see plans/roadmap.md WS3).
   let hiddenNodes = new Set();
-  const hiddenStorageKey = 'flowmap-hidden-' + storageSuffix;
+  const hiddenStorageKey = 'flowmap-hidden-' + location.pathname;
   try {
     const savedHidden = localStorage.getItem(hiddenStorageKey);
     if (savedHidden) hiddenNodes = new Set(JSON.parse(savedHidden));
@@ -632,6 +763,32 @@ function generateViewerJs() {
 
   function saveHiddenNodes() {
     try { localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenNodes])); } catch(e) {}
+  }
+
+  // Global forward adjacency, built once from all non-nav edges in the graph.
+  // Used by the right-click "Hide subgraph" handler to BFS down to descendants
+  // regardless of current filter state. Distinct from the per-render forwardAdj
+  // built inside layoutGraph() (which is filtered by the current node-visibility set).
+  const globalForwardAdj = {};
+  graph.edges.forEach(e => {
+    if (e.type === 'nav') return;
+    if (!globalForwardAdj[e.source]) globalForwardAdj[e.source] = [];
+    globalForwardAdj[e.source].push(e.target);
+  });
+
+  function collectDescendants(rootId) {
+    const out = new Set();
+    const queue = [rootId];
+    while (queue.length) {
+      const id = queue.shift();
+      (globalForwardAdj[id] || []).forEach(t => {
+        if (!out.has(t) && t !== rootId) {
+          out.add(t);
+          queue.push(t);
+        }
+      });
+    }
+    return out;
   }
 
   // Manual node positions (drag-to-reposition, persisted in localStorage)
@@ -1272,6 +1429,7 @@ function generateViewerJs() {
       group.setAttribute('class', 'node-group');
       group.setAttribute('transform', 'translate(' + (node.x - node.width/2) + ',' + (node.y - node.height/2) + ')');
       group.addEventListener('click', (e) => { e.stopPropagation(); if (!isDragging) showDetail(node); });
+      group.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showNodeContextMenu(e.clientX, e.clientY, node); });
       group.addEventListener('mouseenter', () => { if (!dragTarget) highlightConnections(node.id); });
       group.addEventListener('mouseleave', () => { if (!dragTarget) clearHighlight(); });
       group.addEventListener('mousedown', (e) => {
@@ -1644,14 +1802,129 @@ function generateViewerJs() {
     hiddenNodes.add(nodeId);
     saveHiddenNodes();
     closePanel();
+    hideNodeContextMenu();
+    render();
+  };
+
+  window.hideSubgraph = function(nodeId) {
+    const descendants = collectDescendants(nodeId);
+    hiddenNodes.add(nodeId);
+    descendants.forEach(id => hiddenNodes.add(id));
+    saveHiddenNodes();
+    closePanel();
+    hideNodeContextMenu();
+    render();
+  };
+
+  window.restoreNode = function(nodeId) {
+    hiddenNodes.delete(nodeId);
+    saveHiddenNodes();
+    if (hiddenNodes.size === 0) hideHiddenListPopover();
+    else updateHiddenListPopover();
     render();
   };
 
   window.showAllNodes = function() {
     hiddenNodes.clear();
     saveHiddenNodes();
+    hideHiddenListPopover();
     render();
   };
+
+  // Context menu (right-click on node)
+  let _nodeMenuEl = null;
+  function showNodeContextMenu(clientX, clientY, node) {
+    hideNodeContextMenu();
+    hideHiddenListPopover();
+    const descendantCount = collectDescendants(node.id).size;
+    const menu = document.createElement('div');
+    menu.className = 'node-context-menu';
+    menu.style.left = clientX + 'px';
+    menu.style.top = clientY + 'px';
+    let html = '<button class="ncm-item" data-action="hide" data-node-id="' + escapeHtml(node.id) + '">Hide node</button>';
+    if (descendantCount > 0) {
+      html += '<button class="ncm-item" data-action="hide-subgraph" data-node-id="' + escapeHtml(node.id) + '">Hide subgraph (' + descendantCount + ' descendant' + (descendantCount === 1 ? '' : 's') + ')</button>';
+    }
+    menu.innerHTML = html;
+    document.body.appendChild(menu);
+    _nodeMenuEl = menu;
+    // Position adjustment if menu would overflow viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+    // Click handlers
+    menu.addEventListener('click', (e) => {
+      const btn = e.target.closest('.ncm-item');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const nodeId = btn.dataset.nodeId;
+      if (action === 'hide') hideNode(nodeId);
+      else if (action === 'hide-subgraph') hideSubgraph(nodeId);
+    });
+  }
+
+  function hideNodeContextMenu() {
+    if (_nodeMenuEl) { _nodeMenuEl.remove(); _nodeMenuEl = null; }
+  }
+
+  // Hidden-list popover (toolbar button)
+  let _hiddenPopoverEl = null;
+  window.showHiddenListPopover = function() {
+    hideNodeContextMenu();
+    if (_hiddenPopoverEl) { hideHiddenListPopover(); return; }
+    const btn = document.getElementById('show-all-btn');
+    if (!btn) return;
+    const pop = document.createElement('div');
+    pop.className = 'hidden-list-popover';
+    document.body.appendChild(pop);
+    _hiddenPopoverEl = pop;
+    updateHiddenListPopover();
+    // Position below the toolbar button
+    const r = btn.getBoundingClientRect();
+    pop.style.left = Math.max(8, r.right - pop.offsetWidth) + 'px';
+    pop.style.top = (r.bottom + 4) + 'px';
+  };
+
+  function updateHiddenListPopover() {
+    if (!_hiddenPopoverEl) return;
+    const ids = [...hiddenNodes];
+    const labelById = {};
+    graph.nodes.forEach(n => { labelById[n.id] = n.label; });
+    let html = '<div class="hlp-header">';
+    html += '<span>' + ids.length + ' hidden</span>';
+    html += '<button class="hlp-restore-all" onclick="showAllNodes()">Restore all</button>';
+    html += '</div>';
+    if (ids.length === 0) {
+      html += '<div class="hlp-empty">Nothing hidden.</div>';
+    } else {
+      html += '<ul class="hlp-list">';
+      ids.forEach(id => {
+        const label = labelById[id] || id;
+        html += '<li><span class="hlp-label" title="' + escapeHtml(id) + '">' + escapeHtml(label) + '</span>';
+        html += '<button class="hlp-restore" data-node-id="' + escapeHtml(id) + '">Restore</button></li>';
+      });
+      html += '</ul>';
+    }
+    _hiddenPopoverEl.innerHTML = html;
+    // Wire per-row Restore buttons
+    _hiddenPopoverEl.querySelectorAll('.hlp-restore').forEach(b => {
+      b.addEventListener('click', () => restoreNode(b.dataset.nodeId));
+    });
+  }
+
+  function hideHiddenListPopover() {
+    if (_hiddenPopoverEl) { _hiddenPopoverEl.remove(); _hiddenPopoverEl = null; }
+  }
+
+  // Dismiss menus on outside click / Escape
+  document.addEventListener('mousedown', (e) => {
+    if (_nodeMenuEl && !_nodeMenuEl.contains(e.target)) hideNodeContextMenu();
+    if (_hiddenPopoverEl && !_hiddenPopoverEl.contains(e.target)
+        && !e.target.closest('#show-all-btn')) hideHiddenListPopover();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { hideNodeContextMenu(); hideHiddenListPopover(); }
+  });
 
   // Toggle screenshot visibility
   window.toggleScreenshots = function() {

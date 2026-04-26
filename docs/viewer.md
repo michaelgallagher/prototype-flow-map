@@ -41,10 +41,17 @@ Position persistence priority (highest wins):
 
 ## Hiding nodes
 
-- Click a node, then use the **Hide this page** button in the detail panel
-- Use **Show hidden** (toolbar button, appears when ≥1 node is hidden) to restore hidden nodes
+Three ways to hide content the user knows is irrelevant:
 
-Hidden state is saved to `localStorage`. Server-backed persistence for hidden nodes is on the [roadmap](plans/roadmap.md#workstream-3--server-integration).
+- **Right-click a node** → "Hide node" hides just that node
+- **Right-click a node with descendants** → "Hide subgraph (N descendants)" hides the node and everything reachable below it via forward edges
+- **Click a node** → "Hide this page" button in the detail panel (single-node hide, same as right-click → Hide node)
+
+When ≥1 node is hidden, the toolbar shows a **Show hidden (N)** button. Click it to open a popover listing all hidden nodes by label. Each row has a **Restore** button to bring that single node back; the header has a **Restore all** button to clear the entire hidden set.
+
+Hidden state is saved to `localStorage` keyed by viewer pathname (NOT by generation ID), so hidden nodes survive regeneration. Stale entries for node IDs that no longer exist are inert — they don't match any node in the new graph and are simply ignored.
+
+Server-backed persistence (so hidden state shares across browsers/devices) is on the [roadmap](plans/roadmap.md#workstream-3--server-integration).
 
 ## Layout
 
