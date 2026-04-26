@@ -69,9 +69,29 @@ Allow non-developers to generate maps without running the CLI locally:
 
 ## Layout polish
 
+### Virtual subgraph-owner inference (formerly WS2 Part B)
+
+Tree-shaped layout Part A is delivered (see [`archive/tree-layout.md`](archive/tree-layout.md)). Part B was the deeper improvement: a platform-agnostic pass in `src/graph-builder.js` that detects hub-shaped graphs and assigns virtual subgraph owners.
+
+**Heuristic:**
+
+1. Identify the root node (`isStartNode === true`, or the unique node with zero incoming non-nav edges).
+2. Collect the root's direct outbound forward edges (excluding nav edges, excluding edges to itself).
+3. If there are 2+ such edges and each target has 2+ descendants of its own, treat each target as a virtual subgraph owner.
+4. Run BFS from each virtual owner, assigning `subgraphOwner` to each reachable descendant. Where a node is reachable from multiple owners, pick the closest by edge count; tiebreak by `startOrder`.
+5. Skip the pass if any node already has `subgraphOwner` (a real platform tab pattern was detected — don't override).
+
+**Files to change** when promoted:
+- `src/graph-builder.js` — new exported `inferVirtualSubgraphOwners(graph)`, called from `src/index.js` for all platforms after platform-specific parsing finishes but before splicing/screenshot phases
+- `src/index.js` — invoke the new pass at the right point in both `generate` and `generateNative`
+
+**Verification when promoted:** iOS smoke target should show top-level views (e.g. `PrescriptionsView`, `AppointmentsView`, `MessagesView`) each in their own column, descendants underneath. Android unchanged (pass skipped because `subgraphOwner` already set by Kotlin parser).
+
+**Why deferred:** after Part A landed, the iOS map "looks better" enough to be useful for the immediate work. Part B is the next step if iOS maps still feel too clumped after a stretch of real use.
+
 ### Reingold-Tilford / proper subtree-width-aware tree layout
 
-Workstream 2 of the roadmap (Parts A and B) gets the iOS map tree-shaped via dagre + virtual subgraph owners. If that's still not enough, the next step is a proper Reingold-Tilford-style layout that sizes each subtree's horizontal slot based on its descendants.
+If Part A and (eventually) the virtual subgraph-owner pass aren't enough, the next step is a proper Reingold-Tilford-style layout that sizes each subtree's horizontal slot based on its descendants.
 
 **Why deferred:** Dagre + virtual owners should be sufficient for typical NHS prototype sizes. Only worth pursuing if we hit cases where they aren't.
 
@@ -79,7 +99,7 @@ Workstream 2 of the roadmap (Parts A and B) gets the iOS map tree-shaped via dag
 
 Some iOS apps DO use tabs (`TabView`, custom tab containers, etc.). Detecting these natively would replace virtual subgraph inference for those apps and produce a more accurate map.
 
-**Why deferred:** virtual subgraph inference (Workstream 2 Part B) covers the same ground for the no-tabs case, which is the immediate need. iOS-specific tab detection is purely an accuracy improvement.
+**Why deferred:** virtual subgraph inference covers the same ground for the no-tabs case, which is the immediate need. iOS-specific tab detection is purely an accuracy improvement.
 
 ### Hierarchical clustering for very large graphs
 
