@@ -356,8 +356,9 @@ async function crawlAndScreenshot(graph, options) {
   return graph;
 }
 
-async function extractRuntimeLinks(page, currentPath, baseUrl) {
-  const rawLinks = await page.evaluate(({ layoutHints, globalNavHints }) => {
+async function extractRuntimeLinks(page, currentPath, baseUrl, options = {}) {
+  const { skipHidden = false } = options;
+  const rawResult = await page.evaluate(({ layoutHints, globalNavHints, skipHidden }) => {
     function isLikelyLayoutLink(element) {
       if (!(element instanceof Element)) return false;
 
@@ -387,11 +388,34 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
       return false;
     }
 
+    // Treat a link as "user-reachable" only if itself and every ancestor
+    // pass a basic visibility check. The web-jumpoff crawler injects CSS
+    // that hides production chrome (header, bottom-nav, footer, cookie
+    // banner) via `display: none`; without this filter, BFS still walks
+    // the `<a href>` elements inside that hidden chrome and pulls in
+    // pages the user can't actually reach. Used only when the caller
+    // opts in via `options.skipHidden`.
+    function isVisible(el) {
+      if (!el) return false;
+      for (let cur = el; cur; cur = cur.parentElement) {
+        const cs = getComputedStyle(cur);
+        if (cs.display === "none") return false;
+        if (cs.visibility === "hidden") return false;
+      }
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }
+
     const links = [];
+    let hiddenSkipped = 0;
 
     document.querySelectorAll("a[href]").forEach((a) => {
       const href = a.getAttribute("href");
       if (!href) return;
+      if (skipHidden && !isVisible(a)) {
+        hiddenSkipped += 1;
+        return;
+      }
 
       links.push({
         href,
@@ -404,6 +428,10 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
     document.querySelectorAll("form[action]").forEach((form) => {
       const action = form.getAttribute("action");
       if (!action) return;
+      if (skipHidden && !isVisible(form)) {
+        hiddenSkipped += 1;
+        return;
+      }
 
       links.push({
         href: action,
@@ -416,9 +444,11 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
       });
     });
 
-    return links;
-  }, { layoutHints: LAYOUT_CONTAINER_HINTS, globalNavHints: GLOBAL_NAV_CONTAINER_HINTS });
+    return { links, hiddenSkipped };
+  }, { layoutHints: LAYOUT_CONTAINER_HINTS, globalNavHints: GLOBAL_NAV_CONTAINER_HINTS, skipHidden });
 
+  const rawLinks = rawResult.links;
+  const hiddenCount = rawResult.hiddenSkipped || 0;
   const accepted = [];
   let filteredCount = 0;
 
@@ -457,6 +487,7 @@ async function extractRuntimeLinks(page, currentPath, baseUrl) {
     links: accepted,
     acceptedCount: accepted.length,
     filteredCount,
+    hiddenCount,
   };
 }
 

@@ -337,10 +337,15 @@ async function generateNative(options) {
       console.log(
         `   Added ${nodesAdded} web-page node(s), upgraded ${nodesUpgraded} native jump-off(s), added ${edgesAdded} link edge(s)`,
       );
-      const { cacheHits = 0, cacheMisses = 0 } = webResult.stats;
+      const { cacheHits = 0, cacheMisses = 0, linksHidden = 0 } = webResult.stats;
       if (cacheHits > 0 || cacheMisses > 0) {
         console.log(
           `   Cache: ${cacheHits} hit(s), ${cacheMisses} miss(es)`,
+        );
+      }
+      if (linksHidden > 0) {
+        console.log(
+          `   Hidden links skipped: ${linksHidden}`,
         );
       }
       if (webResult.stats.pagesFailed > 0) {

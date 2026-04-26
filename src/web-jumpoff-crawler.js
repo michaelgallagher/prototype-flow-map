@@ -99,6 +99,12 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
     pagesFailed: 0,
     cacheHits: 0,
     cacheMisses: 0,
+    // Total <a href>/<form action> elements skipped because the link itself
+    // or one of its ancestors had `display: none` / `visibility: hidden` /
+    // zero-area box. These are typically inside the production chrome we
+    // strip via the `hideNativeChrome` CSS injection — the user can't see
+    // them, so following them would surface unreachable pages.
+    linksHidden: 0,
     originsSkipped: [],
   };
 
@@ -400,7 +406,17 @@ async function crawlWebJumpoffs(seedUrls, { outputDir, config, viewport } = {}) 
       }
 
       if (depth < maxDepth) {
-        const { links } = await extractRuntimeLinks(page, urlPath, origin);
+        // Filter links inside hidden chrome only when chrome-stripping is
+        // active. With `hideNativeChrome: false` the user is asking to see
+        // pages with their full chrome, so the chrome links should still
+        // be followed to give an honest map.
+        const { links, hiddenCount = 0 } = await extractRuntimeLinks(
+          page,
+          urlPath,
+          origin,
+          { skipHidden: hideNativeChrome },
+        );
+        stats.linksHidden += hiddenCount;
         for (const link of links) {
           if (link.kind !== "anchor") continue;
           const childUrl = origin + link.target;

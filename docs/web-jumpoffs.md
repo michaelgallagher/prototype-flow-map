@@ -55,6 +55,10 @@ For each crawled URL the tool records:
 - **Page title** as the node label (truncated to 80 chars), falling back to the last URL path segment.
 - **Same-origin links** (only `<a href>`) for BFS expansion to the next level.
 
+### Links inside hidden chrome are ignored
+
+When `hideNativeChrome` is on (the default), the BFS link-extractor also skips any `<a>` whose own or ancestor's computed `display` is `none`, `visibility` is `hidden`, or final `getBoundingClientRect` is zero-by-zero. This means the chrome we hide visually is also hidden from the graph — pages reachable only via the bottom nav, header logo, footer, or cookie banner don't appear as web-page nodes, because the user can't actually click those links inside the production native InAppBrowser. The crawl phase prints a `Hidden links skipped: N` line summarising how many were filtered. Set `hideNativeChrome: false` to opt out — useful when you want a structural map of the hosted prototype in isolation rather than as it appears inside the native app.
+
 ### Native chrome stripping
 
 Hosted NHS prototypes use the same DOM as the production NHS App but render their own header / bottom-nav / footer when served to a plain browser. The production native InAppBrowser hides those elements via injected CSS so the page looks native. The crawler mirrors that injection (Playwright `addInitScript` runs before any page script, equivalent to iOS's `WKUserScript(.atDocumentStart)`):
