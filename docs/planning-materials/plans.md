@@ -172,6 +172,45 @@ Allow users to persist node layout adjustments across sessions and devices. See 
 - Tests for scenario runner, config validation, and `.flow` parser
 - Improve error recovery when interactive steps fail mid-scenario
 
+### 4. Run-time counter and last-run duration display
+
+Show elapsed time in the terminal output while the tool is running, and report the duration of the last run at the start of a new one.
+
+**Intent:**
+- Running counter (e.g. `[12s]`) updated in-place on the terminal as the tool progresses through its phases — useful for spotting where time is spent without adding verbose logging.
+- On subsequent runs, print something like `Last run: 4m 23s` at the top so the user can immediately see if the new run is faster or slower than the previous one.
+
+**Implementation sketch:**
+- Persist run duration to a small JSON sidecar (e.g. `~/.cache/prototype-flow-map/last-run.json`, keyed by prototype path so iOS and Android runs are tracked separately).
+- Terminal in-place update via `process.stdout.write` with `\r` (or a lightweight `cli-progress` / `ora` spinner if we already have one in `devDependencies`).
+- Phase-level timing would be most useful: show time spent in parse / screenshot / crawl / splice / build-viewer phases separately.
+
+### 5. Build a server
+
+Expose a local HTTP server for the flow map viewer so the browser has a real origin (enabling `localStorage`, `fetch`, future API calls) and positions can be saved persistently without relying on the file system from the viewer JS.
+
+**What's already done (branch `build-a-server`):**
+- `src/server.js` — 117-line Express server. Serves the output directory statically. REST API: `GET /api/health`, `GET /api/maps/:name/positions`, `PUT /api/maps/:name/positions`. Writes `positions.json` per map. Input-validated map name and positions payload. Port 3000.
+- A second commit (`fix the spacing issue of multiple subgraphs in static analysis`) is also on this branch — needs pulling across to `main` independently.
+
+**Still needed:**
+- CLI wiring: `--serve` flag (or auto-launch after generation, with a `--no-serve` opt-out).
+- Viewer-side: positions persistence currently lives in `localStorage`; needs to call `PUT /api/maps/:name/positions` when the server is up, fall back to `localStorage` when it's not.
+- Decide on lifecycle: long-running foreground process (user `Ctrl-C`s when done) vs. background daemon with a `--stop-server` flag.
+- Figure out how server mode interacts with `--web-jumpoffs` and other long-running phases (server probably starts after generation finishes).
+
+### 6. Investigate Android vs iOS speed disparity
+
+Android prototype runs complete noticeably faster than iOS runs, even on comparable prototypes. Understand why and identify whether the iOS path can be brought closer to Android speed.
+
+**Hypotheses to explore:**
+- `xcodebuild test` spin-up cost — Simulator boot, app build, and test runner launch are all sequential. Android uses `am instrument` directly on an already-installed APK, skipping the equivalent of `xcodebuild`. The build step alone may account for most of the gap.
+- Screenshot capture mechanism — iOS uses XCUITest (`captureToImage()` via `onRoot()`), Android uses Compose's `captureToImage()` directly. Both are in-process, but XCUITest has heavier framework overhead.
+- Per-screen navigation — iOS relies on SwiftUI's navigation stack (real UI state changes), Android uses `navController.navigate()` directly. UI-driven navigation may be slower and less reliable under test.
+- Parallelism — iOS runs each screen sequentially inside a single XCUITest. Android does the same. Neither parallelises across screens. Parallelism may not be viable without multiple Simulator instances, which have their own cost.
+
+**First step:** instrument the iOS path with per-phase timing (ties into item 4 above) to measure how much time is spent in: (a) `xcodebuild test` (including Simulator boot), (b) `adb pull` equivalent / XCTest attachment extraction, (c) graph building and viewer generation. Compare phase-by-phase with an Android run of similar size.
+
 ---
 
 ## Open design questions
