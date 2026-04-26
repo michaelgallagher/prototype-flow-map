@@ -1084,26 +1084,19 @@ function generateViewerJs() {
           });
         }
       } else {
-        const rowWidths = {};
-        sortedRanks.forEach(rank => {
-          const ids = rankBuckets[rank];
-          rowWidths[rank] = ids.reduce((sum, id) => sum + layoutNodes[id].width, 0)
-            + HORIZ_GAP * Math.max(0, ids.length - 1);
-        });
-
-        const maxWidth = Math.max(...Object.values(rowWidths));
-        const centerX = MARGIN_X + maxWidth / 2;
-
-        sortedRanks.forEach(rank => {
-          const ids = rankBuckets[rank];
-          const totalWidth = rowWidths[rank];
-          let currentX = centerX - totalWidth / 2;
-          ids.forEach(id => {
-            const n = layoutNodes[id];
-            n.x = currentX + n.width / 2;
-            currentX += n.width + HORIZ_GAP;
-          });
-        });
+        // No subgraph owners detected (e.g. iOS without tabs, or any prototype
+        // whose graph-builder didn't assign owners). The previous behaviour
+        // here was to centre every rank row at a single global X, which
+        // collapsed the map into a vertical blob with no horizontal spread.
+        //
+        // Instead, keep dagre's computed X positions: dagre laid out the real
+        // edges with rankdir: 'TB', so its X reflects tree structure (children
+        // sit horizontally under their parents). We've already overwritten Y
+        // above with our rank-based stacking, so the result is dagre's tree
+        // shape projected onto our cleaner rank rows.
+        //
+        // See plans/roadmap.md WS2 Part A. Part B (generalised virtual
+        // subgraph-owner inference) is the deeper improvement on top of this.
       }
     }
 

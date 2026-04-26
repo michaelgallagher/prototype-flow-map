@@ -55,24 +55,21 @@ Server-backed persistence (so hidden state shares across browsers/devices) is on
 
 ## Layout
 
-### Web (scenario mode)
+The layout has three branches depending on what metadata the graph carries:
 
-Layout is computed as a grid:
+### With subgraph owners — column-packed
 
-- Nodes are arranged in horizontal rows by rank (visit order)
-- Tab siblings (pages with mutual cross-links) are grouped on the same row
-- The flow progresses top to bottom
-- Each row is centred on a common axis
+When the tool detects subgraph owners (e.g. Android bottom-nav tabs, or web jump-off subgraphs propagated from a native handoff), the layout is **column-packed**: each detected tab/section gets its own column, ranks flow top-to-bottom within each column, and columns sit left-to-right in `startOrder`. This keeps each tab's content visually grouped.
 
-### Native (iOS / Android)
+### With ranks but no owners — Dagre tree shape on rank rows
 
-When the tool detects subgraph owners (e.g. Android bottom-nav tabs), the layout is **column-packed**: each detected tab/section gets its own column, ranks flow top-to-bottom within each column, and columns sit left-to-right in `startOrder`. This keeps each tab's content visually grouped.
+When nodes carry `layoutRank` but no `subgraphOwner` (typical for iOS prototypes without explicit tabs, and for many web scenarios), the tool keeps Dagre's computed X positions — Dagre laid out the actual edges with `rankdir: 'TB'`, so its X reflects tree structure (children sit horizontally under their parents). Y is overridden with rank-based stacking so rank rows align cleanly.
 
-When no subgraph owners are detected (currently happens on iOS prototypes without explicit tabs), the layout falls back to a centred-per-rank arrangement. This is a known issue tracked in [roadmap.md](plans/roadmap.md#workstream-2--tree-shaped-layout) — the fix is to use Dagre's tree-shaped X positions plus virtual subgraph-owner inference.
+A future improvement (Part B in [roadmap.md](plans/roadmap.md#workstream-2--tree-shaped-layout)) will infer virtual subgraph owners from hub-shaped graphs, bringing iOS-without-tabs and web-without-mutual-tabs into the column-packed layout. For now this rank-row tree shape replaces what was previously a centred-blob fallback.
 
-### Web (static mode)
+### Without ranks — pure Dagre
 
-Dagre handles the layout automatically based on graph structure.
+For very simple prototypes where no rank metadata is present, Dagre handles the layout end-to-end based on graph structure.
 
 ## Web jump-off rendering
 
