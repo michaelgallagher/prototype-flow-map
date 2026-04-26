@@ -1,6 +1,8 @@
 # Web App & Collaboration Plan
 
-> **Status: Phase 1 partially delivered, Phases 2–5 still future work.** Archived for historical context. The Phase 1 server (Express + positions API, `serve` subcommand, `Procfile`, position carry-forward at build time, `__SAVED_POSITIONS__` injection, dirty/saved button states) landed via cherry-pick from the `build-a-server` branch. Still outstanding from Phase 1: Heroku deployment hasn't been validated end-to-end. Phases 2–5 (comments, identity/SQLite, real-time, web-triggered generation) have been folded into [`../future-ideas.md`](../future-ideas.md).
+> **Status: Phase 1 delivered. Phases 2–5 still future work.** Archived for historical context. Phase 1 was completed across two passes: (a) the cherry-pick from `build-a-server` brought in `src/server.js`, the `serve` subcommand, `Procfile`, position carry-forward at build time, `__SAVED_POSITIONS__` injection, and the Save layout button with dirty/saved states; (b) the server-integration workstream (roadmap WS3) added `/api/maps/:name/hidden` endpoints, viewer-side server detection with localStorage fallback, hidden-state carry-forward via `hidden.json` + `__SAVED_HIDDEN__`, and a `--serve` flag on the main generate command for one-shot generate-and-serve workflows.
+>
+> What's still outstanding from Phase 1: Heroku deployment hasn't been validated end-to-end (`Procfile` exists, `package.json` has the `start` script, but no production deploy has been smoke-tested). Phases 2–5 (comments, identity/SQLite, real-time, web-triggered generation) have been folded into [`../future-ideas.md`](../future-ideas.md).
 >
 > Original plan retained below for context.
 

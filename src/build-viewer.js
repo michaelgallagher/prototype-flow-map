@@ -16,14 +16,18 @@ async function buildViewer(
   const { name, rootOutputDir } = options;
   fs.mkdirSync(outputDir, { recursive: true });
 
-  // Read saved positions if they exist (regeneration merge)
+  // Read saved positions and hidden nodes if they exist (regeneration merge).
+  // Both are persisted to disk by the server (PUT /api/maps/:name/{positions,hidden}).
+  // We only carry forward entries for nodes that still exist in the graph —
+  // stale entries are silently dropped so the carry-forward never misplaces
+  // positions or accidentally hides newly-added nodes that share an old ID.
+  const currentNodeIds = new Set(graph.nodes.map((n) => n.id));
+
   let savedPositions = {};
   const savedPosPath = path.join(outputDir, "positions.json");
   if (fs.existsSync(savedPosPath)) {
     try {
       const raw = JSON.parse(fs.readFileSync(savedPosPath, "utf-8"));
-      // Only carry forward positions for nodes that still exist in the graph
-      const currentNodeIds = new Set(graph.nodes.map((n) => n.id));
       for (const [nodeId, pos] of Object.entries(raw)) {
         if (currentNodeIds.has(nodeId)) {
           savedPositions[nodeId] = pos;
@@ -31,6 +35,21 @@ async function buildViewer(
       }
     } catch {
       // Ignore malformed positions file
+    }
+  }
+
+  let savedHidden = {};
+  const savedHiddenPath = path.join(outputDir, "hidden.json");
+  if (fs.existsSync(savedHiddenPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(savedHiddenPath, "utf-8"));
+      for (const [nodeId, val] of Object.entries(raw)) {
+        if (val === true && currentNodeIds.has(nodeId)) {
+          savedHidden[nodeId] = true;
+        }
+      }
+    } catch {
+      // Ignore malformed hidden file
     }
   }
 
@@ -55,6 +74,7 @@ async function buildViewer(
       name,
       assetPrefix,
       savedPositions,
+      savedHidden,
     ),
   );
 
@@ -82,6 +102,7 @@ function generateViewerHtml(
   name,
   assetPrefix = "",
   savedPositions = {},
+  savedHidden = {},
 ) {
   const vpWidth = (viewport && viewport.width) || 375;
   const vpHeight = (viewport && viewport.height) || 812;
@@ -168,6 +189,7 @@ function generateViewerHtml(
     window.__VIEWPORT_HEIGHT__ = ${vpHeight};
     window.__GENERATION_ID__ = ${JSON.stringify(Date.now().toString(36))};
     window.__SAVED_POSITIONS__ = ${JSON.stringify(savedPositions)};
+    window.__SAVED_HIDDEN__ = ${JSON.stringify(savedHidden)};
     window.__MAP_NAME__ = ${JSON.stringify(name || "")};
   </script>
   <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
@@ -763,6 +785,8 @@ function generateViewerJs() {
 
   function saveHiddenNodes() {
     try { localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenNodes])); } catch(e) {}
+    // Mirror to server when in serve mode (fire-and-forget; failures logged).
+    saveHiddenToServer();
   }
 
   // Global forward adjacency, built once from all non-nav edges in the graph.
@@ -812,10 +836,37 @@ function generateViewerJs() {
     manualPositions = { ...embeddedPositions };
   }
 
+  // Server-saved hidden nodes (embedded at build time from hidden.json).
+  // Carry-forward baseline when no localStorage or API hidden state exists.
+  const embeddedHidden = window.__SAVED_HIDDEN__ || {};
+  if (hiddenNodes.size === 0 && Object.keys(embeddedHidden).length > 0) {
+    hiddenNodes = new Set(Object.keys(embeddedHidden));
+  }
+
   // Serve-mode state
   let isServeMode = false;
   let hasUnsavedChanges = false;
   const mapName = window.__MAP_NAME__ || '';
+
+  // Fire-and-forget save of hidden state to the server (when in serve mode).
+  // localStorage save still happens via saveHiddenNodes(); this is additive.
+  // Failures log to console but don't disturb the UI — localStorage is the
+  // source of truth on next load until the next successful API write.
+  async function saveHiddenToServer() {
+    if (!isServeMode || !mapName) return;
+    try {
+      const payload = {};
+      hiddenNodes.forEach(id => { payload[id] = true; });
+      const resp = await fetch('/api/maps/' + encodeURIComponent(mapName) + '/hidden', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) console.warn('[flow-map] Failed to save hidden state to server:', resp.status);
+    } catch (e) {
+      console.warn('[flow-map] Error saving hidden state:', e);
+    }
+  }
 
   // Screenshot viewport ratio (default 375x812 mobile)
   const VIEWPORT_WIDTH = window.__VIEWPORT_WIDTH__ || 375;
@@ -2117,32 +2168,65 @@ function generateViewerJs() {
   // Initial render
   render();
 
-  // Detect serve mode and load shared positions from API
+  // Detect serve mode and load shared positions + hidden state from the API.
+  // Health check uses a short timeout so file:// loads (no server) fall through
+  // to localStorage quickly, instead of hanging on a slow network failure.
   (async function detectServeMode() {
     try {
-      const resp = await fetch('/api/health');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 1500);
+      let resp;
+      try {
+        resp = await fetch('/api/health', { signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       if (!resp.ok) return;
       isServeMode = true;
 
-      // Show the save button
+      // Show the save button (positions only — hidden auto-saves)
       const saveBtn = document.getElementById('save-layout-btn');
       if (saveBtn) saveBtn.style.display = '';
 
-      // Load positions from the server (overrides localStorage and embedded)
-      if (mapName) {
+      if (!mapName) return;
+
+      // Load positions from the server (overrides localStorage and embedded).
+      let positionsChanged = false;
+      try {
         const posResp = await fetch('/api/maps/' + encodeURIComponent(mapName) + '/positions');
         if (posResp.ok) {
           const apiPositions = await posResp.json();
           if (Object.keys(apiPositions).length > 0) {
             manualPositions = apiPositions;
-            // Also sync to localStorage so subsequent renders before save use them
             savePositions();
-            render();
+            positionsChanged = true;
           }
         }
+      } catch (e) {
+        console.warn('[flow-map] Error loading positions from server:', e);
       }
+
+      // Load hidden state from the server (overrides localStorage and embedded).
+      let hiddenChanged = false;
+      try {
+        const hidResp = await fetch('/api/maps/' + encodeURIComponent(mapName) + '/hidden');
+        if (hidResp.ok) {
+          const apiHidden = await hidResp.json();
+          if (Object.keys(apiHidden).length > 0) {
+            hiddenNodes = new Set(Object.keys(apiHidden));
+            // Sync to localStorage but DON'T re-PUT to server (we just read this)
+            try { localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenNodes])); } catch(e) {}
+            hiddenChanged = true;
+          }
+        }
+      } catch (e) {
+        console.warn('[flow-map] Error loading hidden state from server:', e);
+      }
+
+      if (positionsChanged || hiddenChanged) render();
     } catch(e) {
-      // Not in serve mode — no server available. This is fine.
+      // Not in serve mode — no server available, or health check timed out.
+      // localStorage / embedded values stand. This is the file:// path.
     }
   })();
 })();

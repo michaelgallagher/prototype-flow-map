@@ -31,6 +31,10 @@ function toSlug(value) {
 }
 
 const program = new Command();
+// Required so the outer command's --port and the serve subcommand's --port
+// don't collide (without this, commander treats subcommand options as
+// overlapping the parent's, and the parent silently wins).
+program.enablePositionalOptions();
 
 program
   .name("prototype-flow-map")
@@ -42,10 +46,11 @@ program
 
 program
   .command("serve")
+  .passThroughOptions()
   .description("Start a web server for viewing and collaborating on flow maps")
   .argument("[output-dir]", "Output directory to serve", "./flow-map-output")
   .option(
-    "-p, --port <number>",
+    "--port <number>",
     "Port to serve on",
     String(process.env.PORT || 3000),
   )
@@ -67,7 +72,11 @@ program
 program
   .argument("<prototype-path>", "Path to the prototype project root")
   .option("-o, --output <dir>", "Output directory", "./flow-map-output")
-  .option("-p, --port <number>", "Port to start the prototype on", "4321")
+  .option(
+    "-p, --prototype-port <number>",
+    "Port to start the prototype kit server on (web prototypes only)",
+    "4321",
+  )
   .option("--width <number>", "Screenshot viewport width", "375")
   .option("--height <number>", "Screenshot viewport height", "812")
   .option("--desktop", "Use desktop viewport (1280x800) instead of mobile")
@@ -116,6 +125,15 @@ program
     "",
   )
   .option("--no-open", "Do not open the browser after generation")
+  .option(
+    "--serve",
+    "After generation, start the local server (positions + hidden state persistence) and keep it running. Opens the browser at the served URL unless --no-open is set.",
+  )
+  .option(
+    "--port <number>",
+    "Port for the local server when --serve is set (no effect otherwise; for the prototype kit's port use -p / --prototype-port)",
+    String(process.env.PORT || 3000),
+  )
   .option(
     "--mode <mode>",
     'Mapping mode: "static" (default), "scenario", or "audit"',
@@ -201,7 +219,7 @@ program
       try {
         const result = await startRecording({
           prototypePath: resolvedPath,
-          port: parseInt(options.port, 10),
+          port: parseInt(options.prototypePort, 10),
           viewport: recordViewport,
           outputFilename,
           outputDir: path.resolve(options.output),
@@ -341,7 +359,7 @@ program
         await generate({
           prototypePath: resolvedPath,
           outputDir: path.resolve(options.output),
-          port: parseInt(options.port, 10),
+          port: parseInt(options.prototypePort, 10),
           viewport: options.desktop
             ? { width: 1280, height: 800 }
             : {
@@ -373,7 +391,37 @@ program
       );
 
       console.log(`\n✅ Flow map generated at ${path.resolve(options.output)}`);
-      if (options.open) {
+
+      if (options.serve) {
+        // Start the server, open the served URL (not the file:// path), and
+        // wait for SIGINT. The user lands directly on a viewer that's wired
+        // up to the API for hidden + position persistence.
+        const { startServer } = require("../src/server");
+        const serverPort = parseInt(options.port, 10);
+        try {
+          await startServer({
+            outputDir: path.resolve(options.output),
+            port: serverPort,
+          });
+        } catch (err) {
+          console.error(`\n❌ Could not start server: ${err.message}\n`);
+          process.exit(1);
+        }
+        const servedUrl = mapName
+          ? `http://localhost:${serverPort}/maps/${encodeURIComponent(mapName)}/`
+          : `http://localhost:${serverPort}/`;
+        if (options.open) {
+          console.log(`   Opening ${servedUrl} in your browser...\n`);
+          openInBrowser(servedUrl);
+        }
+        // Block until Ctrl-C
+        process.on("SIGINT", () => {
+          console.log("\n   Server stopped.\n");
+          process.exit(0);
+        });
+        // Keep the event loop alive forever (SIGINT handler will exit).
+        await new Promise(() => {});
+      } else if (options.open) {
         console.log(`   Opening ${viewerPath} in your browser...\n`);
         openInBrowser(viewerPath);
       } else {

@@ -65,6 +65,48 @@ async function startServer({ outputDir, port = 3000 }) {
     res.json({ saved: true, count: Object.keys(positions).length });
   });
 
+  // GET /api/maps/:name/hidden — read hidden nodes
+  app.get("/api/maps/:name/hidden", (req, res) => {
+    const mapName = req.params.name;
+    if (!isValidMapName(mapName)) {
+      return res.status(400).json({ error: "Invalid map name" });
+    }
+
+    const hiddenPath = path.join(resolvedDir, "maps", mapName, "hidden.json");
+    if (!fs.existsSync(hiddenPath)) {
+      return res.json({});
+    }
+
+    try {
+      const data = JSON.parse(fs.readFileSync(hiddenPath, "utf-8"));
+      res.json(data);
+    } catch {
+      res.json({});
+    }
+  });
+
+  // PUT /api/maps/:name/hidden — save hidden nodes
+  app.put("/api/maps/:name/hidden", (req, res) => {
+    const mapName = req.params.name;
+    if (!isValidMapName(mapName)) {
+      return res.status(400).json({ error: "Invalid map name" });
+    }
+
+    const mapDir = path.join(resolvedDir, "maps", mapName);
+    if (!fs.existsSync(mapDir)) {
+      return res.status(404).json({ error: "Map not found" });
+    }
+
+    const hidden = req.body;
+    if (!isValidHidden(hidden)) {
+      return res.status(400).json({ error: "Invalid hidden data" });
+    }
+
+    const hiddenPath = path.join(mapDir, "hidden.json");
+    fs.writeFileSync(hiddenPath, JSON.stringify(hidden, null, 2));
+    res.json({ saved: true, count: Object.keys(hidden).length });
+  });
+
   // ── Static file serving ───────────────────────────────────────
 
   // Serve the output directory as static files
@@ -110,6 +152,15 @@ function isValidPositions(data) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
     if (typeof value.x !== "number" || typeof value.y !== "number") return false;
     if (!isFinite(value.x) || !isFinite(value.y)) return false;
+  }
+  return true;
+}
+
+function isValidHidden(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof key !== "string") return false;
+    if (value !== true) return false;
   }
   return true;
 }

@@ -72,8 +72,8 @@ npx prototype-flow-map --record my-journey /path/to/prototype
 # Desktop viewport
 npx prototype-flow-map --record --desktop /path/to/prototype
 
-# Custom port
-npx prototype-flow-map --record --port 5000 /path/to/prototype
+# Custom prototype-kit port
+npx prototype-flow-map --record --prototype-port 5000 /path/to/prototype
 
 # Named map with title
 npx prototype-flow-map --record --name screening-clinics --title "Clinic workflow" /path/to/prototype

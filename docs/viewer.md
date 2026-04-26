@@ -31,12 +31,12 @@ The tool generates an interactive HTML viewer for each map. Open `index.html` in
 
 - **Drag nodes**: click and drag any node to reposition it.
 - **Reset positions**: clear all manual positions and return to the computed layout.
-- **Save layout** (serve mode only): persist current positions to the server so anyone else viewing the same deployment sees the same layout. The button shows a dirty marker (`Save layout *`) when there are unsaved changes.
+- **Save layout** (serve mode only): persist current positions to the server so anyone else viewing the same deployment sees the same layout. The button shows a dirty marker (`Save layout *`) when there are unsaved changes; turns to `Layout saved ✓` after a successful PUT.
 
 Position persistence priority (highest wins):
-1. Server API (when running via `prototype-flow-map serve`)
-2. `localStorage` (browser-local fallback when no server)
-3. Embedded `__SAVED_POSITIONS__` (baked into HTML at generation time from `positions.json`, so previous saves carry forward across regenerations)
+1. Server API (when the viewer detects it's being served via `prototype-flow-map serve` or `--serve`)
+2. `localStorage` (browser-local fallback when no server is reachable)
+3. Embedded `__SAVED_POSITIONS__` (baked into HTML at generation time from `positions.json`, so previous saves carry forward across regenerations even on file://)
 4. Computed layout (Dagre or grid)
 
 ## Hiding nodes
@@ -49,9 +49,12 @@ Three ways to hide content the user knows is irrelevant:
 
 When ≥1 node is hidden, the toolbar shows a **Show hidden (N)** button. Click it to open a popover listing all hidden nodes by label. Each row has a **Restore** button to bring that single node back; the header has a **Restore all** button to clear the entire hidden set.
 
-Hidden state is saved to `localStorage` keyed by viewer pathname (NOT by generation ID), so hidden nodes survive regeneration. Stale entries for node IDs that no longer exist are inert — they don't match any node in the new graph and are simply ignored.
+Hidden state persistence priority (highest wins):
+1. Server API (when in serve mode — every hide/restore auto-saves; no manual Save button needed)
+2. `localStorage` (browser-local fallback when no server is reachable; keyed by pathname, NOT by generation ID, so hidden state survives regeneration)
+3. Embedded `__SAVED_HIDDEN__` (baked into HTML at generation time from `hidden.json`, so previous saves carry forward even on file://)
 
-Server-backed persistence (so hidden state shares across browsers/devices) is on the [roadmap](plans/roadmap.md#workstream-3--server-integration).
+Stale entries for node IDs that no longer exist in the current graph are inert — at carry-forward time the build dropped them; in the viewer they simply don't match any node and have no effect.
 
 ## Layout
 
