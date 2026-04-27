@@ -1,6 +1,6 @@
 # iOS architectural alternative — spike experiment
 
-> **Status: experiment in progress.** A long-running investigation, NOT a committed workstream. Goal: validate whether an XCUITest-free architecture can deliver order-of-magnitude faster iOS runs (~1 min vs current ~13 min). The spike has confirmed the speed half of the hypothesis; the navigation-trigger half is partially blocked and needs more design work. Treated as an experiment until the blockers are overcome.
+> **Status: navigation validated — ready for end-to-end timing run.** The launch-args navigation mechanism now works reliably for all 8 NavigationDestination cases (8/8 correct screenshots confirmed 2026-04-27). The remaining gate before committing to the architectural replacement is a full end-to-end timing run across all ~42 nodes to compare against the Phase 1 baseline (13m 31s). See [next steps](#next-steps-for-picking-up).
 >
 > The active iOS speed workstream in [`../roadmap.md`](../roadmap.md) (Phases 2+3 — parallelise + cache the build) remains the formal plan and is NOT being replaced until this experiment validates. If the experiment succeeds, it will replace Phases 2+3. If it stalls, Phases 2+3 stand.
 >
@@ -36,7 +36,9 @@ Bypass XCUITest entirely:
 
 The screenshot capture is the bulk of the work in the current XCUITest pipeline. If we can make per-screenshot fast (~250ms), we get a 10-20× total speedup.
 
-## What's been validated (Phase A)
+## What's been validated
+
+### Phase A — pure speed measurements
 
 Measured on `~/Repos/nhsapp-ios-demo-v2` against `iPhone 17 Pro` simulator (UDID found via `xcrun simctl list devices available | grep "iPhone 17 Pro"`).
 
@@ -48,6 +50,32 @@ Measured on `~/Repos/nhsapp-ios-demo-v2` against `iPhone 17 Pro` simulator (UDID
 | `simctl launch` | 0.25-1.3s | Returns once app process starts; UI render takes more |
 | `simctl io screenshot` | **~250ms** | Avg of 5 captures; consistent |
 | `simctl terminate + launch` cycle | ~340ms | If we go the launch-args route (see below) |
+
+### Phase B' — launch-args navigation ✓ validated (2026-04-27)
+
+**All 8 NavigationDestination cases navigated and screenshotted correctly.** The fix was moving route-reading + dispatch inside HomeView's own `.task` (not the App-level `.task` that fired before HomeView subscribed).
+
+Working approach:
+
+- **App.swift**: read `-flowMapRoute` in `init()`, set `showSplash = false` if present (skips splash animation)
+- **HomeView.swift**: add `.task { ... }` that reads `ProcessInfo.processInfo.arguments`, switches on the route string, and calls `navigationPath.append(dest)` directly (no NotificationCenter needed — HomeView owns the path)
+
+Measured per-route timing with 1.5s settle time:
+
+| Route | Time (terminate→screenshot) | Result |
+|---|---|---|
+| messages | ~2100ms | ✅ MessagesView |
+| profile | ~2000ms | ✅ ProfileView |
+| prescriptions | ~1980ms | ✅ PrescriptionsView |
+| appointments | ~1980ms | ✅ AppointmentsView |
+| healthConditions | ~1990ms | ✅ HealthConditionsView |
+| testResults | ~1990ms | ✅ TestResultsView |
+| vaccinations | ~1980ms | ✅ VaccinationsView |
+| documents | ~1990ms | ✅ DocumentsView |
+
+**8 routes in 16s wall-clock.** The 1.5s settle time is conservative (needed to let data-dependent views like MessagesView fully render). May be tunable down per-view type.
+
+**Key finding:** the 0.8s settle time used in earlier attempts was insufficient — some views take longer to load data (MessagesView fetches from MessageStore, ProfileView loads from ProfileManager). 1.5s is safe for all 8 cases.
 
 **Projected total iOS run time, assuming we solve the navigation-trigger problem:**
 
@@ -74,23 +102,11 @@ What might unblock it (untested):
 - A one-shot helper test (XCUITest or `simctl` UI control via `idb`) that sits in parallel and dismisses the alert when it appears. Adds back some XCUITest overhead, but only a single lightweight harness rather than per-screenshot tests.
 - Universal Links (`https://flowmap.example.com/...` routed via Apple App Site Association) — bypasses the dialog because they're treated as continuations of web navigation. But requires a real domain + AASA hosting + entitlements. Probably too much complexity.
 
-### Launch-args partially worked but route-handoff didn't reach the subscriber
+### ~~Launch-args route-handoff~~ ✓ Resolved (2026-04-27)
 
-Second attempt: pass `-flowMapRoute messages` to `simctl launch`. App reads `ProcessInfo.arguments` on init, posts a `Notification.Name.flowMapNavigate` notification. HomeView subscribes via `.onReceive` and updates `navigationPath`.
+The fix was straightforward: move route-reading + dispatch **inside HomeView's own `.task`** rather than the App-level `.task`. The App-level post fired before HomeView mounted and subscribed, so the NotificationCenter post was missed. Moving it into HomeView's `.task` means the view owns `navigationPath` by the time the dispatch runs — no notification needed.
 
-**Result: the launch + screenshot cycle works fast (~1.1s per route).** Screenshots have varied byte sizes (ruling out splash-screen capture). But manual visual inspection of the screenshots showed the HomeView, faded — not the navigated views (Messages, Profile, etc.). The notification didn't reach HomeView's subscriber.
-
-Likely causes (any of these):
-1. The `.task` modifier on the WindowGroup fires before HomeView mounts and subscribes. NotificationCenter posts aren't buffered for late subscribers.
-2. The 100ms `Task.sleep` before posting wasn't long enough.
-3. The fade visible in screenshots suggests SwiftUI was still mid-transition — settle time of 600ms wasn't enough.
-
-What might fix it:
-- Move route reading + dispatch INSIDE HomeView's own `.task { ... }` rather than the App level. Once HomeView's `.task` fires, its `.onReceive` is already wired up.
-- Use a shared `@Observable` model (`NavigationCoordinator`) instead of NotificationCenter — values are observable from the moment they're set, no missed-post problem.
-- Increase settle time to 1.5s+ to rule out animation timing.
-
-This problem is **tractable** — just needs more iteration. It's not a fundamental block like the openurl consent dialog.
+Also required: increase settle time from 0.8s to 1.5s. Data-dependent views (MessagesView, ProfileView) need time to load from their respective managers after navigation lands.
 
 ## Open questions
 
@@ -226,42 +242,17 @@ rm -rf "$DERIVED"
 
 In rough priority order:
 
-### 1. Fix the launch-args route handoff (1-2 hour effort)
+### ~~1. Fix the launch-args route handoff~~ ✓ Done (2026-04-27)
 
-This is the smallest unblock. Replace the App-level `.task` notification post with route-reading inside HomeView. Likely working code shape:
+Validated: 8/8 NavigationDestination cases navigated correctly with 1.5s settle time. See [Phase B' results above](#phase-b--launch-args-navigation--validated-2026-04-27) for the working code shape and prototype edits to re-apply.
 
-```swift
-// HomeView.swift body, near the existing .onReceive handlers:
-.task {
-    let args = ProcessInfo.processInfo.arguments
-    if let i = args.firstIndex(of: "-flowMapRoute"), i + 1 < args.count {
-        let route = args[i + 1]
-        let dest: NavigationDestination? = switch route {
-            case "messages": .messages
-            case "profile": .profile
-            case "prescriptions": .prescriptions
-            case "appointments": .appointments
-            case "testResults": .testResults
-            case "vaccinations": .vaccinations
-            case "healthConditions": .healthConditions
-            case "documents": .documents
-            default: nil
-        }
-        if let dest = dest {
-            navigationPath = NavigationPath()
-            navigationPath.append(dest)
-        }
-    }
-}
-```
+### 2. End-to-end full-pipeline timing (1-2 hour effort) ← **start here**
 
-This puts the read-and-dispatch in the same view that owns `navigationPath`, eliminating the cross-view notification race.
+Extend the validated 8-route loop to all nodes the flow-map parser finds (33 nodes for `nhsapp-ios-demo-v2`, of which ~25 are reachable `NavigationDestination` pushes — the rest are sheets, tabs, or web-view nodes that need a different capture approach). Compare total wall-clock against Phase 1's `13m 30s` baseline. This is the data point that decides whether to commit to the architectural replacement.
 
-Verify by re-running the launch-args loop. Read `/tmp/messages.png` etc. Should now show MessagesView, ProfileView, etc.
+For the timing run: re-apply the prototype edits from the [Reference section](#reference-prototype-edits-to-re-apply) with the corrected HomeView `.task` approach (not the NotificationCenter version), build, then loop over the full set of reachable routes.
 
-### 2. End-to-end full-pipeline timing (1-2 hour effort)
-
-Once #1 works for 5 routes, extend to all 42 routes (the same node count the XCUITest baseline used). Compare total wall-clock against Phase 1's `13m 30s` baseline. This is the data point that decides whether to commit to the architectural replacement.
+Note: nodes beyond the 8 top-level `NavigationDestination` cases (e.g. sub-screens like `PrescriptionDetailView`, sheet-presented views, `WebView` nodes) need a separate capture strategy — they can't be directly addressed by launch-args alone. For the timing comparison, focus on the top-level destinations first and note how many sub-screens require a different mechanism.
 
 ### 3. Decide based on data (15 min)
 
@@ -314,17 +305,10 @@ These are the temporary modifications that were applied during the spike and rev
 
 ### Edit 1: `nhsapp-ios-demo-v2/nhsapp_ios_demo_v2App.swift`
 
-Replaces the entire file:
+Replaces the entire file. Only change from the original: read `-flowMapRoute` in `init()` and skip splash if present.
 
 ```swift
 import SwiftUI
-
-// SPIKE: temporary deep-link bridge for prototype-flow-map iOS speed spike.
-// Will be reverted via `git checkout` before commit. See spike notes in
-// prototype-flow-map repo: docs/plans/experiments/ios-architectural-alternative.md
-extension Notification.Name {
-    static let flowMapNavigate = Notification.Name("flowMapNavigate")
-}
 
 @main
 struct NHSApp_iOS_Demo_v2App: App {
@@ -334,18 +318,13 @@ struct NHSApp_iOS_Demo_v2App: App {
     @State private var appointmentManager = AppointmentManager()
     @State private var pharmacyManager = PharmacyManager()
 
-    // SPIKE: read launch arguments
-    private let pendingRoute: String?
-
     init() {
+        // SPIKE: prototype-flow-map iOS speed experiment.
+        // Skip splash when launched with -flowMapRoute so screenshot pipeline
+        // doesn't have to wait for the splash animation. Reverted via `git checkout`.
         let args = ProcessInfo.processInfo.arguments
-        var route: String? = nil
-        if let i = args.firstIndex(of: "-flowMapRoute"), i + 1 < args.count {
-            route = args[i + 1]
-        }
-        self.pendingRoute = route
-        // Skip splash if launched with a route arg
-        self._showSplash = State(initialValue: route == nil)
+        let hasRoute = args.contains("-flowMapRoute")
+        self._showSplash = State(initialValue: !hasRoute)
     }
 
     var body: some Scene {
@@ -368,23 +347,6 @@ struct NHSApp_iOS_Demo_v2App: App {
             .environment(appointmentManager)
             .environment(pharmacyManager)
             .animation(.easeOut(duration: 0.8), value: showSplash)
-            .onOpenURL { url in
-                // SPIKE: flowmap://goto/<route>
-                guard url.scheme == "flowmap", url.host == "goto" else { return }
-                let route = url.pathComponents.dropFirst().first ?? ""
-                if showSplash { showSplash = false }
-                NotificationCenter.default.post(name: .flowMapNavigate, object: route)
-            }
-            .task {
-                // SPIKE: dispatch the launch-arg route once HomeView is mounted.
-                // KNOWN BUG: this fires before HomeView's .onReceive subscribes.
-                // FIX (per next-steps #1): move this read-and-dispatch INSIDE
-                // HomeView's own .task, not at the App level.
-                if let route = pendingRoute {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    NotificationCenter.default.post(name: .flowMapNavigate, object: route)
-                }
-            }
         }
     }
 }
@@ -396,14 +358,18 @@ struct NHSApp_iOS_Demo_v2App: App {
 
 ### Edit 2: `nhsapp-ios-demo-v2/HomeView.swift`
 
-Insert a new `.onReceive` handler immediately after `.id(navigationID)` (currently around line 397):
+Insert a new `.task` modifier immediately after `.id(navigationID)` (currently around line 397). **Do NOT use `.onReceive` + NotificationCenter** — the notification fires before HomeView subscribes. The `.task` runs inside HomeView's lifecycle so `navigationPath` is already owned.
 
 ```swift
 .id(navigationID)
-.onReceive(NotificationCenter.default.publisher(for: .flowMapNavigate)) { note in
-    // SPIKE: deep-link routing for prototype-flow-map iOS speed spike.
-    // Will be reverted via `git checkout` before commit.
-    guard let route = note.object as? String else { return }
+.task {
+    // SPIKE: prototype-flow-map iOS speed experiment.
+    // Read -flowMapRoute launch arg and dispatch navigation. Lives inside
+    // HomeView's own .task so navigationPath is owned + ready when we mutate it.
+    // Reverted via `git checkout` before any commit.
+    let args = ProcessInfo.processInfo.arguments
+    guard let i = args.firstIndex(of: "-flowMapRoute"), i + 1 < args.count else { return }
+    let route = args[i + 1]
     let dest: NavigationDestination?
     switch route {
     case "messages": dest = .messages
@@ -416,13 +382,13 @@ Insert a new `.onReceive` handler immediately after `.id(navigationID)` (current
     case "documents": dest = .documents
     default: dest = nil
     }
-    if let dest = dest {
+    if let dest {
         navigationPath = NavigationPath()
         navigationPath.append(dest)
     }
 }
 .onReceive(NotificationCenter.default.publisher(for: .willSwitchProfile)) { _ in
-    // ... existing handler ...
+    // ... existing handler continues unchanged ...
 ```
 
 ### Edit 3 (post-build, runtime): URL scheme registration
