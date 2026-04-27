@@ -43,6 +43,8 @@ iOS runs take ~12-13 minutes against typical prototypes; equivalent Android runs
 
 Three-phase approach: instrument first to confirm where time goes, then attack the biggest cost.
 
+> **Heads up:** Phase 1 instrumentation revealed that `xcodebuild build` itself is only ~13 seconds — the bulk of the iOS run is XCUITest's runtime overhead, NOT the build. This shrinks Phases 2+3's expected gain from "~6-8 min saved" (the original estimate) to "~13 seconds saved." A larger architectural alternative — bypass XCUITest entirely, drive navigation programmatically, capture via `simctl io` — is being investigated as a long-running experiment in [`experiments/ios-architectural-alternative.md`](experiments/ios-architectural-alternative.md). If that experiment validates, it will likely replace Phases 2+3 here. Until it does, this workstream remains the formal plan.
+
 ### Approach
 
 #### Phase 1 — instrument ✓ delivered

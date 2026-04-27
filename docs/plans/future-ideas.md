@@ -113,11 +113,7 @@ For graphs over ~200 nodes (rare today), the current layout becomes unwieldy. A 
 
 ### Replace XCUITest with `simctl io` direct screenshots
 
-If Workstream 4 Phases 2–3 don't get iOS within 2× of Android, the next step is to bypass XCUITest entirely and capture Simulator screenshots directly via `xcrun simctl io <device> screenshot`.
-
-**Approach:** instead of running an XCUITest harness that calls `captureToImage()`, use UI automation to navigate to each screen (still via XCUITest or directly via `xcrun simctl ui`), then capture via `simctl io`. Avoids the XCUITest framework overhead per screen.
-
-**Why deferred:** bigger architectural change. Phases 2–3 might be sufficient.
+> **Status: actively under investigation as an experiment.** See [`experiments/ios-architectural-alternative.md`](experiments/ios-architectural-alternative.md) for the spike findings and resumption notes. Phase A measurements have validated the speed half of the hypothesis (`simctl io` is ~250ms per capture, `xcodebuild build` is ~13s vs ~13 minutes for full XCUITest). The navigation-trigger half is partially blocked and being iterated on. This entry stays here as the parking-lot reference; the experiment doc is the live document for picking the work up.
 
 ### Parallel Simulator instances
 
