@@ -211,6 +211,45 @@ Plus error-recovery tests: what happens when an interactive step fails mid-scena
 
 ---
 
+## iOS: orphaned nodes — hide or explain
+
+The iOS parser creates graph nodes for every Swift struct that conforms to `View`,
+including views that are never reachable via declarative navigation (no
+`NavigationLink`, `RowLink`, `.sheet`, or `.fullScreenCover` pointing to them).
+These appear in the graph as disconnected nodes — or as nodes with outgoing edges
+but no incoming edges — and always have `screenshot: null` because the launch-args
+pipeline can't navigate to them.
+
+**Known examples in `nhsapp-ios-demo-v2`:**
+- `PrescriptionOrderStep1View` through `Step6View` — View structs that exist in
+  the project but are not referenced from any main-app navigation. Likely dead code
+  from a native flow that was replaced by the Heroku-hosted web flow
+  (`PrescriptionFlow` enum). Only the old XCUITest file references them.
+- `NoAppointmentsView` — rendered inline and conditionally (`if appointments.isEmpty`),
+  not a navigation destination. The parser detects it as a View struct and creates a
+  node, but there's no navigation edge pointing to it.
+
+**Two options — pick one:**
+
+**Option A: Filter orphaned nodes from the graph** — in `swift-graph-builder.js`,
+after building the graph, remove any node with no incoming edges that is also not a
+known entry point (tab root, NavigationStack host). This keeps the viewer clean but
+loses information about views that exist but aren't reachable.
+
+**Option B: Add a viewer note** — in the viewer, show a visual indicator (e.g. grey
+border, "orphaned" badge) on nodes with `screenshot: null` and no incoming edges,
+with a tooltip explaining why. Add a section to `docs/ios-support.md` explaining
+the limitation.
+
+**Recommended starting point:** Option A (filter by default), with an `--include-orphans`
+flag to opt back in for audit purposes. The viewer showing a screenless dead-end node
+misleads the reader into thinking it's a reachable screen.
+
+**Why deferred:** not blocking — the tool is usable without this fix. Address once the
+screenshot pipeline is otherwise complete.
+
+---
+
 ## Open design questions
 
 These don't have clear answers yet — leaving them parked for now:

@@ -86,7 +86,10 @@ function injectFlowMapRouteHandler(graph, prototypePath, parsedViews) {
   const caseMap = parseCaseMap(hostContent, enumType, prototypePath);
 
   // 3. Build the full route plan from the graph
-  const routePlan = buildRoutePlan(graph, caseMap);
+  // Extract the host view name so buildRoutePlan can add the root "home" route
+  const hostViewNameMatch = hostContent.match(/\bstruct\s+(\w+)\s*:\s*(?:some\s+)?View\b/);
+  const hostViewName = hostViewNameMatch ? hostViewNameMatch[1] : null;
+  const routePlan = buildRoutePlan(graph, caseMap, parsedViews, prototypePath, hostViewName);
 
   // 4. Inject NavigationHost
   if (!hostContent.includes(SENTINEL)) {
@@ -101,6 +104,19 @@ function injectFlowMapRouteHandler(graph, prototypePath, parsedViews) {
 
   // 6. Inject parent-view sheet/cover triggers
   injectSheetTriggers(graph, viewMap, prototypePath, routePlan, backup);
+
+  // 7. Inject into sub-NavigationStack hosts (sheet children that own NavigationStack(path:))
+  for (const [subHostViewName, subHost] of routePlan.subNavigationHosts) {
+    const parsedView = viewMap.get(subHostViewName);
+    if (!parsedView || !parsedView.filePath) continue;
+    const filePath = parsedView.filePath;
+    if (!fs.existsSync(filePath)) continue;
+    const content = fs.readFileSync(filePath, "utf-8");
+    if (content.includes(SENTINEL)) continue;
+    const injected = injectIntoSubNavigationHost(content, subHost, parsedViews, prototypePath);
+    backup(filePath, content);
+    fs.writeFileSync(filePath, injected, "utf-8");
+  }
 
   function cleanup() {
     for (const { filePath, original } of backups) {
@@ -124,25 +140,15 @@ function injectFlowMapRouteHandler(graph, prototypePath, parsedViews) {
  *
  * Returns an object:
  *   routePlan.level1Routes  — [{ routeKey, viewName, caseExpr }]
- *     routeKey:  the string used in the route arg (e.g. "messages")
- *     viewName:  SwiftUI view name (e.g. "MessagesView")
- *     caseExpr:  enum expression (e.g. ".messages" or "NavigationDestination.messages")
- *
  *   routePlan.pushRoutes    — [{ routeKey, viewName }]
- *     routeKey:  the String value pushed to navigationPath (= viewName)
- *     viewName:  SwiftUI view name
- *
  *   routePlan.allRoutes     — [{ route, nodeId }]
- *     route:  full "/" delimited route string
- *     nodeId: graph node id
- *
  *   routePlan.sheetRoutes   — [{ route, parentViewName, stateVar, nodeId }]
- *     parentViewName: the view that owns the sheet @State var
- *     stateVar:       the @State var to set true (if known)
- *
- *   routePlan.pushableViews — Set<string> of viewName that can be pushed as Strings
+ *   routePlan.pushableViews — Set<string>
+ *   routePlan.subNavigationHosts — Map<viewName, { viewName, pushRoutes, pushableViews }>
+ *     Sub-NavigationStack hosts: sheet children that own their own NavigationStack(path:).
+ *     Their push-reachable children get compound routes and dedicated injection.
  */
-function buildRoutePlan(graph, caseMap) {
+function buildRoutePlan(graph, caseMap, parsedViews, prototypePath, hostViewName) {
   // Build adjacency: source → [{ target, edgeType }]
   const adj = new Map();
   for (const edge of graph.edges) {
@@ -154,9 +160,7 @@ function buildRoutePlan(graph, caseMap) {
   const pushRoutes = [];
   const allRoutes = [];
   const sheetRoutes = [];
-
-  // Collect all nodes reachable via link edges from level-1 nodes (the enum cases)
-  const level1ViewNames = new Set(caseMap.values());
+  const subNavigationHosts = new Map();
 
   // BFS: for each level-1 node, collect its push-reachable descendants
   for (const [routeKey, viewName] of caseMap) {
@@ -182,14 +186,14 @@ function buildRoutePlan(graph, caseMap) {
 
         if (type === "link") {
           // Push navigation — can address via String path
-          const routeKey2 = targetNode.id; // viewName as the route key
+          const routeKey2 = targetNode.id;
           const fullRoute = `${prefix}/${routeKey2}`;
           pushRoutes.push({ routeKey: routeKey2, viewName: targetNode.id });
           allRoutes.push({ route: fullRoute, nodeId: targetNode.id });
           queue.push({ nodeId: target, prefix: fullRoute });
         } else if (type === "sheet" || type === "full-screen") {
           // Sheet/cover — triggered by parent view's .task, not path push
-          const parentViewName = graph.nodes.find((n) => n.id === nodeId)?.id || nodeId;
+          const parentViewName = nodeId;
           const fullRoute = `${prefix}/${targetNode.id}`;
           sheetRoutes.push({
             route: fullRoute,
@@ -198,9 +202,54 @@ function buildRoutePlan(graph, caseMap) {
             nodeId: targetNode.id,
           });
           allRoutes.push({ route: fullRoute, nodeId: targetNode.id });
-          // Don't BFS deeper through sheets — they're modal roots
+
+          // If the sheet child owns its own NavigationStack, BFS its push children
+          // to generate compound routes (e.g. profile/ProfileSwitcherView/AddCareProfileView).
+          if (!subNavigationHosts.has(targetNode.id) &&
+              viewOwnsNavigationStack(targetNode.id, parsedViews, prototypePath)) {
+            const subPushRoutes = [];
+            const subVisited = new Set([targetNode.id]);
+            const subQueue = [{ nodeId: targetNode.id, prefix: fullRoute }];
+
+            while (subQueue.length > 0) {
+              const { nodeId: subNodeId, prefix: subPrefix } = subQueue.shift();
+              for (const { target: subTarget, type: subType } of adj.get(subNodeId) || []) {
+                if (subVisited.has(subTarget)) continue;
+                subVisited.add(subTarget);
+                if (subType !== "link") continue;
+
+                const subTargetNode = graph.nodes.find((n) => n.id === subTarget);
+                if (!subTargetNode) continue;
+
+                // Skip views we can't instantiate without args — nothing to capture
+                if (hasRequiredInitParams(subTargetNode.id, parsedViews, prototypePath)) continue;
+
+                const subFullRoute = `${subPrefix}/${subTargetNode.id}`;
+                subPushRoutes.push({ routeKey: subTargetNode.id, viewName: subTargetNode.id });
+                allRoutes.push({ route: subFullRoute, nodeId: subTargetNode.id });
+                subQueue.push({ nodeId: subTarget, prefix: subFullRoute });
+              }
+            }
+
+            if (subPushRoutes.length > 0) {
+              subNavigationHosts.set(targetNode.id, {
+                viewName: targetNode.id,
+                pushRoutes: subPushRoutes,
+                pushableViews: new Set(subPushRoutes.map((r) => r.viewName)),
+              });
+            }
+          }
         }
       }
+    }
+  }
+
+  // The NavigationHost (e.g. HomeView) is never a NavigationDestination case —
+  // add it as a "home" route so we capture the root screen.
+  if (hostViewName) {
+    const hostNode = graph.nodes.find((n) => n.id === hostViewName);
+    if (hostNode) {
+      allRoutes.push({ route: "home", nodeId: hostNode.id });
     }
   }
 
@@ -214,7 +263,29 @@ function buildRoutePlan(graph, caseMap) {
 
   const pushableViews = new Set(dedupedPushRoutes.map((r) => r.viewName));
 
-  return { level1Routes, pushRoutes: dedupedPushRoutes, allRoutes, sheetRoutes, pushableViews };
+  return { level1Routes, pushRoutes: dedupedPushRoutes, allRoutes, sheetRoutes, pushableViews, subNavigationHosts };
+}
+
+/**
+ * Return true if the named view owns a NavigationStack(path:) in its file.
+ */
+function viewOwnsNavigationStack(viewName, parsedViews, prototypePath) {
+  if (!parsedViews || !prototypePath) return false;
+  const view = parsedViews && parsedViews.find((v) => v.viewName === viewName);
+  let filePath = view && view.filePath;
+  if (!filePath) {
+    const candidates = globSync(`**/${viewName}.swift`, {
+      cwd: prototypePath, absolute: true, ignore: ["**/*Tests*/**", "**/Pods/**"],
+    });
+    filePath = candidates[0] || null;
+  }
+  if (!filePath) return false;
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    return content.includes("NavigationStack(path:");
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,18 +773,19 @@ function generateSheetTriggerTask(parentViewName, triggers) {
   const parentSegment = triggers[0]?.routeFull.split("/")[0] ?? "";
   const parentSegmentGuess = parentViewName;
 
-  const cases = triggers
+  // Use segments.contains(routeSegment) rather than switching on the last segment.
+  // This lets the trigger fire correctly for deeper routes like
+  // profile/ProfileSwitcherView/AddCareProfileView (where the leaf is not the sheet name).
+  const checks = triggers
     .filter((t) => t.kind === "bool" || t.synthesizedValue !== null)
     .map(({ stateVar, routeSegment, kind, synthesizedValue }) => {
       const rhs = kind === "item" ? synthesizedValue : "true";
-      return `            case "${routeSegment}": ${stateVar} = ${rhs}`;
+      return `            if segments.contains("${routeSegment}") { ${stateVar} = ${rhs} }`;
     })
     .join("\n");
 
-  if (!cases) return null;
+  if (!checks) return null;
 
-  // The guard checks that segments[0] matches the level-1 key, segments[-2] matches
-  // the parent view name (for level-2+ parents), and segments.last is the leaf.
   return `        .task {
             ${SENTINEL}
             // prototype-flow-map: open sheet/cover when route targets a modal child.
@@ -722,11 +794,7 @@ function generateSheetTriggerTask(parentViewName, triggers) {
             let segments = args[i + 1].split(separator: "/").map(String.init)
             guard segments.count > 1 else { return }
             guard segments.contains("${parentSegmentGuess}") || segments.first == "${parentSegment}" else { return }
-            let leaf = segments.last ?? ""
-            switch leaf {
-${cases}
-            default: break
-            }
+${checks}
         }`;
 }
 
@@ -748,6 +816,154 @@ function insertSheetTriggerTask(content, taskCode) {
     return content.slice(0, lastBrace) + "\n" + taskCode + content.slice(lastBrace);
   }
   return content + "\n" + taskCode;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-NavigationStack injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Inject route-handler code into a sheet child that owns its own NavigationStack(path:).
+ * Adds: .navigationDestination(for: String.self), .task, and flowMapSubNavDestination helper.
+ */
+function injectIntoSubNavigationHost(content, subHost, parsedViews, prototypePath) {
+  const { viewName, pushRoutes, pushableViews } = subHost;
+  const pathVar = extractNavigationStackPathVar(content) || "path";
+
+  // A: insert .navigationDestination(for: String.self) inside the NavigationStack content
+  const ndStringHandler = `\n            .navigationDestination(for: String.self) { viewName in\n                ${SENTINEL}\n                flowMapSubNavDestination(viewName)\n            }`;
+  let result = insertStringHandlerIntoSubNavigationStack(content, ndStringHandler);
+
+  // B: insert .task after the NavigationStack's closing brace
+  const taskCode = generateSubHostTaskCode(viewName, pushableViews, pathVar);
+  result = insertTaskAfterNavigationStack(result, taskCode);
+
+  // C: insert flowMapSubNavDestination helper into the named struct (not just "last struct in file")
+  const helperCode = generateSubHostHelperFunction(pushRoutes, parsedViews, prototypePath);
+  result = insertHelperIntoNamedStruct(result, viewName, helperCode);
+
+  return result;
+}
+
+/**
+ * Insert .navigationDestination(for: String.self) inside a NavigationStack content closure
+ * that has no existing navigationDestination. Inserts just before the closing } of the
+ * NavigationStack's content closure.
+ */
+function insertStringHandlerIntoSubNavigationStack(content, ndStringHandler) {
+  if (content.includes("for: String.self")) return content;
+
+  const nsStart = content.search(/NavigationStack\(path:/);
+  if (nsStart === -1) return content;
+
+  let pos = nsStart;
+  while (pos < content.length && content[pos] !== "{") pos++;
+  if (pos >= content.length) return content;
+
+  // Brace-count to find the closing } of the NavigationStack content closure
+  let depth = 0;
+  let end = pos;
+  while (end < content.length) {
+    if (content[end] === "{") depth++;
+    else if (content[end] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+    end++;
+  }
+
+  // Insert the handler before the closing } (at position end)
+  return content.slice(0, end) + ndStringHandler + "\n        " + content.slice(end);
+}
+
+/**
+ * Generate the .task Swift code for a sub-NavigationStack host.
+ * Finds the host's own view name in the route segments, then pushes the next segment.
+ * Sleeps 300ms first to allow the parent sheet animation to complete.
+ */
+function generateSubHostTaskCode(viewName, pushableViews, pathVar) {
+  const pushableArray = [...pushableViews]
+    .map((v) => `                "${v}"`)
+    .join(",\n");
+
+  return `        .task {
+            ${SENTINEL}
+            // prototype-flow-map: push route within sub-NavigationStack after sheet opens.
+            let args = ProcessInfo.processInfo.arguments
+            guard let i = args.firstIndex(of: "-flowMapRoute"), i + 1 < args.count else { return }
+            let segments = args[i + 1].split(separator: "/").map(String.init)
+            guard let myIdx = segments.firstIndex(of: "${viewName}"), myIdx + 1 < segments.count else { return }
+            let subPushableViews: Set<String> = [
+${pushableArray}
+            ]
+            let targetSegment = segments[myIdx + 1]
+            guard subPushableViews.contains(targetSegment) else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            ${pathVar}.append(targetSegment)
+        }`;
+}
+
+/**
+ * Generate the flowMapSubNavDestination @ViewBuilder helper for a sub-NavigationStack host.
+ */
+function generateSubHostHelperFunction(pushRoutes, parsedViews, prototypePath) {
+  const cases = pushRoutes
+    .filter(({ viewName }) => !hasRequiredInitParams(viewName, parsedViews, prototypePath))
+    .map(({ viewName }) => `        case "${viewName}": ${viewName}()`)
+    .join("\n");
+
+  return `    // prototype-flow-map: resolve sub-NavigationStack path segments to views.
+    ${SENTINEL}
+    @ViewBuilder
+    private func flowMapSubNavDestination(_ viewName: String) -> some View {
+        switch viewName {
+${cases}
+        default: EmptyView()
+        }
+    }`;
+}
+
+/**
+ * Insert helperCode just before the closing } of a named struct.
+ * Used so that helpers land in the correct struct when a file defines multiple structs.
+ */
+function insertHelperIntoNamedStruct(content, structName, helperCode) {
+  // Find the struct declaration
+  const structStart = content.search(new RegExp(`\\bstruct\\s+${structName}\\b`));
+  if (structStart === -1) return insertHelperAtStructBottom(content, helperCode); // fallback
+
+  // Brace-count from the struct's opening { to find its closing }
+  let pos = structStart;
+  while (pos < content.length && content[pos] !== "{") pos++;
+  if (pos >= content.length) return insertHelperAtStructBottom(content, helperCode);
+
+  let depth = 0;
+  let end = pos;
+  while (end < content.length) {
+    if (content[end] === "{") depth++;
+    else if (content[end] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+    end++;
+  }
+
+  // end is now the position of the struct's closing }
+  return (
+    content.slice(0, end) +
+    "\n\n" +
+    helperCode +
+    "\n" +
+    content.slice(end)
+  );
+}
+
+/**
+ * Extract the name of the @State path variable from NavigationStack(path: $varName).
+ */
+function extractNavigationStackPathVar(content) {
+  const m = content.match(/NavigationStack\(path:\s*\$([A-Za-z_][A-Za-z0-9_]*)\)/);
+  return m ? m[1] : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 # iOS item:-bound sheet screenshots
 
+> **Status: DELIVERED (2026-04-28).** `synthesizeSwiftValue()` + `findStoredProperties()` added to `src/swift-injector.js`. `AppointmentDetailView` now captures correctly. See implementation in `resolveSheetStateVars` (pass 2) and `injectSheetTriggers`.
+
 ## Problem
 
 The iOS screenshot pipeline currently skips `.sheet(item: $stateVar)` and
