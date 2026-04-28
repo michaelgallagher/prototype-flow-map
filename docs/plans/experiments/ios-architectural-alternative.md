@@ -1,10 +1,10 @@
 # iOS architectural alternative — spike experiment
 
-> **Status: VALIDATED ✓ — ready to productionise.** The launch-args architecture now works for all 22 routes (level 1, level 2 push, level 3 push, and sheets/fullScreenCovers). End-to-end timing: **22 routes in ~45s wall-clock**, versus the XCUITest baseline of 17/45 captured in 13m 36s. That is **~18× faster with 100% coverage vs 38%**. All three decision-criteria gates are met. Phases 2+3 of the roadmap are superseded.
+> **Status: SHIPPED ✓ — productionised and smoke tested (2026-04-27).** The launch-args architecture is now the live iOS screenshot path in `prototype-flow-map`. Smoke test on `nhsapp-ios-demo-v2`: **29 routes captured, 23 screenshots saved in 1m 9s** — vs XCUITest baseline of 17/45 in 13m 36s. That is **~12× faster with 23 screenshots vs 17** (6 more captured despite fewer total elapsed minutes). All three decision-criteria gates are met. Phases 2+3 of the roadmap are superseded.
 >
 > The active iOS speed workstream in [`../roadmap.md`](../roadmap.md) (Phases 2+3 — parallelise + cache the build) is now superseded by this approach.
 >
-> This doc is the handover for productionising. Self-contained — a fresh contributor (human or AI) should be able to resume from here without prior context.
+> This doc is the historical record. See implementation notes below for the productionised module details.
 
 ## Why this exists
 
@@ -269,16 +269,30 @@ Validated: 8/8 NavigationDestination cases navigated correctly with 1.5s settle 
 
 Green-lit. Phases 2+3 in [`../roadmap.md`](../roadmap.md) are superseded by this approach.
 
-### 4. Productionise (1-2 weeks) ← **start here**
+### ~~4. Productionise~~ ✓ Done (2026-04-27)
 
-Modules to write:
+Modules written and smoke tested:
 
 | File | Role |
 |---|---|
-| `src/swift-deeplink-injector.js` | Find App.swift / NavigationHost view file, inject route-handler code (analogous to Android's `LaunchedEffect` + `TestHooks.kt` injection), restore via finally |
-| `src/swift-spike-runner.js` | Replace `crawlAndScreenshotIos` in `src/swift-crawler.js`. Manages: build → install → launch → loop(navigate + screenshot) → uninstall |
-| New screenshot harness | Replaces `src/xctest-generator.js` for the new path |
-| Pattern detection in `src/swift-parser.js` | Identify whether prototype uses iOS 16+ NavigationStack — gate the new approach; fall back to existing XCUITest path for older patterns |
+| `src/swift-injector.js` | Finds App.swift + NavigationHost view file, injects route-handler code idempotently (SENTINEL-guarded), restores via `cleanup()` in finally. Exports `detectNavigationStackPattern`, `injectFlowMapRouteHandler`, `buildRoutePlan`, `parseCaseMap`. |
+| `src/swift-spike-runner.js` | `crawlAndScreenshotIosFast()` — manages: inject → build → install → loop(terminate + launch -flowMapRoute + settle + screenshot) → uninstall → cleanup. Re-exports `detectNavigationStackPattern`. |
+| `src/index.js` | Wired in: `detectNavigationStackPattern` gates fast path vs XCUITest fallback; `parsedViews` hoisted before iOS branch; `crawlAndScreenshotIosFast` called with graph + parsedViews + options. |
+
+**Injection sites (all idempotent):**
+1. **NavigationHost** (HomeView.swift): `.navigationDestination(for: String.self)` inside the NavigationStack content + `.task` route dispatcher after closing brace + `flowMapSubDestination()` `@ViewBuilder` helper inside struct
+2. **App.swift**: `init()` that sets the splash `@State` var to false when `-flowMapRoute` is in launch args
+3. **Parent views with sheet children**: `.task` that reads the launch arg and sets the `isPresented:` `@State Bool` — only `isPresented:`-bound sheets (not `item:`-bound, which need real data)
+
+**Route plan construction:** BFS over graph `link` edges for push routes, `sheet`/`full-screen` edges for modal routes. `pushableViews` Set guards against pushing sheet-trigger segments.
+
+**Key bug found and fixed during productionise:** `parsedViews` objects use `v.viewName` (not `v.name`) and `v.filePath` (absolute, not relative). The `viewMap` built on `v.name` mapped all entries to `undefined`, silently skipping all sheet trigger injection.
+
+**Smoke test results (2026-04-27, nhsapp-ios-demo-v2, iPhone 17 Pro simulator):**
+- 29 routes in route plan (vs 22 in spike — parser now finds more edges)
+- 23 screenshots captured (6 routes map to the same `DetailView` node — all write same file)
+- 1m 9s total (build was incremental ~4s; ~1.7s per route with 1.5s settle)
+- `item:`-bound sheets (`AppointmentDetailView`) correctly excluded from injection — needs real data, can't be triggered by `= true`
 
 ### 5. (Optional) Solve the consent-dialog problem for openurl
 

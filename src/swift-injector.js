@@ -69,7 +69,7 @@ function injectFlowMapRouteHandler(graph, prototypePath, parsedViews) {
   }
 
   // Build a map of viewName → parsed view data for fast lookup
-  const viewMap = new Map(parsedViews.map((v) => [v.name, v]));
+  const viewMap = new Map(parsedViews.map((v) => [v.viewName, v]));
 
   // 1. Find the NavigationHost file
   const hostInfo = findNavigationHost(prototypePath);
@@ -90,7 +90,7 @@ function injectFlowMapRouteHandler(graph, prototypePath, parsedViews) {
 
   // 4. Inject NavigationHost
   if (!hostContent.includes(SENTINEL)) {
-    const injected = injectIntoNavigationHost(hostContent, routePlan, enumType);
+    const injected = injectIntoNavigationHost(hostContent, routePlan, enumType, parsedViews, prototypePath);
     backup(hostFile, hostContent);
     fs.writeFileSync(hostFile, injected, "utf-8");
   }
@@ -288,7 +288,7 @@ function parseCaseMap(hostContent, enumType, prototypePath) {
  *
  *  C. Bottom of struct: flowMapSubDestination() @ViewBuilder helper
  */
-function injectIntoNavigationHost(content, routePlan, enumType) {
+function injectIntoNavigationHost(content, routePlan, enumType, parsedViews, prototypePath) {
   const { level1Routes, pushRoutes, pushableViews } = routePlan;
 
   // -- A: .navigationDestination(for: String.self) --
@@ -314,7 +314,7 @@ function injectIntoNavigationHost(content, routePlan, enumType) {
   result = insertTaskAfterNavigationStack(result, taskCode);
 
   // -- C: flowMapSubDestination helper --
-  const helperCode = generateHelperFunction(pushRoutes);
+  const helperCode = generateHelperFunction(pushRoutes, parsedViews, prototypePath);
   result = insertHelperAtStructBottom(result, helperCode);
 
   return result;
@@ -353,8 +353,9 @@ function insertAfterNavigationDestination(content, enumType, insertion) {
 }
 
 function insertTaskAfterNavigationStack(content, taskCode) {
-  // Don't re-inject if already present
-  if (content.includes(SENTINEL)) return content;
+  // Don't re-inject if already present (check for something specific to the task,
+  // not the general SENTINEL which may already be written by the String handler)
+  if (content.includes("navigationPath.append(level1)")) return content;
 
   // Find the NavigationStack's closing brace by brace-counting from "NavigationStack(path:"
   const nsStart = content.search(/NavigationStack\(path:/);
@@ -386,15 +387,21 @@ function insertTaskAfterNavigationStack(content, taskCode) {
 }
 
 function insertHelperAtStructBottom(content, helperCode) {
-  // Insert before the last closing brace of the struct (before the #Preview blocks)
+  // We need to insert INSIDE the struct, before its closing }.
+  // The struct closing } is the last \n} before the first \n#Preview (or end of file).
   const previewIdx = content.search(/\n#Preview/);
-  if (previewIdx !== -1) {
-    return content.slice(0, previewIdx) + "\n" + helperCode + "\n" + content.slice(previewIdx);
-  }
-  // Fallback: before the final closing brace
-  const lastBrace = content.lastIndexOf("\n}");
-  if (lastBrace !== -1) {
-    return content.slice(0, lastBrace) + "\n" + helperCode + "\n" + content.slice(lastBrace);
+  const searchBefore = previewIdx !== -1 ? previewIdx : content.length;
+
+  // Find the last \n} before searchBefore — this is the struct closing brace
+  const structCloseIdx = content.lastIndexOf("\n}", searchBefore);
+  if (structCloseIdx !== -1) {
+    return (
+      content.slice(0, structCloseIdx) +
+      "\n\n" +
+      helperCode +
+      "\n" +
+      content.slice(structCloseIdx)
+    );
   }
   return content + "\n" + helperCode;
 }
@@ -407,12 +414,12 @@ function generateTaskCode(level1Routes, pushableViews, enumType) {
   const cases = level1Routes
     .map(
       ({ routeKey, caseExpr }) =>
-        `        case "${routeKey}": level1 = ${caseExpr}`,
+        `            case "${routeKey}": level1 = ${caseExpr}`,
     )
     .join("\n");
 
   const pushableArray = [...pushableViews]
-    .map((v) => `            "${v}"`)
+    .map((v) => `                "${v}"`)
     .join(",\n");
 
   return `        .task {
@@ -440,8 +447,9 @@ ${pushableArray}
         }`;
 }
 
-function generateHelperFunction(pushRoutes) {
+function generateHelperFunction(pushRoutes, parsedViews, prototypePath) {
   const cases = pushRoutes
+    .filter(({ viewName }) => !hasRequiredInitParams(viewName, parsedViews, prototypePath))
     .map(({ viewName }) => `        case "${viewName}": ${viewName}()`)
     .join("\n");
 
@@ -454,6 +462,56 @@ ${cases}
         default: EmptyView()
         }
     }`;
+}
+
+/**
+ * Return true if the SwiftUI view struct has required stored properties
+ * (i.e. cannot be instantiated with just `ViewName()`).
+ * Heuristic: looks for `let name: Type` or `var name: Type` without a default
+ * value and without a property wrapper, before `var body`.
+ *
+ * Checks parsedViews first (fast path), then falls back to scanning all Swift
+ * files in the prototype directory (for views not picked up by the parser
+ * because they have no navigation patterns).
+ */
+function hasRequiredInitParams(viewName, parsedViews, prototypePath) {
+  if (!prototypePath) return false;
+
+  // Resolve the file path: parsedViews fast path, then glob fallback
+  let filePath = null;
+  const view = parsedViews && parsedViews.find((v) => v.viewName === viewName);
+  if (view && view.filePath) {
+    filePath = view.filePath;
+  } else {
+    // Fall back: find the file that defines this struct
+    const candidates = globSync(`**/${viewName}.swift`, {
+      cwd: prototypePath,
+      absolute: true,
+      ignore: ["**/*Tests*/**", "**/Pods/**"],
+    });
+    if (candidates.length > 0) filePath = candidates[0];
+  }
+
+  if (!filePath) return false;
+
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    // Isolate the struct's body up to `var body`
+    const bodyStart = content.search(/\bvar\s+body\b/);
+    if (bodyStart === -1) return false;
+    const beforeBody = content.slice(0, bodyStart);
+
+    const lines = beforeBody.split("\n");
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^(?:let|var)\s+\w+\s*:/.test(t) && !t.includes("=") && !t.startsWith("@")) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +591,7 @@ function injectSheetTriggers(graph, viewMap, prototypePath, routePlan, backup) {
     const parsedView = viewMap.get(parentViewName);
     if (!parsedView || !parsedView.filePath) continue;
 
-    const filePath = path.resolve(prototypePath, parsedView.filePath);
+    const filePath = parsedView.filePath;
     if (!fs.existsSync(filePath)) continue;
 
     const content = fs.readFileSync(filePath, "utf-8");
@@ -560,20 +618,35 @@ function injectSheetTriggers(graph, viewMap, prototypePath, routePlan, backup) {
 function resolveSheetStateVars(content, sheetRoutes, routePlan) {
   const triggers = [];
 
-  // Match: .sheet(isPresented: $<var>) { ... <ViewName>() ... }
-  // or:    .fullScreenCover(isPresented: $<var>) { ... <ViewName>() ... }
-  const modalPattern =
-    /\.(sheet|fullScreenCover)\(isPresented:\s*\$([A-Za-z_][A-Za-z0-9_]*)[^{]*\{([\s\S]*?)\n\s{8}\}/gm;
+  // Only handle isPresented: bindings — item: bindings need a data value we don't have.
+  const modalStartPattern =
+    /\.(sheet|fullScreenCover)\(\s*isPresented\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
   let m;
-  while ((m = modalPattern.exec(content)) !== null) {
+  while ((m = modalStartPattern.exec(content)) !== null) {
     const stateVar = m[2];
-    const closureBody = m[3];
+    // Scan forward to find the trailing closure's opening {
+    let pos = m.index + m[0].length;
+    while (pos < content.length && content[pos] !== "{") pos++;
+    if (pos >= content.length) continue;
+
+    // Count balanced braces to capture the full closure body
+    let depth = 0;
+    let start = pos;
+    let end = pos;
+    while (end < content.length) {
+      if (content[end] === "{") depth++;
+      else if (content[end] === "}") {
+        depth--;
+        if (depth === 0) break;
+      }
+      end++;
+    }
+    const closureBody = content.slice(start, end + 1);
 
     // Find which sheet route targets a view present in this closure
     for (const sr of sheetRoutes) {
-      if (closureBody.includes(sr.nodeId + "()") || closureBody.includes(sr.nodeId + " ")) {
-        // Build a route segment hint from the full route string
+      if (closureBody.includes(sr.nodeId)) {
         const segments = sr.route.split("/");
         const leafSegment = segments[segments.length - 1];
         triggers.push({
