@@ -113,30 +113,14 @@ For graphs over ~200 nodes (rare today), the current layout becomes unwieldy. A 
 
 ### Required-param push views (TrustedPersonDetailView and removal flow)
 
-`TrustedPersonDetailView(profile:, dismissSheet:)` is reachable via push navigation from `ProfileSwitcherView`'s sub-NavigationStack, but the injector skips it because it has required init params (`hasRequiredInitParams` returns true). The entire removal flow behind it is therefore also uncaptured:
+**Shipped 2026-04-28.** All five views in the chain now synthesize correctly and are captured in screenshots.
 
-```
-ProfileSwitcherView
-  →[push] TrustedPersonDetailView(profile:, dismissSheet:)       ← needs Profile
-    →[push] RemoveTrustedPersonView(profile:, dismissSheet:)      ← needs Profile
-      →[push] RemoveTrustedPersonReasonView
-        →[push] RemoveTrustedPersonCheckAnswersView
-          →[push] RemoveTrustedPersonConfirmationView
-```
+The synthesizer (`synthesizeSwiftValue` + `findStoredProperties`) was extended to cover push-nav views, not just item:-bound sheets:
+- `findStoredProperties` now handles closure-type properties (`() -> Void`), `@Binding` params, and inline `//` comments on property declaration lines
+- `synthesizeSwiftValue` now handles `() -> Void` → `{}` and `Binding<T>` → `.constant(synthesized T)`
+- Both helper generators (`generateHelperFunction`, `generateSubHostHelperFunction`) now try synthesis for required-init-param views instead of always skipping them
 
-`RemoveTrustedPersonReasonView` onwards may be zero-param and automatically capturable once the gateway view is unblocked.
-
-**Fix:** extend the synthesizer (`synthesizeSwiftValue` + `findStoredProperties`) to cover push-nav views in `flowMapSubNavDestination` and `flowMapSubNavDestination`, not just item:-bound sheet state vars. Concretely:
-
-1. In `generateSubHostHelperFunction` (and `generateHelperFunction`), for views that `hasRequiredInitParams` returns true, try synthesizing the init call rather than skipping the view entirely.
-2. Add `() -> Void` to the synthesizer — emit `{}` for closure-typed properties (the `dismissSheet` parameter).
-3. If synthesis succeeds, emit `ViewName(param1: val1, ...)` in the switch case; if it fails, fall back to the current `default: EmptyView()` behaviour.
-
-`Profile` is likely synthesizable (it's a struct with stored properties). `() -> Void` just needs a `{}` literal. This should unlock `TrustedPersonDetailView`, `RemoveTrustedPersonView`, and (if their params are resolvable) the downstream `Remove*` chain.
-
-**Estimated impact:** ~5 more screenshots from `nhsapp-ios-demo-v2`.
-
-**Why deferred:** the synthesizer extension is straightforward but needs care to avoid generating code that won't compile for edge cases (recursive types, non-struct types, enums). The current 26-screenshot baseline is already useful; this is a coverage improvement, not a blocker.
+`RemoveTrustedPersonCheckAnswersView` additionally required `@Binding var selectedReasons: Set<RemovalReason>` → synthesized as `selectedReasons: .constant([])`.
 
 ### Parallel Simulator instances
 

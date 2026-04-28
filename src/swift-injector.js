@@ -221,8 +221,9 @@ function buildRoutePlan(graph, caseMap, parsedViews, prototypePath, hostViewName
                 const subTargetNode = graph.nodes.find((n) => n.id === subTarget);
                 if (!subTargetNode) continue;
 
-                // Skip views we can't instantiate without args — nothing to capture
-                if (hasRequiredInitParams(subTargetNode.id, parsedViews, prototypePath)) continue;
+                // Skip views we can't instantiate — but try synthesis first before giving up
+                if (hasRequiredInitParams(subTargetNode.id, parsedViews, prototypePath) &&
+                    !synthesizeSwiftValue(subTargetNode.id, prototypePath)) continue;
 
                 const subFullRoute = `${subPrefix}/${subTargetNode.id}`;
                 subPushRoutes.push({ routeKey: subTargetNode.id, viewName: subTargetNode.id });
@@ -520,8 +521,13 @@ ${pushableArray}
 
 function generateHelperFunction(pushRoutes, parsedViews, prototypePath) {
   const cases = pushRoutes
-    .filter(({ viewName }) => !hasRequiredInitParams(viewName, parsedViews, prototypePath))
-    .map(({ viewName }) => `        case "${viewName}": ${viewName}()`)
+    .flatMap(({ viewName }) => {
+      if (!hasRequiredInitParams(viewName, parsedViews, prototypePath)) {
+        return [`        case "${viewName}": ${viewName}()`];
+      }
+      const initCall = synthesizeSwiftValue(viewName, prototypePath);
+      return initCall ? [`        case "${viewName}": ${initCall}`] : [];
+    })
     .join("\n");
 
   return `    // prototype-flow-map: resolve String navigation path segments to views.
@@ -896,10 +902,12 @@ function generateSubHostTaskCode(viewName, pushableViews, pathVar) {
             let subPushableViews: Set<String> = [
 ${pushableArray}
             ]
-            let targetSegment = segments[myIdx + 1]
-            guard subPushableViews.contains(targetSegment) else { return }
+            let targetSegments = Array(segments[(myIdx + 1)...])
+            guard let firstTarget = targetSegments.first, subPushableViews.contains(firstTarget) else { return }
             try? await Task.sleep(nanoseconds: 300_000_000)
-            ${pathVar}.append(targetSegment)
+            for segment in targetSegments {
+                ${pathVar}.append(segment)
+            }
         }`;
 }
 
@@ -908,8 +916,13 @@ ${pushableArray}
  */
 function generateSubHostHelperFunction(pushRoutes, parsedViews, prototypePath) {
   const cases = pushRoutes
-    .filter(({ viewName }) => !hasRequiredInitParams(viewName, parsedViews, prototypePath))
-    .map(({ viewName }) => `        case "${viewName}": ${viewName}()`)
+    .flatMap(({ viewName }) => {
+      if (!hasRequiredInitParams(viewName, parsedViews, prototypePath)) {
+        return [`        case "${viewName}": ${viewName}()`];
+      }
+      const initCall = synthesizeSwiftValue(viewName, prototypePath);
+      return initCall ? [`        case "${viewName}": ${initCall}`] : [];
+    })
     .join("\n");
 
   return `    // prototype-flow-map: resolve sub-NavigationStack path segments to views.
@@ -967,8 +980,25 @@ function extractNavigationStackPathVar(content) {
 }
 
 // ---------------------------------------------------------------------------
-// Swift value synthesizer (for item:-bound sheet triggers)
+// Swift value synthesizer (for item:-bound sheet triggers and required-param views)
 // ---------------------------------------------------------------------------
+
+/**
+ * Extract the Swift type from a type+default string like `String = "foo"` or `() -> Void`.
+ * Strips everything from the first top-level `=` onwards.
+ * Tracks `()`, `[]`, `{}` depth only — intentionally ignores `<>` so that
+ * `->` in closure types does not confuse the bracket counter.
+ */
+function extractTopLevelType(str) {
+  let depth = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "=" && depth === 0) return str.slice(0, i).trim();
+  }
+  return str.trim();
+}
 
 const PRIMITIVE_DEFAULTS = {
   String: '""',
@@ -993,6 +1023,16 @@ function synthesizeSwiftValue(typeName, prototypePath, depth = 0) {
 
   // Optional: any T? → nil
   if (typeName.endsWith("?")) return "nil";
+
+  // Closure: () -> Void → {}; other closures can't be safely synthesized
+  if (typeName.includes("->")) return typeName.endsWith("-> Void") ? "{}" : null;
+
+  // Binding<T> → .constant(default for T)
+  if (typeName.startsWith("Binding<") && typeName.endsWith(">")) {
+    const inner = typeName.slice(8, -1);
+    const innerVal = synthesizeSwiftValue(inner, prototypePath, depth + 1);
+    return innerVal !== null ? `.constant(${innerVal})` : null;
+  }
 
   // Arrays: [T] → []
   if (typeName.startsWith("[") && typeName.endsWith("]")) return "[]";
@@ -1069,15 +1109,33 @@ function findStoredProperties(typeName, prototypePath) {
     // Computed properties end their declaration line with {
     if (t.match(/\{\s*$/)) continue;
 
-    // Match stored property: [modifiers] let|var name: Type [= default]
-    const propMatch = t.match(
-      /^(?:(?:private|public|internal|fileprivate|static|lazy|weak)\s+)*(?:let|var)\s+(\w+)\s*:\s*([A-Za-z_][A-Za-z0-9_<>\[\]?,. ]*?)(?:\s*=.*)?$/,
+    // @Binding: include with inner type wrapped in Binding<...>
+    const bindingMatch = t.match(
+      /^@Binding\s+(?:(?:private|public|internal|fileprivate)\s+)?var\s+(\w+)\s*:\s*(.+)$/,
     );
-    if (!propMatch) continue;
+    if (bindingMatch) {
+      const innerType = extractTopLevelType(bindingMatch[2]);
+      props.push({ name: bindingMatch[1], type: `Binding<${innerType}>`, hasDefault: false, isOptional: false });
+      continue;
+    }
 
-    const name = propMatch[1];
-    let type = propMatch[2].trim();
-    const hasDefault = /=/.test(t.slice(t.indexOf(":") + 1));
+    // Skip all other property wrapper lines (@State, @Environment, etc.)
+    if (t.startsWith("@")) continue;
+
+    // Strip trailing inline comment (`\s+//...`) before property parsing.
+    // The \s+ guard avoids false positives on `//` inside string literals like URLs.
+    const tClean = t.replace(/\s+\/\/.*$/, "");
+
+    // Match stored property name: [modifiers] let|var name:
+    const nameMatch = tClean.match(
+      /^(?:(?:private|public|internal|fileprivate|static|lazy|weak)\s+)*(?:let|var)\s+(\w+)\s*:/,
+    );
+    if (!nameMatch) continue;
+
+    const name = nameMatch[1];
+    const afterColon = tClean.slice(tClean.indexOf(":") + 1).trim();
+    let type = extractTopLevelType(afterColon);
+    const hasDefault = type !== afterColon; // extractTopLevelType strips '= ...' if present
     const isOptional = type.endsWith("?");
     if (isOptional) type = type.slice(0, -1).trim();
 

@@ -290,6 +290,30 @@ function extractPushLinks(content, result) {
     result.pushLinks.push({ target, label });
   }
 
+  // RowLink(label: { ... }, destination: { ViewName() }) — parenthesised form
+  const rowLinkParenRe = /\bRowLink\s*\(\s*label\s*:/g;
+  while ((match = rowLinkParenRe.exec(content)) !== null) {
+    const colonPos = content.indexOf(":", match.index + match[0].length - 1);
+    const labelClosure = findNextClosure(content, colonPos + 1);
+    if (!labelClosure) continue;
+
+    const afterLabel = content.slice(labelClosure.end + 1, labelClosure.end + 300);
+    const destKeyword = afterLabel.match(/\bdestination\s*:\s*\{/);
+    if (!destKeyword) continue;
+
+    const destBracePos = labelClosure.end + 1 + destKeyword.index + destKeyword[0].lastIndexOf("{");
+    const destClosure = extractClosureAt(content, destBracePos);
+    if (!destClosure) continue;
+
+    const target = findFirstDestinationView(destClosure.content);
+    if (!target) continue;
+
+    const textMatch = labelClosure.content.match(/\bText\s*\(\s*"([^"]+)"\s*\)/);
+    const label = textMatch ? textMatch[1] : null;
+
+    result.pushLinks.push({ target, label });
+  }
+
   // HubRowLink(hubType: .caseName) { ViewName() }
   const hubRowLinkRe = /\bHubRowLink\s*\(\s*hubType\s*:\s*\.(\w+)[^)]*\)/g;
   while ((match = hubRowLinkRe.exec(content)) !== null) {
