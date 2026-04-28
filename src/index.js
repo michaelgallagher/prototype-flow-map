@@ -18,6 +18,10 @@ const { scanSwiftFiles } = require("./swift-scanner");
 const { parseSwiftFile, parseSwiftProject } = require("./swift-parser");
 const { buildSwiftGraph } = require("./swift-graph-builder");
 const { crawlAndScreenshotIos } = require("./swift-crawler");
+const {
+  crawlAndScreenshotIosFast,
+  detectNavigationStackPattern,
+} = require("./swift-spike-runner");
 const { scanKotlinFiles } = require("./kotlin-scanner");
 const { parseKotlinProject } = require("./kotlin-parser");
 const { buildKotlinGraph } = require("./kotlin-graph-builder");
@@ -283,6 +287,7 @@ async function generateNative(options) {
   const mapOutputDir = name ? path.join(outputDir, "maps", name) : outputDir;
 
   let graph;
+  let parsedViews = []; // populated for iOS; used by the fast screenshot runner
   // Prefer the config passed down from the CLI (which already carries any
   // --web-jumpoffs / --no-web-jumpoffs override). Fall back to loading fresh
   // when callers invoke generateNative() programmatically without a config.
@@ -319,7 +324,7 @@ async function generateNative(options) {
     // web flows declared in their own file from the call sites), pass 2
     // parses each file with bindings available for indirection lookup.
     console.log("2️⃣  Parsing views for navigation...");
-    const parsedViews = parseSwiftProject(swiftFiles, prototypePath);
+    parsedViews = parseSwiftProject(swiftFiles, prototypePath);
     console.log(`   Parsed ${parsedViews.length} SwiftUI views`);
 
     // Step 3: Build the graph
@@ -388,12 +393,22 @@ async function generateNative(options) {
   // Step 4: Capture screenshots (if enabled)
   if (screenshots && platform === "ios") {
     timer.start("Screenshots");
-    console.log("4️⃣  Capturing screenshots via XCUITest...");
-    graph = await crawlAndScreenshotIos(graph, {
-      prototypePath,
-      outputDir: mapOutputDir,
-      overrides: config.overrides,
-    });
+    const useFastRunner = detectNavigationStackPattern(prototypePath);
+    if (useFastRunner) {
+      console.log("4️⃣  Capturing screenshots via simctl launch-args (fast path)...");
+      graph = await crawlAndScreenshotIosFast(graph, parsedViews, {
+        prototypePath,
+        outputDir: mapOutputDir,
+        overrides: config.overrides,
+      });
+    } else {
+      console.log("4️⃣  Capturing screenshots via XCUITest (NavigationStack(path:) not detected)...");
+      graph = await crawlAndScreenshotIos(graph, {
+        prototypePath,
+        outputDir: mapOutputDir,
+        overrides: config.overrides,
+      });
+    }
     console.log(
       `   Captured ${graph.nodes.filter((n) => n.screenshot).length} screenshots`,
     );
