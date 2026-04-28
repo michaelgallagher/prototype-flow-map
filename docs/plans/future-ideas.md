@@ -69,6 +69,29 @@ Allow non-developers to generate maps without running the CLI locally:
 
 ## Layout polish
 
+### Node overlap in long linear chains
+
+Dagre does not account for node size when positioning nodes — it treats each node as a point and then assigns rank/order coordinates. When nodes have non-trivial width and height (especially screenshot thumbnails), adjacent nodes in the same rank or tight vertical chains can overlap in the rendered SVG.
+
+This became visible after the `RemoveTrustedPerson*` chain was added: a five-node linear sequence all parented under `ProfileSwitcherView` lands in a narrow column with nodes overlapping.
+
+**Root cause:** Dagre's `ranksep` and `nodesep` options are set to fixed pixel values that assume small/labelOnly nodes. They don't scale with screenshot thumbnail size.
+
+**Options (pick one or combine):**
+
+**Option A: Increase `ranksep`/`nodesep` globally** — simplest fix; raise the constants in the dagre config in `src/build-viewer.js`. Downside: makes all maps more spread out, including ones that don't have the problem.
+
+**Option B: Node-size-aware sep** — pass actual node width/height to dagre via `node.width` and `node.height` on each graph node before calling `dagre.layout()`. Dagre uses these to compute minimum separation. Requires knowing the rendered size at layout time (or using a fixed thumbnail size constant).
+
+**Option C: Post-layout overlap removal pass** — after dagre assigns coordinates, run a sweep that detects overlapping bounding boxes and nudges positions apart. Platform-agnostic; doesn't require changes to the dagre call.
+
+**Recommended starting point:** Option B — the thumbnail size is a known constant (set in CSS), so we can pass fixed `width`/`height` to dagre without measuring the DOM. This is the most principled fix and directly solves the root cause.
+
+**Files to change** when promoted:
+- `src/build-viewer.js` — set `node.width` and `node.height` on each dagre graph node before calling `dagre.layout()`; also tune `ranksep`/`nodesep` as needed.
+
+**Why deferred:** the overlap is a visual annoyance but doesn't break usability — nodes can be dragged apart. The fix is straightforward once prioritised.
+
 ### Virtual subgraph-owner inference (formerly WS2 Part B)
 
 Tree-shaped layout Part A is delivered (see [`archive/tree-layout.md`](archive/tree-layout.md)). Part B was the deeper improvement: a platform-agnostic pass in `src/graph-builder.js` that detects hub-shaped graphs and assigns virtual subgraph owners.
