@@ -109,11 +109,34 @@ For graphs over ~200 nodes (rare today), the current layout becomes unwieldy. A 
 
 ---
 
-## iOS speed (deeper)
+## iOS screenshot coverage
 
-### Replace XCUITest with `simctl io` direct screenshots
+### Required-param push views (TrustedPersonDetailView and removal flow)
 
-> **Status: actively under investigation as an experiment.** See [`experiments/ios-architectural-alternative.md`](experiments/ios-architectural-alternative.md) for the spike findings and resumption notes. Phase A measurements have validated the speed half of the hypothesis (`simctl io` is ~250ms per capture, `xcodebuild build` is ~13s vs ~13 minutes for full XCUITest). The navigation-trigger half is partially blocked and being iterated on. This entry stays here as the parking-lot reference; the experiment doc is the live document for picking the work up.
+`TrustedPersonDetailView(profile:, dismissSheet:)` is reachable via push navigation from `ProfileSwitcherView`'s sub-NavigationStack, but the injector skips it because it has required init params (`hasRequiredInitParams` returns true). The entire removal flow behind it is therefore also uncaptured:
+
+```
+ProfileSwitcherView
+  →[push] TrustedPersonDetailView(profile:, dismissSheet:)       ← needs Profile
+    →[push] RemoveTrustedPersonView(profile:, dismissSheet:)      ← needs Profile
+      →[push] RemoveTrustedPersonReasonView
+        →[push] RemoveTrustedPersonCheckAnswersView
+          →[push] RemoveTrustedPersonConfirmationView
+```
+
+`RemoveTrustedPersonReasonView` onwards may be zero-param and automatically capturable once the gateway view is unblocked.
+
+**Fix:** extend the synthesizer (`synthesizeSwiftValue` + `findStoredProperties`) to cover push-nav views in `flowMapSubNavDestination` and `flowMapSubNavDestination`, not just item:-bound sheet state vars. Concretely:
+
+1. In `generateSubHostHelperFunction` (and `generateHelperFunction`), for views that `hasRequiredInitParams` returns true, try synthesizing the init call rather than skipping the view entirely.
+2. Add `() -> Void` to the synthesizer — emit `{}` for closure-typed properties (the `dismissSheet` parameter).
+3. If synthesis succeeds, emit `ViewName(param1: val1, ...)` in the switch case; if it fails, fall back to the current `default: EmptyView()` behaviour.
+
+`Profile` is likely synthesizable (it's a struct with stored properties). `() -> Void` just needs a `{}` literal. This should unlock `TrustedPersonDetailView`, `RemoveTrustedPersonView`, and (if their params are resolvable) the downstream `Remove*` chain.
+
+**Estimated impact:** ~5 more screenshots from `nhsapp-ios-demo-v2`.
+
+**Why deferred:** the synthesizer extension is straightforward but needs care to avoid generating code that won't compile for edge cases (recursive types, non-struct types, enums). The current 26-screenshot baseline is already useful; this is a coverage improvement, not a blocker.
 
 ### Parallel Simulator instances
 
@@ -126,29 +149,6 @@ Run two Simulators in parallel, each capturing half the screens.
 Tests on a connected iPhone via USB. Faster than Simulator boot, but adds device-management overhead and doesn't scale to CI.
 
 **Why deferred:** narrow use case (developers with a connected device, not running CI).
-
----
-
-## Native screenshot capture coverage
-
-### Investigate why iOS captures fewer screenshots than expected
-
-The Phase 1 baseline run against `~/Repos/nhsapp-ios-demo-v2` reported `Captured 17 of 45 screens` — i.e. 28 of the 45 graph nodes did not produce a PNG. The XCUITest harness was generated for 42 nodes (3 nodes correctly skipped — likely external/web-view types that aren't navigable in iOS UI), but only 17 of those 42 tests successfully captured a screenshot.
-
-This was latent before Phase 1 because there was no run-summary line surfacing the ratio. Now visible, worth investigating.
-
-**Possible causes:**
-
-- Parameterised iOS routes the resolver can't fill (e.g. detail screens needing a bound `id`). Compare to Android's explicit override mechanism for parameterised routes.
-- Screens needing session state not present at test launch (e.g. logged-in-only screens; iOS doesn't have an equivalent of Android's onboarding shared-pref bypass).
-- XCUITest tap-by-label sequences in the generated test that don't find their target (e.g. labels changed, screen needs scrolling first, accessibility identifier missing).
-- Generated test code paths that throw mid-test, skipping subsequent captures in the same test file.
-
-**First step:** parse the `xcodebuild test` output more carefully — flow-map already filters lines containing `[flow-map]` for tap diagnostics, but failed-test reasons may be in other parts of the output. Add a "captures attempted vs succeeded vs failed-with-reason" breakdown to the summary log.
-
-**Second step:** for each failed capture, identify the cause and pattern-match against the four hypotheses above. Some may be config-fixable (overrides for parameterised routes), some may be code-fixable (improve the tap-by-label fallback chain), some may be prototype-specific (the test prototype is missing accessibility labels).
-
-**Why deferred:** correctness rather than speed; the iOS speed workstream (active in the roadmap) is independently valuable. Pick this up after Phase 2 + 3 land. Tracked here so it doesn't get lost.
 
 ---
 

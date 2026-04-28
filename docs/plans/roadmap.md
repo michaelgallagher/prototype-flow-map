@@ -12,6 +12,7 @@ Code orientation:
 - `src/build-viewer.js` — both the build-time HTML/CSS/JS generator and the viewer's runtime JS (embedded as a string template)
 - `src/server.js` — Express server (`serve` subcommand and `--serve` flag), `/api/maps/:name/{positions,hidden}` REST endpoints
 - `src/swift-parser.js` / `src/kotlin-parser.js` — native parsers
+- `src/swift-injector.js` / `src/swift-spike-runner.js` — iOS fast screenshot pipeline
 - `src/web-jumpoff-crawler.js` / `src/web-jumpoff-cache.js` / `src/splice-web-subgraphs.js` — the web jump-off pipeline
 - `src/scenario-runner.js`, `src/recorder.js`, `src/crawler.js` — web pipeline
 
@@ -21,116 +22,17 @@ For full architecture see [`../how-it-works.md`](../how-it-works.md).
 
 | Workstream | Outcome |
 |---|---|
+| [iOS fast screenshot pipeline](archive/ios-screenshots-fast-path.md) | Replaced XCUITest with `simctl` launch-args injection. `xcodebuild build` (no test target) + idempotent code injection + `simctl launch -flowMapRoute <route>` + `simctl io screenshot`. ~12× faster (1m 17s vs 13m 36s) with better coverage (26 screenshots vs 17). Handles item:-bound sheets, sub-NavigationStack hosts, and root "home" route. |
 | [Node hiding](archive/node-hiding.md) | Right-click context menu (hide node / hide subgraph), Show-hidden popover with per-node restore, persistence-key fix so state survives regeneration |
 | [Tree-shaped layout — Part A](archive/tree-layout.md) | Replaced the centred-blob fallback with dagre's tree-shaped X positions; iOS and web maps without explicit tabs now look tree-shaped instead of clumped |
-| [Server integration](archive/server-integration.md) | `/api/maps/:name/hidden` endpoint pair, viewer-side server detection with localStorage fallback, hidden-state carry-forward via `hidden.json`, `--serve` flag for one-shot generate-and-serve, plus `--port` UX rework (renamed prototype-kit port to `--prototype-port`) |
+| [Server integration](archive/server-integration.md) | `/api/maps/:name/hidden` endpoint pair, viewer-side server detection with localStorage fallback, hidden-state carry-forward via `hidden.json`, `--serve` flag for one-shot generate-and-serve, plus `--port` UX rework |
 
 ## Active
 
-Just one workstream remains active. Tree-shaped layout Part B (virtual subgraph-owner inference) was deferred from WS2 and now sits in [`future-ideas.md`](future-ideas.md) — to be revisited if iOS maps still feel too clumped after a stretch of real use.
+No active workstreams at this time.
 
-| Workstream | Why this position |
-|---|---|
-| [iOS speed](#workstream--ios-speed) | iOS runs take ~12-13 min vs Android's ~2 min. Phase 1 needed before any optimisation. |
+Next candidates (in rough priority order) — see [`future-ideas.md`](future-ideas.md) for detail on each:
 
----
-
-## Workstream — iOS speed
-
-### Context
-
-iOS runs take ~12-13 minutes against typical prototypes; equivalent Android runs take ~2 minutes. The likely cause is `xcodebuild test`, which sequentially: (a) builds the test target, (b) boots the Simulator (if cold), (c) installs the app + test runner, (d) runs the XCUITest screenshot harness, all happening AFTER graph analysis completes. Android skips most of this by calling `am instrument` directly on an already-installed APK.
-
-Three-phase approach: instrument first to confirm where time goes, then attack the biggest cost.
-
-> **Heads up:** Phase 1 instrumentation revealed that `xcodebuild build` itself is only ~13 seconds — the bulk of the iOS run is XCUITest's runtime overhead, NOT the build. This shrinks Phases 2+3's expected gain from "~6-8 min saved" (the original estimate) to "~13 seconds saved." A larger architectural alternative — bypass XCUITest entirely, drive navigation programmatically, capture via `simctl io` — is being investigated as a long-running experiment in [`experiments/ios-architectural-alternative.md`](experiments/ios-architectural-alternative.md). If that experiment validates, it will likely replace Phases 2+3 here. Until it does, this workstream remains the formal plan.
-
-### Approach
-
-#### Phase 1 — instrument ✓ delivered
-
-Top-level per-phase timing across `generate`, `generateNative`, and `generateScenario`. Prints a `📊 Run summary` block at the end of every run, with phase names + durations + a Total. Last-run total persisted per absolute prototype path to `~/.cache/prototype-flow-map/last-run.json`; CLI startup banner shows "Last run: Xm Ys (timestamp)" when a prior run exists. See `src/phase-timer.js` and `src/last-run-cache.js`.
-
-What's instrumented today: `Parse` (file scan + parse + graph build), `Web jumpoffs`, `Screenshots` (the big one for native), `Viewer`, plus `Static analysis` and `Scenarios` for the web scenario pipeline.
-
-What's NOT instrumented yet (out of scope for Phase 1, useful for Phase 2 design): sub-phases inside the iOS `Screenshots` step. The `xcodebuild test` invocation is currently a single black box — to know how much of it is build vs Simulator boot vs test execution vs screenshot extraction, we'd need to either parse `xcodebuild`'s output or restructure the call into separate `build-for-testing` / `test-without-building` invocations. The latter is exactly what Phase 2 does, so the breakdown will fall out naturally there.
-
-#### Phase 2 — parallelise the build
-
-Spawn `xcodebuild build-for-testing -destination ...` as a background child process **as soon as the prototype path is known and test files are injected**. Run graph analysis, web jumpoff crawling, and other CPU-bound work concurrently. When ready to capture screenshots, await the build, then run `xcodebuild test-without-building`.
-
-Pseudocode:
-
-```js
-async function generateNativeIos(opts) {
-  injectTestFiles(opts.prototypePath);
-
-  // Kick off build in the background immediately
-  const buildPromise = startBackgroundBuild(opts.prototypePath);
-
-  // Concurrent foreground work
-  const swiftFiles = await scanSwiftFiles(opts.prototypePath);
-  const graph = parseSwiftProject(swiftFiles, opts.prototypePath);
-  if (opts.config.webJumpoffs.enabled) {
-    await crawlWebJumpoffs(graph, opts);
-    spliceWebSubgraphs(graph);
-  }
-
-  // Synchronise — wait for build before screenshot phase
-  await buildPromise;
-
-  await runScreenshotPhase(opts);
-  await pullScreenshots(opts);
-  await buildViewer(graph, opts);
-}
-```
-
-Critical: the test file injection MUST happen before `build-for-testing` starts, otherwise the build won't include the screenshot harness. Cleanup-on-failure must still restore the prototype to its original state.
-
-Expected gain: ~6-8 min saved on a 12 min run, since build (~6-8 min) and graph analysis (~30s) currently run sequentially.
-
-#### Phase 3 — build caching
-
-Hash the injected test file content + key source files (Swift source modification time / hash). If hash matches a previous run for this prototype, skip `build-for-testing` entirely and reuse cached derived data.
-
-Cache layout:
-
-```
-~/.cache/prototype-flow-map/ios-build/
-  <prototype-hash>/
-    derived-data-path.txt   # absolute path to xcodebuild's derived data dir
-    source-fingerprint.txt  # hash of injected test file + Swift sources
-```
-
-When the source fingerprint matches, set `xcodebuild`'s `-derivedDataPath` to the cached path and use `test-without-building`. When it doesn't match, do a full build and update the cache.
-
-Expected gain: a warm-cache iOS run skips the build entirely → ~5-6 min total (limited by Simulator boot + test execution + screenshot pull).
-
-### Files to change
-
-| File | Change |
-|---|---|
-| `src/phase-timer.js` | ✓ delivered. Timer utility (`createTimer`, `formatMs`). |
-| `src/last-run-cache.js` | ✓ delivered. Per-prototype-path cache at `~/.cache/prototype-flow-map/last-run.json`. |
-| `src/index.js` | ✓ Phase 1 timer wired into `generate`, `generateNative`, `generateScenario`. Phase 2: restructure `generateNative` (iOS branch) to run build in parallel with graph work. |
-| `bin/cli.js` | ✓ "Last run: Xm Ys" prints in the startup banner when a prior run exists. |
-| `src/swift-build-runner.js` | **New** (Phase 2). Manages the background `xcodebuild build-for-testing` child process: launch, error capture, await, cleanup. |
-| `src/swift-build-cache.js` | **New** (Phase 3). Hash sources, look up derived-data path, return either "cached, use this path" or "miss, do a fresh build". |
-
-### Verification
-
-**Phase 2:**
-1. Time a baseline iOS run (Phase 1 timing data is the baseline).
-2. Apply Phase 2. Run again. Confirm: total run time drops by roughly the smaller of (build time, graph-analysis-plus-jumpoffs time).
-3. Force a build error (introduce a Swift syntax error in an injected test file). Confirm: error surfaces clearly, prototype is restored to clean git state by the cleanup handler, no orphaned `xcodebuild` processes left running.
-
-**Phase 3:**
-1. Run iOS twice in a row with no source changes. Confirm: second run skips the build phase entirely (≥ 5 min saved).
-2. Modify a Swift file. Run again. Confirm: cache miss, full build runs, cache is updated.
-3. Inspect `~/.cache/prototype-flow-map/ios-build/`. Confirm: cache size is bounded (we may need a prune step like the web jump-off cache has).
-
-### Out of scope
-
-- **Replacing XCUITest with `simctl io` direct screenshots.** Bigger architectural change. Worth pursuing only if Phases 2-3 don't get iOS within 2× of Android. Tracked in [`future-ideas.md`](future-ideas.md).
-- **Parallel Simulator instances.** Each Simulator boot is heavy; running two in parallel may not actually be faster for screenshot capture. Requires investigation, not in this workstream.
-- **Skipping Simulator boot entirely** (e.g. running tests on a physical device). Faster boot but adds device-management overhead and doesn't scale to CI.
+1. **iOS: screenshot coverage for required-param push views** — `TrustedPersonDetailView` and its removal flow (`RemoveTrustedPerson*`) are blocked because they need a synthesized `Profile` argument. The synthesizer infrastructure already exists (`synthesizeSwiftValue` + `findStoredProperties`) — extend it to cover push-nav views and `() -> Void` closure params. Should unlock ~5 more screenshots.
+2. **Layout: virtual subgraph-owner inference (Part B)** — platform-agnostic BFS pass assigns `subgraphOwner` to hub-shaped graphs, producing column-per-section layout for iOS maps without tabs. Likely improves legibility of the nhsapp-ios-demo-v2 map significantly.
+3. **iOS: orphaned nodes** — filter views with no incoming navigation edges from the graph (or badge them in the viewer), so dead code doesn't appear as screenless nodes. See future-ideas.md for Option A vs B tradeoffs.
