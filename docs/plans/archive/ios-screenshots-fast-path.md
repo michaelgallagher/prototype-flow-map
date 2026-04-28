@@ -132,7 +132,7 @@ These were the gates. Status as of 2026-04-27:
 
 ## Reproducing the spike
 
-A fresh Claude Code session can re-run the measured parts. All commands assume zsh on macOS, with Xcode + iOS Simulator installed.
+A fresh session can re-run the measured parts. All commands assume zsh on macOS, with Xcode + iOS Simulator installed.
 
 ### Setup
 
