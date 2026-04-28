@@ -598,10 +598,21 @@ function injectSheetTriggers(graph, viewMap, prototypePath, routePlan, backup) {
     if (content.includes(SENTINEL)) continue;
 
     // For each sheet route, find the @State var that controls it
-    const triggers = resolveSheetStateVars(content, sheetRoutes, routePlan);
+    const triggers = resolveSheetStateVars(content, sheetRoutes);
     if (triggers.length === 0) continue;
 
+    // Synthesize default values for item:-bound triggers
+    for (const trigger of triggers) {
+      if (trigger.kind === "item") {
+        trigger.synthesizedValue = synthesizeSwiftValue(trigger.itemType, prototypePath);
+        if (trigger.synthesizedValue === null) {
+          console.warn(`   ⚠️  Could not synthesize ${trigger.itemType} for ${trigger.stateVar} in ${parentViewName} — sheet screenshot skipped`);
+        }
+      }
+    }
+
     const taskCode = generateSheetTriggerTask(parentViewName, triggers);
+    if (!taskCode) continue;
 
     // Insert before the first .alert( or .sheet( or end-of-body
     const injected = insertSheetTriggerTask(content, taskCode);
@@ -611,47 +622,72 @@ function injectSheetTriggers(graph, viewMap, prototypePath, routePlan, backup) {
 }
 
 /**
- * For each sheet route, find the @State var name that controls it.
- * Looks for .sheet(isPresented: $<var>) / .fullScreenCover(isPresented: $<var>)
- * followed by a block containing the target view name.
+ * For each sheet route, find the @State var that controls it.
+ * Handles both isPresented: (Bool) and item: (Optional<T>) bindings.
+ * Returns triggers with kind: "bool" | "item". Item triggers also carry itemType.
  */
-function resolveSheetStateVars(content, sheetRoutes, routePlan) {
+function resolveSheetStateVars(content, sheetRoutes) {
   const triggers = [];
 
-  // Only handle isPresented: bindings — item: bindings need a data value we don't have.
-  const modalStartPattern =
-    /\.(sheet|fullScreenCover)\(\s*isPresented\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g;
-
-  let m;
-  while ((m = modalStartPattern.exec(content)) !== null) {
-    const stateVar = m[2];
-    // Scan forward to find the trailing closure's opening {
-    let pos = m.index + m[0].length;
+  function extractClosureBody(content, matchEnd) {
+    let pos = matchEnd;
     while (pos < content.length && content[pos] !== "{") pos++;
-    if (pos >= content.length) continue;
-
-    // Count balanced braces to capture the full closure body
-    let depth = 0;
-    let start = pos;
-    let end = pos;
+    if (pos >= content.length) return null;
+    let depth = 0, end = pos;
     while (end < content.length) {
       if (content[end] === "{") depth++;
-      else if (content[end] === "}") {
-        depth--;
-        if (depth === 0) break;
-      }
+      else if (content[end] === "}") { depth--; if (depth === 0) break; }
       end++;
     }
-    const closureBody = content.slice(start, end + 1);
+    return content.slice(pos, end + 1);
+  }
 
-    // Find which sheet route targets a view present in this closure
+  // Pass 1: isPresented: $boolVar
+  const isPresentedPattern =
+    /\.(sheet|fullScreenCover)\(\s*isPresented\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g;
+  let m;
+  while ((m = isPresentedPattern.exec(content)) !== null) {
+    const stateVar = m[2];
+    const closureBody = extractClosureBody(content, m.index + m[0].length);
+    if (!closureBody) continue;
     for (const sr of sheetRoutes) {
       if (closureBody.includes(sr.nodeId)) {
         const segments = sr.route.split("/");
-        const leafSegment = segments[segments.length - 1];
         triggers.push({
+          kind: "bool",
           stateVar,
-          routeSegment: leafSegment,
+          routeSegment: segments[segments.length - 1],
+          routeFull: sr.route,
+          parentViewName: sr.parentViewName,
+        });
+      }
+    }
+  }
+
+  // Pass 2: item: $itemVar — extract the binding type from the @State declaration
+  const itemPattern =
+    /\.(sheet|fullScreenCover)\(\s*item\s*:\s*\$([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((m = itemPattern.exec(content)) !== null) {
+    const stateVar = m[2];
+    const closureBody = extractClosureBody(content, m.index + m[0].length);
+    if (!closureBody) continue;
+
+    // Find @State var stateVar: ItemType? in the file
+    const typeMatch = content.match(
+      new RegExp(`@State\\s+(?:private\\s+)?var\\s+${stateVar}\\s*:\\s*([A-Z][A-Za-z0-9_]+)\\??`),
+    );
+    if (!typeMatch) continue;
+    const itemType = typeMatch[1];
+
+    for (const sr of sheetRoutes) {
+      if (closureBody.includes(sr.nodeId)) {
+        const segments = sr.route.split("/");
+        triggers.push({
+          kind: "item",
+          stateVar,
+          itemType,
+          synthesizedValue: null, // filled in by injectSheetTriggers
+          routeSegment: segments[segments.length - 1],
           routeFull: sr.route,
           parentViewName: sr.parentViewName,
         });
@@ -664,12 +700,17 @@ function resolveSheetStateVars(content, sheetRoutes, routePlan) {
 
 function generateSheetTriggerTask(parentViewName, triggers) {
   const parentSegment = triggers[0]?.routeFull.split("/")[0] ?? "";
-  const parentSegmentGuess = parentViewName; // e.g. "ProfileView"
+  const parentSegmentGuess = parentViewName;
 
-  // Group switches by route prefix (the parent view's route key)
   const cases = triggers
-    .map(({ stateVar, routeSegment }) => `            case "${routeSegment}": ${stateVar} = true`)
+    .filter((t) => t.kind === "bool" || t.synthesizedValue !== null)
+    .map(({ stateVar, routeSegment, kind, synthesizedValue }) => {
+      const rhs = kind === "item" ? synthesizedValue : "true";
+      return `            case "${routeSegment}": ${stateVar} = ${rhs}`;
+    })
     .join("\n");
+
+  if (!cases) return null;
 
   // The guard checks that segments[0] matches the level-1 key, segments[-2] matches
   // the parent view name (for level-2+ parents), and segments.last is the leaf.
@@ -707,6 +748,127 @@ function insertSheetTriggerTask(content, taskCode) {
     return content.slice(0, lastBrace) + "\n" + taskCode + content.slice(lastBrace);
   }
   return content + "\n" + taskCode;
+}
+
+// ---------------------------------------------------------------------------
+// Swift value synthesizer (for item:-bound sheet triggers)
+// ---------------------------------------------------------------------------
+
+const PRIMITIVE_DEFAULTS = {
+  String: '""',
+  Int: "0", Int8: "0", Int16: "0", Int32: "0", Int64: "0",
+  UInt: "0", UInt8: "0", UInt16: "0", UInt32: "0", UInt64: "0",
+  Double: "0.0", Float: "0.0", CGFloat: "0.0",
+  Bool: "false",
+  Date: "Date()",
+  UUID: "UUID()",
+  URL: 'URL(string: "https://example.com")!',
+};
+
+/**
+ * Synthesize a Swift expression that produces a default value of the given type.
+ * Returns a Swift expression string, or null if synthesis is not possible.
+ */
+function synthesizeSwiftValue(typeName, prototypePath, depth = 0) {
+  if (depth > 3) return null;
+
+  // Primitives
+  if (PRIMITIVE_DEFAULTS[typeName]) return PRIMITIVE_DEFAULTS[typeName];
+
+  // Optional: any T? → nil
+  if (typeName.endsWith("?")) return "nil";
+
+  // Arrays: [T] → []
+  if (typeName.startsWith("[") && typeName.endsWith("]")) return "[]";
+
+  // Set<T> → [] (Swift accepts array literal for Set init)
+  if (typeName.startsWith("Set<")) return "[]";
+
+  // Dictionary: [K:V] → [:]
+  if (typeName.startsWith("[") && typeName.includes(":")) return "[:]";
+
+  // Custom struct: find its stored properties and build a memberwise call
+  const props = findStoredProperties(typeName, prototypePath);
+  if (!props) return null;
+
+  const args = [];
+  for (const { name, type, hasDefault, isOptional } of props) {
+    if (hasDefault) continue; // memberwise init omits props that have a default value
+    // Optional properties ARE included in the memberwise init (no automatic nil default)
+    const val = isOptional ? "nil" : synthesizeSwiftValue(type, prototypePath, depth + 1);
+    if (val === null) return null; // required field can't be synthesized → give up
+    args.push(`${name}: ${val}`);
+  }
+
+  return `${typeName}(${args.join(", ")})`;
+}
+
+/**
+ * Find and parse the stored (non-computed) properties of a Swift struct.
+ * Returns an array of { name, type, hasDefault, isOptional }, or null if
+ * the struct can't be found or is not a struct.
+ */
+function findStoredProperties(typeName, prototypePath) {
+  // Try TypeName.swift first (common convention), then scan all files
+  let content = null;
+  const direct = globSync(`**/${typeName}.swift`, {
+    cwd: prototypePath,
+    absolute: true,
+    ignore: ["**/*Tests*/**", "**/Pods/**"],
+  });
+  if (direct.length > 0) {
+    content = fs.readFileSync(direct[0], "utf-8");
+  } else {
+    const allFiles = globSync("**/*.swift", {
+      cwd: prototypePath,
+      absolute: true,
+      ignore: ["**/*Tests*/**", "**/Pods/**"],
+    });
+    for (const f of allFiles) {
+      const c = fs.readFileSync(f, "utf-8");
+      if (new RegExp(`\\bstruct\\s+${typeName}\\b`).test(c)) { content = c; break; }
+    }
+  }
+
+  if (!content) return null;
+  if (!new RegExp(`\\bstruct\\s+${typeName}\\b`).test(content)) return null;
+
+  // Find the struct opening brace
+  const structStart = content.search(new RegExp(`\\bstruct\\s+${typeName}\\b`));
+  let pos = structStart;
+  while (pos < content.length && content[pos] !== "{") pos++;
+  if (pos >= content.length) return null;
+
+  const props = [];
+  const lines = content.slice(pos + 1).split("\n");
+
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || t.startsWith("//")) continue;
+    // Stop at first method, init, or nested type
+    if (/^(?:(?:private|public|internal|fileprivate|static)\s+)*(?:func|init|struct|class|enum)\b/.test(t)) break;
+    // Stop at standalone closing brace (end of struct)
+    if (t === "}") break;
+
+    // Computed properties end their declaration line with {
+    if (t.match(/\{\s*$/)) continue;
+
+    // Match stored property: [modifiers] let|var name: Type [= default]
+    const propMatch = t.match(
+      /^(?:(?:private|public|internal|fileprivate|static|lazy|weak)\s+)*(?:let|var)\s+(\w+)\s*:\s*([A-Za-z_][A-Za-z0-9_<>\[\]?,. ]*?)(?:\s*=.*)?$/,
+    );
+    if (!propMatch) continue;
+
+    const name = propMatch[1];
+    let type = propMatch[2].trim();
+    const hasDefault = /=/.test(t.slice(t.indexOf(":") + 1));
+    const isOptional = type.endsWith("?");
+    if (isOptional) type = type.slice(0, -1).trim();
+
+    props.push({ name, type, hasDefault, isOptional });
+  }
+
+  return props;
 }
 
 // ---------------------------------------------------------------------------
