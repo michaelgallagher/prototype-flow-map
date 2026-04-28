@@ -283,7 +283,10 @@ function findBuiltApp(derivedDataPath) {
   const apps = globSync("Build/Products/Debug-iphonesimulator/*.app", {
     cwd: derivedDataPath,
     absolute: true,
-  }).filter((p) => !p.endsWith(".appex"));
+  }).filter((p) => {
+    const name = path.basename(p);
+    return !name.endsWith(".appex") && !name.includes("UITests") && !name.includes("Tests-Runner");
+  });
 
   if (apps.length > 0) return apps[0];
   throw new Error(`No built .app found in ${derivedDataPath}/Build/Products/Debug-iphonesimulator/`);

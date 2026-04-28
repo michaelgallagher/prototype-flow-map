@@ -536,10 +536,10 @@ function injectAppSplashSkip(prototypePath, backup) {
     if (!content.includes("@main")) continue;
     if (content.includes(SENTINEL)) continue; // already injected
 
-    // Look for a common splash State pattern:
-    // @State private var showSplash: Bool = true  or  = State(initialValue: true)
+    // Look for a common splash State pattern — with or without explicit `: Bool` annotation.
+    // Matches: @State private var showSplash: Bool  or  @State private var showSplash = true
     const splashVarMatch = content.match(
-      /@State\s+(?:private\s+)?var\s+(show(?:Splash|Loading|Launch)|isLoading|isSplashVisible)\s*:\s*Bool/,
+      /@State\s+(?:private\s+)?var\s+(show(?:Splash|Loading|Launch)|isLoading|isSplashVisible)\s*(?::\s*Bool|=\s*true\b)/,
     );
     if (!splashVarMatch) continue;
 
