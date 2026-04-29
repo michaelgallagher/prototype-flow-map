@@ -92,25 +92,17 @@ This became visible after the `RemoveTrustedPerson*` chain was added: a five-nod
 
 **Why deferred:** the overlap is a visual annoyance but doesn't break usability — nodes can be dragged apart. The fix is straightforward once prioritised.
 
-### Virtual subgraph-owner inference (formerly WS2 Part B)
+### Virtual subgraph-owner inference for web static maps
 
-Tree-shaped layout Part A is delivered (see [`archive/tree-layout.md`](archive/tree-layout.md)). Part B was the deeper improvement: a platform-agnostic pass in `src/graph-builder.js` that detects hub-shaped graphs and assigns virtual subgraph owners.
+`src/infer-subgraph-owners.js` is shipped and wired into `generateNative` (iOS + Android). It is intentionally **not** wired into `generate` (web static mode) yet.
 
-**Heuristic:**
+**Why not web static:** Testing on the breast screening prototype in `--mode static` showed the heuristic produces ~80 orphan columns because form-gated pages are unreachable from static link analysis (no BFS crawl). The virtual owners themselves are correct, but the orphan explosion makes the map unusable. The guard needs a coverage threshold — e.g. "virtual owners' subtrees must cover ≥50% of all nodes" — before enabling for web.
 
-1. Identify the root node (`isStartNode === true`, or the unique node with zero incoming non-nav edges).
-2. Collect the root's direct outbound forward edges (excluding nav edges, excluding edges to itself).
-3. If there are 2+ such edges and each target has 2+ descendants of its own, treat each target as a virtual subgraph owner.
-4. Run BFS from each virtual owner, assigning `subgraphOwner` to each reachable descendant. Where a node is reachable from multiple owners, pick the closest by edge count; tiebreak by `startOrder`.
-5. Skip the pass if any node already has `subgraphOwner` (a real platform tab pattern was detected — don't override).
-
-**Files to change** when promoted:
-- `src/graph-builder.js` — new exported `inferVirtualSubgraphOwners(graph)`, called from `src/index.js` for all platforms after platform-specific parsing finishes but before splicing/screenshot phases
-- `src/index.js` — invoke the new pass at the right point in both `generate` and `generateNative`
-
-**Verification when promoted:** iOS smoke target should show top-level views (e.g. `PrescriptionsView`, `AppointmentsView`, `MessagesView`) each in their own column, descendants underneath. Android unchanged (pass skipped because `subgraphOwner` already set by Kotlin parser).
-
-**Why deferred:** after Part A landed, the iOS map "looks better" enough to be useful for the immediate work. Part B is the next step if iOS maps still feel too clumped after a stretch of real use.
+**What to do when promoted:**
+1. Add coverage guard to `inferVirtualSubgraphOwners`: compute `coveredCount = sum(1 + descendantCount(c) for c in candidates)`; skip if `coveredCount / graph.nodes.length < 0.5`.
+2. Add call in the `generate` function in `src/index.js` (same placement as `generateNative`).
+3. Verify on breast screening `--mode static`: either fires correctly or still skips cleanly.
+4. Verify on a simpler web prototype with a clear hub structure.
 
 ### Reingold-Tilford / proper subtree-width-aware tree layout
 

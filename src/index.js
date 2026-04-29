@@ -219,10 +219,6 @@ async function generate(options) {
     console.log("5️⃣  Skipping screenshots (--no-screenshots)");
   }
 
-  // Step 5b: Infer virtual subgraph owners for hub-shaped static maps.
-  // Skips if platform parsing or scenario runner already assigned owners.
-  inferVirtualSubgraphOwners(graph);
-
   // Step 6: Build the viewer
   timer.start("Viewer");
   console.log("6️⃣  Building interactive viewer...");
