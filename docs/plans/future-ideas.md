@@ -126,17 +126,6 @@ For graphs over ~200 nodes (rare today), the current layout becomes unwieldy. A 
 
 ## iOS screenshot coverage
 
-### Required-param push views (TrustedPersonDetailView and removal flow)
-
-**Shipped 2026-04-28.** All five views in the chain now synthesize correctly and are captured in screenshots.
-
-The synthesizer (`synthesizeSwiftValue` + `findStoredProperties`) was extended to cover push-nav views, not just item:-bound sheets:
-- `findStoredProperties` now handles closure-type properties (`() -> Void`), `@Binding` params, and inline `//` comments on property declaration lines
-- `synthesizeSwiftValue` now handles `() -> Void` → `{}` and `Binding<T>` → `.constant(synthesized T)`
-- Both helper generators (`generateHelperFunction`, `generateSubHostHelperFunction`) now try synthesis for required-init-param views instead of always skipping them
-
-`RemoveTrustedPersonCheckAnswersView` additionally required `@Binding var selectedReasons: Set<RemovalReason>` → synthesized as `selectedReasons: .constant([])`.
-
 ### Parallel Simulator instances
 
 Run two Simulators in parallel, each capturing half the screens.

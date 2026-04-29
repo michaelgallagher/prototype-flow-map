@@ -22,8 +22,9 @@ For full architecture see [`../how-it-works.md`](../how-it-works.md).
 
 | Workstream | Outcome |
 |---|---|
+| [Layout: subgraph ownership + virtual inference](archive/layout-subgraph-ownership.md) | Extracted shared `assignSubgraphLayout` helper; iOS TabView tab targets now become column starts; `inferVirtualSubgraphOwners` detects hub-shaped iOS graphs without TabView and assigns logical columns. nhsapp-ios-demo-v2 now renders 4 columns (HomeView, Prescriptions, Appointments, Profile). Android byte-identical. |
 | [iOS fast screenshot pipeline](archive/ios-screenshots-fast-path.md) | Replaced XCUITest with `simctl` launch-args injection. `xcodebuild build` (no test target) + idempotent code injection + `simctl launch -flowMapRoute <route>` + `simctl io screenshot`. ~12× faster (1m 17s vs 13m 36s) with better coverage (26 screenshots vs 17). Handles item:-bound sheets, sub-NavigationStack hosts, and root "home" route. |
-| iOS screenshot coverage: required-param push views | Extended `synthesizeSwiftValue` + `findStoredProperties` to handle `() -> Void` → `{}`, `Binding<T>` → `.constant(...)`, and inline `//` comments on property declaration lines. Added `RowLink(label:, destination:)` parser pattern. Fixed `buildRoutePlan` and both helper generators to attempt synthesis before skipping required-param views. Unlocked `TrustedPersonDetailView` and the full `RemoveTrustedPerson*` chain (~5 new screenshots). |
+| [iOS screenshot coverage: required-param push views](archive/ios-required-param-screenshots.md) | Extended `synthesizeSwiftValue` + `findStoredProperties` to handle `() -> Void` → `{}`, `Binding<T>` → `.constant(...)`, and inline `//` comments on property declaration lines. Added `RowLink(label:, destination:)` parser pattern. Fixed `buildRoutePlan` and both helper generators to attempt synthesis before skipping required-param views. Unlocked `TrustedPersonDetailView` and the full `RemoveTrustedPerson*` chain (~5 new screenshots). |
 | [Node hiding](archive/node-hiding.md) | Right-click context menu (hide node / hide subgraph), Show-hidden popover with per-node restore, persistence-key fix so state survives regeneration |
 | [Tree-shaped layout — Part A](archive/tree-layout.md) | Replaced the centred-blob fallback with dagre's tree-shaped X positions; iOS and web maps without explicit tabs now look tree-shaped instead of clumped |
 | [Server integration](archive/server-integration.md) | `/api/maps/:name/hidden` endpoint pair, viewer-side server detection with localStorage fallback, hidden-state carry-forward via `hidden.json`, `--serve` flag for one-shot generate-and-serve, plus `--port` UX rework |
@@ -32,8 +33,7 @@ For full architecture see [`../how-it-works.md`](../how-it-works.md).
 
 No active workstreams at this time.
 
-Next candidates (in rough priority order) — see [`future-ideas.md`](future-ideas.md) for detail on each:
+Next candidates (in rough priority order) — see [`future-ideas.md`](future-ideas.md) and [`layout-overlap-fixes.md`](layout-overlap-fixes.md) for detail:
 
-1. **Layout: node overlap** — newly added views (long linear chains like the `RemoveTrustedPerson*` flow) are overlapping in the viewer. Node-size-aware spacing or a minimum-separation pass would fix this. See future-ideas.md for options.
-2. **Layout: virtual subgraph-owner inference (Part B)** — platform-agnostic BFS pass assigns `subgraphOwner` to hub-shaped graphs, producing column-per-section layout for iOS maps without tabs. Likely improves legibility of the nhsapp-ios-demo-v2 map significantly.
-3. **iOS: orphaned nodes** — filter views with no incoming navigation edges from the graph (or badge them in the viewer), so dead code doesn't appear as screenless nodes. See future-ideas.md for Option A vs B tradeoffs.
+1. **Layout: node overlap** — screenshot thumbnails still overlap in some maps (tight `ranksep`/`nodesep` constants). Plan is in [`layout-overlap-fixes.md`](layout-overlap-fixes.md); start with Layer 1 (scale sep constants when screenshots are on) and re-measure.
+2. **iOS: orphaned nodes** — filter views with no incoming navigation edges from the graph (or badge them in the viewer), so dead code doesn't appear as screenless nodes. See future-ideas.md for Option A vs B tradeoffs.
