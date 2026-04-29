@@ -1,5 +1,6 @@
 const { toLabel } = require("./swift-parser");
 const path = require("path");
+const { assignSubgraphLayout } = require("./layout-ranks");
 
 /**
  * Build a directed graph from parsed Swift view data.
@@ -140,11 +141,39 @@ function buildSwiftGraph(parsedViews) {
     }
   }
 
-  // --- Pass 5: assign layoutRank via BFS so the viewer can stack nodes ---
-  // Tab children share the same rank (one below their TabView parent),
-  // placing them side-by-side near the top of the map.
+  // --- Pass 5: assign layout ranks and subgraph ownership ---
   const uniqueEdges = deduplicateEdges(edges);
-  assignLayoutRanks(nodes, uniqueEdges, parsedViews);
+  const tabHosts = findTabHosts(parsedViews, nodeMap);
+
+  if (tabHosts.length > 0) {
+    // Has explicit TabView structure → each tab target becomes a column start.
+    // The TabView host itself is structural (no UI of its own) — remove it and
+    // its edges from the graph so the tab targets become natural roots.
+    if (tabHosts.length > 1) {
+      console.warn(`[flow-map] Multiple TabView hosts detected; using first (${tabHosts[0].viewName})`);
+    }
+    const host = tabHosts[0];
+
+    const primaryStarts = host.tabChildren
+      .map(({ target }, idx) => ({ id: target, order: idx }))
+      .filter((s) => nodeMap.has(s.id));
+
+    const lateralEdgePairs = buildTabSiblingPairs(parsedViews);
+
+    const structuralHostIds = new Set(tabHosts.map((h) => h.viewName));
+    const finalNodes = nodes.filter((n) => !structuralHostIds.has(n.id));
+    const finalEdges = uniqueEdges.filter(
+      (e) => !structuralHostIds.has(e.source) && !structuralHostIds.has(e.target)
+    );
+
+    assignSubgraphLayout({ nodes: finalNodes, edges: finalEdges, primaryStarts, lateralEdgePairs });
+    return { nodes: finalNodes, edges: finalEdges };
+  }
+
+  // No TabView detected → assign layoutRank only via simple BFS.
+  // subgraphOwner is intentionally left unset so the virtual-inference pass
+  // (step 3) can run on the resulting graph.
+  assignLayoutRanksOnly(nodes, uniqueEdges, parsedViews);
   return { nodes, edges: uniqueEdges };
 }
 
@@ -179,54 +208,60 @@ function deduplicateEdges(edges) {
 }
 
 /**
- * Assign layoutRank to each node via BFS from root nodes.
- * Tab children all receive the same rank (one below their TabView parent)
- * so the viewer arranges them side-by-side near the top of the map.
+ * Returns views that own a TabView (i.e. have 2+ tab children that exist as nodes).
  */
-function assignLayoutRanks(nodes, edges, parsedViews) {
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+function findTabHosts(parsedViews, nodeMap) {
+  return parsedViews.filter(
+    (v) => v.tabChildren.length >= 2 && v.tabChildren.some((t) => nodeMap.has(t.target))
+  );
+}
 
-  // Build adjacency list from forward edges (exclude lateral tab-sibling edges)
-  const tabSiblingPairs = new Set();
+/**
+ * Builds the set of lateral edge pairs (bidirectional tab-sibling relationships)
+ * so the BFS excludes them from rank assignment.
+ */
+function buildTabSiblingPairs(parsedViews) {
+  const pairs = new Set();
   for (const view of parsedViews) {
     if (view.tabChildren.length < 2) continue;
     const targets = view.tabChildren.map((t) => t.target);
     for (let i = 0; i < targets.length; i++) {
       for (let j = i + 1; j < targets.length; j++) {
-        tabSiblingPairs.add(`${targets[i]}|${targets[j]}`);
-        tabSiblingPairs.add(`${targets[j]}|${targets[i]}`);
+        pairs.add(`${targets[i]}|${targets[j]}`);
+        pairs.add(`${targets[j]}|${targets[i]}`);
       }
     }
   }
+  return pairs;
+}
 
-  const children = new Map(); // parent → [child]
+/**
+ * Assigns layoutRank only (no subgraphOwner) via BFS from zero-in-degree roots.
+ * Used when no TabView host is detected; subgraphOwner is left unset so the
+ * virtual-inference pass can run later.
+ */
+function assignLayoutRanksOnly(nodes, edges, parsedViews) {
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const lateralEdgePairs = buildTabSiblingPairs(parsedViews);
+
+  const children = new Map();
   const inDegree = new Map();
   for (const id of nodeIds) {
     children.set(id, []);
     inDegree.set(id, 0);
   }
-
   for (const e of edges) {
     if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    // Skip tab-sibling lateral edges for rank computation
-    if (tabSiblingPairs.has(`${e.source}|${e.target}`)) continue;
+    if (lateralEdgePairs.has(`${e.source}|${e.target}`)) continue;
     children.get(e.source).push(e.target);
     inDegree.set(e.target, (inDegree.get(e.target) || 0) + 1);
   }
 
-  // Find roots (no incoming edges)
-  const roots = [];
-  for (const [id, deg] of inDegree) {
-    if (deg === 0) roots.push(id);
-  }
-
-  // BFS to assign ranks
   const rankOf = new Map();
   const queue = [];
-  for (const r of roots) {
-    rankOf.set(r, 0);
-    queue.push(r);
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) { rankOf.set(id, 0); queue.push(id); }
   }
 
   let head = 0;
@@ -234,27 +269,14 @@ function assignLayoutRanks(nodes, edges, parsedViews) {
     const current = queue[head++];
     const currentRank = rankOf.get(current);
     for (const child of children.get(current) || []) {
-      const existingRank = rankOf.get(child);
       const newRank = currentRank + 1;
-      if (existingRank === undefined || newRank > existingRank) {
+      if (!rankOf.has(child) || newRank > rankOf.get(child)) {
         rankOf.set(child, newRank);
         queue.push(child);
       }
     }
   }
 
-  // Force tab siblings to share the same rank (use the minimum among them)
-  for (const view of parsedViews) {
-    if (view.tabChildren.length < 2) continue;
-    const targets = view.tabChildren.map((t) => t.target).filter((t) => rankOf.has(t));
-    if (targets.length === 0) continue;
-    const sharedRank = Math.min(...targets.map((t) => rankOf.get(t)));
-    for (const t of targets) {
-      rankOf.set(t, sharedRank);
-    }
-  }
-
-  // Apply ranks to nodes
   for (const [id, rank] of rankOf) {
     const node = nodeById.get(id);
     if (node) node.layoutRank = rank;

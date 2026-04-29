@@ -26,6 +26,7 @@ const { scanKotlinFiles } = require("./kotlin-scanner");
 const { parseKotlinProject } = require("./kotlin-parser");
 const { buildKotlinGraph } = require("./kotlin-graph-builder");
 const { crawlAndScreenshotAndroid } = require("./kotlin-crawler");
+const { inferVirtualSubgraphOwners } = require("./infer-subgraph-owners");
 const {
   loadConfig,
   applyExclusions,
@@ -218,6 +219,10 @@ async function generate(options) {
     console.log("5️⃣  Skipping screenshots (--no-screenshots)");
   }
 
+  // Step 5b: Infer virtual subgraph owners for hub-shaped static maps.
+  // Skips if platform parsing or scenario runner already assigned owners.
+  inferVirtualSubgraphOwners(graph);
+
   // Step 6: Build the viewer
   timer.start("Viewer");
   console.log("6️⃣  Building interactive viewer...");
@@ -391,6 +396,10 @@ async function generateNative(options) {
       }
     }
   }
+
+  // Step 3c: Infer virtual subgraph owners for prototypes without explicit
+  // tab/nav structure. Skips if platform parsing already assigned owners.
+  inferVirtualSubgraphOwners(graph);
 
   // Step 4: Capture screenshots (if enabled)
   if (screenshots && platform === "ios") {
