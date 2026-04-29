@@ -119,7 +119,9 @@ async function generate(options) {
       if (startSet.has(node.urlPath) || startSet.has(node.id)) {
         node.isStartNode = true;
         node.startOrder = fromPages.findIndex(
-          (p) => normalizeUrlPath(p) === node.urlPath || normalizeUrlPath(p) === node.id,
+          (p) =>
+            normalizeUrlPath(p) === node.urlPath ||
+            normalizeUrlPath(p) === node.id,
         );
       }
     });
@@ -352,7 +354,7 @@ async function generateNative(options) {
       );
     } else {
       console.log(
-        `3️⃣ b Crawling ${seeds.length} web jump-off(s) (maxPages=${config.webJumpoffs.maxPages})...`,
+        `3️⃣  Crawling ${seeds.length} web jump-off(s) (maxPages=${config.webJumpoffs.maxPages})...`,
       );
       const webResult = await crawlWebJumpoffs(seeds, {
         outputDir: mapOutputDir,
@@ -366,16 +368,16 @@ async function generateNative(options) {
       console.log(
         `   Added ${nodesAdded} web-page node(s), upgraded ${nodesUpgraded} native jump-off(s), added ${edgesAdded} link edge(s)`,
       );
-      const { cacheHits = 0, cacheMisses = 0, linksHidden = 0 } = webResult.stats;
+      const {
+        cacheHits = 0,
+        cacheMisses = 0,
+        linksHidden = 0,
+      } = webResult.stats;
       if (cacheHits > 0 || cacheMisses > 0) {
-        console.log(
-          `   Cache: ${cacheHits} hit(s), ${cacheMisses} miss(es)`,
-        );
+        console.log(`   Cache: ${cacheHits} hit(s), ${cacheMisses} miss(es)`);
       }
       if (linksHidden > 0) {
-        console.log(
-          `   Hidden links skipped: ${linksHidden}`,
-        );
+        console.log(`   Hidden links skipped: ${linksHidden}`);
       }
       if (webResult.stats.pagesFailed > 0) {
         console.log(
@@ -395,14 +397,18 @@ async function generateNative(options) {
     timer.start("Screenshots");
     const useFastRunner = detectNavigationStackPattern(prototypePath);
     if (useFastRunner) {
-      console.log("4️⃣  Capturing screenshots via simctl launch-args (fast path)...");
+      console.log(
+        "4️⃣  Capturing screenshots via simctl launch-args (fast path)...",
+      );
       graph = await crawlAndScreenshotIosFast(graph, parsedViews, {
         prototypePath,
         outputDir: mapOutputDir,
         overrides: config.overrides,
       });
     } else {
-      console.log("4️⃣  Capturing screenshots via XCUITest (NavigationStack(path:) not detected)...");
+      console.log(
+        "4️⃣  Capturing screenshots via XCUITest (NavigationStack(path:) not detected)...",
+      );
       graph = await crawlAndScreenshotIos(graph, {
         prototypePath,
         outputDir: mapOutputDir,
@@ -618,9 +624,10 @@ async function generateScenario(options) {
     }
 
     // Always write metadata and graph data (used by combined map builder)
-    const scenarioTitle = results.length > 1
-      ? `${title || name || "Scenario"}: ${result.name}`
-      : title || result.name;
+    const scenarioTitle =
+      results.length > 1
+        ? `${title || name || "Scenario"}: ${result.name}`
+        : title || result.name;
     const meta = {
       name: scenarioMapName,
       title: scenarioTitle,
@@ -648,7 +655,11 @@ async function generateScenario(options) {
   // When multiple scenarios are run, also build a combined map
   if (results.length > 1) {
     console.log(`\n── Combined map ──`);
-    const combinedGraph = mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames);
+    const combinedGraph = mergeScenarioGraphs(
+      results,
+      mapOutputDirs,
+      scenarioMapNames,
+    );
     console.log(
       `   Merged: ${combinedGraph.nodes.length} nodes, ${combinedGraph.edges.length} edges`,
     );
@@ -768,7 +779,9 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
   // Each scenario's non-shared nodes keep their relative rank ordering,
   // offset so scenarios don't collide.
   const nodes = Array.from(nodeMap.values());
-  const sharedNodes = nodes.filter((n) => n.scenarios && n.scenarios.length > 1);
+  const sharedNodes = nodes.filter(
+    (n) => n.scenarios && n.scenarios.length > 1,
+  );
   const sharedIds = new Set(sharedNodes.map((n) => n.id));
 
   // Shared nodes that are start nodes in a later scenario but not the first
@@ -797,7 +810,9 @@ function mergeScenarioGraphs(results, mapOutputDirs, scenarioMapNames) {
     if (allScenarioNodes.length === 0) continue;
 
     // Get the distinct ranks used by this scenario
-    const origRanks = [...new Set(allScenarioNodes.map((n) => n.layoutRank))].sort((a, b) => a - b);
+    const origRanks = [
+      ...new Set(allScenarioNodes.map((n) => n.layoutRank)),
+    ].sort((a, b) => a - b);
     const rankMapping = new Map();
     origRanks.forEach((origRank, idx) => {
       rankMapping.set(origRank, nextRank + idx);
