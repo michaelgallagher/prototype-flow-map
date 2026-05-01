@@ -125,11 +125,12 @@ Implementation:
    - Hint suffix: "Press Enter to open details"
 3. Roving tabindex: exactly one node has `tabindex="0"` at any time — the "current" one. On arrow-key navigation, swap tabindex.
 4. Initial focus target: first start node, else first node by `layoutRank` then `visitOrder`, else first by `id`.
-5. Key bindings (when a node has focus):
+5. Key bindings when a node has focus (decided 2026-05-01 — spatial on arrows, structural on bracket keys):
    - `Tab` / `Shift+Tab` → leaves the listbox (does not cycle inside)
    - `Enter` / `Space` → open detail panel for current node
-   - `Arrow Up/Down/Left/Right` → move to nearest neighbour by **layout coordinates** (use the existing dagre output). Algorithm: filter remaining visible nodes by direction half-plane; pick the smallest weighted distance `dx² + 4·dy²` (vertical bias) for up/down, mirror for left/right. This gives users the spatial movement they expect even though the underlying structure is a graph.
-   - `Home` / `End` → first / last by visit order (or layout rank)
+   - `Arrow Up/Down/Left/Right` → **spatial**: move to the nearest neighbour by layout coordinates. Use the existing dagre output. Algorithm: filter remaining visible nodes by the direction half-plane (only nodes whose centre lies in the pressed direction); pick the smallest weighted distance `dx² + 4·dy²` for up/down (vertical bias) and `dy² + 4·dx²` for left/right (horizontal bias). Matches what a sighted keyboard user sees and aligns with the listbox convention.
+   - `]` / `[` → **structural**: move to the next outgoing target / previous incoming source along the graph. Tiebreak by edge-list order in `graph.edges`. Pressing `]` repeatedly cycles through siblings of the same parent before descending; this lets a screen-reader user reason about flow without overloading the arrow keys.
+   - `Home` / `End` → first / last by visit order (else layout rank)
    - `Ctrl/Cmd+F` is left to the browser; our search input still works
    - `Escape` → close panel if open; else clear selection
    - `Shift+Arrow` → in "move mode" (see Phase 4), nudge node position
@@ -193,12 +194,12 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 
 ## Open questions
 
-1. Should arrow-key neighbour traversal be **spatial** (nearest by coordinates) or **graph-structural** (next by edge)? Spatial is more intuitive when zoomed out; structural is more useful when exploring a flow. Proposal: spatial by default, with `Tab`/`Shift+Tab` (or `]`/`[`) for "next outgoing target / previous source" once a node is focused. Decide before Phase 3 starts.
-2. ~~Detail panel as `<dialog>` (modal) or non-modal `<aside>`?~~ **Decided: non-modal `<aside role="complementary">`**, since the panel coexists with the canvas. Phase 2 implements this.
-3. Do we add an end-to-end a11y test (axe-core via Playwright over a generated map) or rely on manual passes? Cheap to add later; defer for now unless the user wants it bundled.
+1. ~~Should arrow-key neighbour traversal be spatial or graph-structural?~~ **Decided 2026-05-01: spatial on the four arrow keys, structural on `]`/`[`.** Spatial matches the listbox ARIA convention and what a sighted keyboard user sees; the dedicated structural keys give screen-reader users a clean "follow the flow" affordance without overloading arrows. Implementation details locked in Phase 3, step 5.
+2. ~~Detail panel as `<dialog>` (modal) or non-modal `<aside>`?~~ **Decided: non-modal `<aside role="complementary">`**, since the panel coexists with the canvas. Phase 2 implemented this.
+3. Do we add an end-to-end a11y test (axe-core via Playwright over a generated map) or rely on manual passes? Cheap to add later; the scheduled contrast-audit routine fires axe once on 2026-05-06 — if its run goes smoothly, we can recycle that scaffolding into a permanent test. Defer the decision until that report lands.
 
 ## Next PR
 
-Phase 3: SVG keyboard navigation. Make `<g class="node-group">` focusable via a roving tabindex pattern, give each node a composed `aria-label` (label + type + outgoing edge summary + path), expose the rendered nodes as a `role="listbox"`, wire arrow-key spatial navigation using existing dagre coordinates, and auto-pan the focused node into the viewport. Open question 1 (spatial vs structural arrow traversal) needs a decision before this PR starts — proposal stands: spatial by default, with `]`/`[` for "next outgoing target / previous source".
+Phase 3: SVG keyboard navigation. Make `<g class="node-group">` focusable via a roving tabindex pattern, give each node a composed `aria-label` (label + type + outgoing edge summary + path), expose the rendered nodes as a `role="listbox"`, wire **spatial** arrow-key navigation using existing dagre coordinates, add **structural** `]`/`[` traversal along edges, and auto-pan the focused node into the viewport (respecting `prefers-reduced-motion`).
 
-Phase 3 is the largest single chunk of work in this plan and will touch the node render path, the keyboard handlers, and the transform helpers. Estimate: 1–2 days plus a manual screen-reader pass on top.
+Phase 3 is the largest single chunk of work in this plan and will touch the node render path, the keyboard handlers, and the transform helpers. Estimate: 1–2 days plus a manual screen-reader pass on top. All open questions are resolved; ready to start.
