@@ -142,22 +142,24 @@ function generateViewerHtml(
   <link rel="stylesheet" href="${assetPrefix}styles.css">
 </head>
 <body>
-  <div id="toolbar">
+  <a class="skip-link" href="#canvas-container">Skip to flow map</a>
+  <div id="toolbar" role="toolbar" aria-label="Flow map controls">
     ${backLink}
     <h1>${scenarioName ? `<span class="scenario-name">${escapeHtmlForAttr(scenarioName)}</span>` : "Prototype Flow Map"}</h1>
     <div class="toolbar-controls">
-      <span id="node-count"></span>
-      <button onclick="zoomIn()">Zoom +</button>
-      <button onclick="zoomOut()">Zoom −</button>
-      <button onclick="fitToScreen()">Fit to screen</button>
-      <button id="toggle-thumbnail" onclick="toggleThumbnail()" style="display:none">Show thumbnails</button>
-      <button id="toggle-screenshots" onclick="toggleScreenshots()" style="display:none">Hide screenshots</button>
+      <span id="node-count" aria-live="polite" aria-atomic="true"></span>
+      <button type="button" onclick="zoomIn()" aria-label="Zoom in">Zoom +</button>
+      <button type="button" onclick="zoomOut()" aria-label="Zoom out">Zoom −</button>
+      <button type="button" onclick="fitToScreen()">Fit to screen</button>
+      <button id="toggle-thumbnail" type="button" onclick="toggleThumbnail()" aria-pressed="false" style="display:none">Show thumbnails</button>
+      <button id="toggle-screenshots" type="button" onclick="toggleScreenshots()" aria-pressed="false" style="display:none">Hide screenshots</button>
       <button id="theme-toggle" type="button" aria-pressed="false">Light mode</button>
       <label><input type="checkbox" id="toggle-labels" checked> Show labels</label>
       ${hasGlobalNav ? '<label><input type="checkbox" id="toggle-global-nav"> Global nav</label>' : ""}
       ${
         hasProvenance
-          ? `<select id="provenance-filter">
+          ? `<label class="visually-hidden" for="provenance-filter">Filter by provenance</label>
+      <select id="provenance-filter">
         <option value="">All edges</option>
         <option value="runtime">Runtime only</option>
         <option value="static">Static only</option>
@@ -165,41 +167,47 @@ function generateViewerHtml(
       </select>`
           : ""
       }
+      <label class="visually-hidden" for="hub-filter">Filter by hub</label>
       <select id="hub-filter">
         <option value="">All hubs</option>
       </select>
+      <label class="visually-hidden" for="search">Search pages</label>
       <input type="text" id="search" placeholder="Search pages..." />
-      <button id="show-all-btn" onclick="showHiddenListPopover()" style="display:none">Show hidden (0)</button>
-      <button id="reset-positions-btn" onclick="resetPositions()">Reset positions</button>
-      <button id="save-layout-btn" onclick="saveLayout()" style="display:none">Save layout</button>
+      <button id="show-all-btn" type="button" onclick="showHiddenListPopover()" style="display:none">Show hidden (0)</button>
+      <button id="reset-positions-btn" type="button" onclick="resetPositions()">Reset positions</button>
+      <button id="save-layout-btn" type="button" onclick="saveLayout()" style="display:none">Save layout</button>
     </div>
   </div>
-  <div id="canvas-container">
+  <div id="canvas-container" tabindex="-1">
     <svg id="flow-svg"></svg>
   </div>
-  <div id="legend">
-    <h3>Edge types</h3>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--form"></span> Form submission</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--link"></span> Link / push nav</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--conditional"></span> Conditional</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--nav"></span> Tab / global nav</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--sheet"></span> Sheet (modal)</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--full-screen"></span> Full-screen cover</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--web-view"></span> Web view</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--safari"></span> Safari / external</div>
+  <aside id="legend" aria-labelledby="legend-title">
+    <h3 id="legend-title">Edge types</h3>
+    <ul class="legend-list" role="list">
+      <li class="legend-item"><span class="legend-swatch legend-swatch--form" aria-hidden="true"></span> Form submission</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--link" aria-hidden="true"></span> Link / push nav</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--conditional" aria-hidden="true"></span> Conditional</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--nav" aria-hidden="true"></span> Tab / global nav</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--sheet" aria-hidden="true"></span> Sheet (modal)</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--full-screen" aria-hidden="true"></span> Full-screen cover</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--web-view" aria-hidden="true"></span> Web view</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--safari" aria-hidden="true"></span> Safari / external</li>
+    </ul>
     ${
       hasProvenance
-        ? `<h3 style="margin-top:8px">Provenance</h3>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--solid"></span> Runtime</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--dashed"></span> Static only</div>
-    <div class="legend-item"><span class="legend-swatch legend-swatch--both"></span> Both sources</div>`
+        ? `<h3 class="legend-subhead">Provenance</h3>
+    <ul class="legend-list" role="list">
+      <li class="legend-item"><span class="legend-swatch legend-swatch--solid" aria-hidden="true"></span> Runtime</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--dashed" aria-hidden="true"></span> Static only</li>
+      <li class="legend-item"><span class="legend-swatch legend-swatch--both" aria-hidden="true"></span> Both sources</li>
+    </ul>`
         : ""
     }
-  </div>
-  <div id="detail-panel" class="hidden">
-    <button id="close-panel" onclick="closePanel()">✕</button>
+  </aside>
+  <aside id="detail-panel" class="hidden" role="complementary" aria-labelledby="panel-title" aria-hidden="true" tabindex="-1">
+    <button id="close-panel" type="button" onclick="closePanel()" aria-label="Close details">✕</button>
     <div id="panel-content"></div>
-  </div>
+  </aside>
   <script>
     window.__GRAPH_DATA__ = ${JSON.stringify(graph)};
     window.__HAS_SCREENSHOTS__ = ${hasScreenshots ? "true" : "false"};
@@ -397,9 +405,8 @@ function generateViewerCss() {
 :root { color-scheme: dark; }
 :root[data-theme="light"] { color-scheme: light; }
 
-/* Visually-hidden utility — used in later phases for skip links and
- * screen-reader-only labels. Defined now so it's available without a
- * second CSS rebuild later. */
+/* Visually-hidden utility — used for skip links and screen-reader-only
+ * labels. Position is fixed at -1px clip so it stays in the AT tree. */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -411,6 +418,34 @@ function generateViewerCss() {
   white-space: nowrap;
   border: 0;
 }
+
+/* Skip link — first focusable element in the page. Visually hidden until
+ * focused, at which point it slides into view at the top-left so a
+ * keyboard user can jump past the toolbar to the diagram. WCAG 2.4.1. */
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 8px 12px;
+  background: var(--surface-1);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(calc(-100% - 16px));
+  transition: transform 0.15s;
+}
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Legend list — new in Phase 2; resets default <ul> bullet/padding. */
+.legend-list { list-style: none; padding: 0; margin: 0; }
+.legend-subhead { margin-top: 8px; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -1916,12 +1951,20 @@ function generateViewerJs() {
     }
   }
 
+  // Element that had focus before the panel opened, so closePanel can
+  // restore it. Phase 3 will make the SVG nodes focusable; for now this
+  // is mostly a no-op for mouse users (activeElement = body) but works
+  // when the panel is opened from a keyboard-focused trigger.
+  let lastPanelTrigger = null;
+
   // Show detail panel for a node
   function showDetail(node) {
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('panel-content');
 
-    let html = '<h2>' + escapeHtml(node.label) + '</h2>';
+    lastPanelTrigger = document.activeElement;
+
+    let html = '<h2 id="panel-title" tabindex="-1">' + escapeHtml(node.label) + '</h2>';
 
     if (hasScreenshots && !hideScreenshots && node.screenshot) {
       html += '<img class="panel-screenshot" src="' + node.screenshot + '" alt="Screenshot of ' + escapeHtml(node.label) + '" />';
@@ -1976,6 +2019,13 @@ function generateViewerJs() {
 
     content.innerHTML = html;
     panel.classList.remove('hidden');
+    panel.setAttribute('aria-hidden', 'false');
+
+    // Move focus to the panel title so screen reader users start reading
+    // there. tabindex="-1" on the heading makes it programmatically
+    // focusable without adding it to the tab order.
+    const heading = document.getElementById('panel-title');
+    if (heading) heading.focus({ preventScroll: true });
 
     // Highlight the node
     document.querySelectorAll('.node-rect--highlight').forEach(el => el.classList.remove('node-rect--highlight'));
@@ -1984,8 +2034,17 @@ function generateViewerJs() {
   }
 
   window.closePanel = function() {
-    document.getElementById('detail-panel').classList.add('hidden');
+    const panel = document.getElementById('detail-panel');
+    panel.classList.add('hidden');
+    panel.setAttribute('aria-hidden', 'true');
     document.querySelectorAll('.node-rect--highlight').forEach(el => el.classList.remove('node-rect--highlight'));
+    // Return focus to whatever opened the panel, if it's still in the DOM
+    // and focusable. Falls back to the close button's parent (body) which
+    // is a sensible default for mouse users.
+    if (lastPanelTrigger && document.body.contains(lastPanelTrigger) && typeof lastPanelTrigger.focus === 'function') {
+      try { lastPanelTrigger.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    }
+    lastPanelTrigger = null;
   };
 
   // Pan and zoom
@@ -2172,7 +2231,9 @@ function generateViewerJs() {
   window.toggleThumbnail = function() {
     thumbnailMode = !thumbnailMode;
     try { localStorage.setItem(viewModeKey, thumbnailMode ? 'thumbnail' : 'full'); } catch(e) {}
-    document.getElementById('toggle-thumbnail').textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
+    const btn = document.getElementById('toggle-thumbnail');
+    btn.textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
+    btn.setAttribute('aria-pressed', String(thumbnailMode));
     render();
   };
 
@@ -2302,14 +2363,20 @@ function generateViewerJs() {
         && !e.target.closest('#show-all-btn')) hideHiddenListPopover();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { hideNodeContextMenu(); hideHiddenListPopover(); }
+    if (e.key === 'Escape') {
+      hideNodeContextMenu();
+      hideHiddenListPopover();
+      const panel = document.getElementById('detail-panel');
+      if (panel && !panel.classList.contains('hidden')) closePanel();
+    }
   });
 
   // Toggle screenshot visibility
   window.toggleScreenshots = function() {
     hideScreenshots = !hideScreenshots;
-    document.getElementById('toggle-screenshots').textContent =
-      hideScreenshots ? 'Show screenshots' : 'Hide screenshots';
+    const btn = document.getElementById('toggle-screenshots');
+    btn.textContent = hideScreenshots ? 'Show screenshots' : 'Hide screenshots';
+    btn.setAttribute('aria-pressed', String(hideScreenshots));
     render();
   };
 
@@ -2497,7 +2564,10 @@ function generateViewerJs() {
     const btn = document.getElementById('toggle-thumbnail');
     btn.style.display = '';
     btn.textContent = thumbnailMode ? 'Show full pages' : 'Show thumbnails';
-    document.getElementById('toggle-screenshots').style.display = '';
+    btn.setAttribute('aria-pressed', String(thumbnailMode));
+    const ssBtn = document.getElementById('toggle-screenshots');
+    ssBtn.style.display = '';
+    ssBtn.setAttribute('aria-pressed', String(hideScreenshots));
   }
 
   // Initial render
