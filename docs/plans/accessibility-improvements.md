@@ -1,6 +1,6 @@
 # Accessibility improvements for the flow-map viewer
 
-Status: Phases 1 & 2 shipped (2026-05-01); Phase 3 next
+Status: Phases 1, 2 & 3 shipped (2026-05-01); Phase 4 next
 Owner: tbd
 Last updated: 2026-05-01
 
@@ -52,8 +52,8 @@ Plus: `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`, `for
 Updated after Phase 1. ✅ = closed by Phase 1, ⬜ = still outstanding.
 
 - ✅ Theme: ~~dark-only, hex literals throughout~~ — tokenised; light theme via `data-theme="light"`; reduced-motion and forced-colours queries in place (Phase 1)
-- ⬜ SVG: `<svg>` has no `role`, `aria-label`, or instructions
-- ⬜ Nodes: `<g class="node-group">` is not focusable; click/hover/drag/contextmenu are mouse-only
+- ⬜ SVG: `<svg>` has no `role`, `aria-label`, or instructions (the *outer* `<svg>` element; the inner node-container now carries `role="listbox"` from Phase 3)
+- ✅ Nodes: ~~`<g class="node-group">` is not focusable; click/hover/drag/contextmenu are mouse-only~~ — each node is now `role="option"` with composed `aria-label`, roving tabindex, spatial arrow-key navigation, structural `]`/`[` traversal, Home/End/Enter/Space, focus-driven `highlightConnections`, and auto-pan into view (Phase 3)
 - ⬜ Edges: no semantics; colour-only differentiation in some cases (most already use dash patterns)
 - ✅ Toolbar: ~~container has no `role="toolbar"`~~ — `role="toolbar" aria-label="Flow map controls"` added; `aria-pressed` on theme/thumbnail/screenshot toggles; `aria-label` on icon-only zoom buttons (Phase 2)
 - ✅ Search: ~~uses placeholder as label~~ — `<label class="visually-hidden" for="search">` added; same for hub-filter and provenance-filter selects (Phase 2)
@@ -106,9 +106,30 @@ Out of scope (deferred to Phase 3 or later):
 - 24×24 target-size verification (visual measurement; assumed close enough; defer to Phase 4 audit).
 - Manual screen reader pass (NVDA/VoiceOver) — pending and noted in Cross-cutting.
 
-### Phase 3 — Keyboard navigation across the graph
+### Phase 3 — Keyboard navigation across the graph ✅ SHIPPED 2026-05-01
 
-This is the largest piece of work. We expose the diagram as a structured, navigable widget.
+What landed in `src/build-viewer.js`:
+
+- New `<g id="node-container" role="listbox" aria-label="Screens (NN total)">` wraps every node group, separated from the edge `<g>` siblings so only options live inside the listbox.
+- Each `<g class="node-group">` now carries `role="option"`, `aria-selected`, `tabindex` (roving — exactly one node has `tabindex="0"` per render), `data-node-id`, and a composed `aria-label` of the form: *"`label`. `Type`. `N outgoing links, M sheets` outgoing. `filePath`. Press Enter to open details."*
+- Roving tabindex picks the initial focus target each render: first start-node by `startOrder`, else first node by `layoutRank` then `visitOrder` then `id`. `applyRovingTabindex()` runs after the node loop and is also re-applied automatically when the previous focus target was filtered out or hidden.
+- Spatial arrow-key navigation: `findSpatialNeighbour(node, dir)` filters by direction half-plane and picks the nearest visible node by weighted distance — `dx² + 4·dy²` for Up/Down, `dy² + 4·dx²` for Left/Right (matches the recipe in step 5 of this plan).
+- Structural `]` / `[` traversal: `structuralNext` cycles through siblings of the same parent before descending to the current node's first outgoing target — the `siblingCursor` state records `{ parentId, index }`. `structuralPrev` jumps to the first incoming source. Hidden / filtered-out endpoints are excluded via `visibleEdgesFrom` / `visibleEdgesTo`. Spatial movement and Home/End reset the sibling cursor.
+- Enter / Space opens the detail panel for the focused node (existing `showDetail`); Home/End jump to first/last by `visitOrder` then `layoutRank`. Tab leaves the listbox via the standard browser flow. Escape continues to flow through the existing global handler (closes panel / context menu / hidden-list popover).
+- `focusNode(nodeId)` is the single entry point for moving focus: it rewrites `tabindex` and `aria-selected` across all node groups, calls `targetGroup.focus({ preventScroll: true })`, and pans the new focus into view via `ensureNodeVisible`.
+- Auto-pan: `ensureNodeVisible` checks whether the focused node is inside the viewport (with 60px padding); if not, `panToTransform` animates the SVG transform to centre it (~200ms, ease-out). `prefers-reduced-motion: reduce` is read once at startup into `prefersReducedMotion` and short-circuits the animation to a hard jump.
+- Focus / blur listeners on each node group fire `highlightConnections(node.id)` and `clearHighlight()` so the dim-non-neighbours treatment now triggers on keyboard focus as well as mouse hover.
+- Focus indicator: new `.node-rect--focused` and `.node-group:focus-visible .node-rect` rules paint a 3px `--focus-ring` outline that is distinct from `:hover` (2px `--accent`) and `--highlight` (panel-open). Forced-colors fallback maps the same selectors to `Highlight !important`.
+
+Smoke test: 36 acceptance checks pass against a generated `demonhsapp2` map; viewers also regenerate cleanly for `breast-screening`, `nhsapp-ios-demo-v2`, and `nhsapp-nav`.
+
+Out of scope (deferred to Phase 4 or later):
+- Pointer-free zoom/pan/move/context-menu equivalents (Phase 4).
+- Manual NVDA / VoiceOver pass — still pending.
+
+---
+
+This was the largest piece of work. We expose the diagram as a structured, navigable widget.
 
 Recommended pattern: **listbox with roving tabindex**, single-select.
 
@@ -200,6 +221,6 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 
 ## Next PR
 
-Phase 3: SVG keyboard navigation. Make `<g class="node-group">` focusable via a roving tabindex pattern, give each node a composed `aria-label` (label + type + outgoing edge summary + path), expose the rendered nodes as a `role="listbox"`, wire **spatial** arrow-key navigation using existing dagre coordinates, add **structural** `]`/`[` traversal along edges, and auto-pan the focused node into the viewport (respecting `prefers-reduced-motion`).
+Phase 4: pointer-free equivalents for power features. Wire keyboard shortcuts for zoom/pan/fit, give the drag-to-reposition feature a "move mode" alternative (M to enter, arrows to nudge, Enter to commit, Escape to cancel), convert the right-click context menu and hidden-list popover into proper `role="menu"` / `role="dialog"` widgets with focus traps, and add a `?`-triggered keyboard-shortcuts help dialog. Also do the manual NVDA / VoiceOver pass that was deferred from Phase 2 to validate Phase 3's listbox semantics in real screen readers.
 
-Phase 3 is the largest single chunk of work in this plan and will touch the node render path, the keyboard handlers, and the transform helpers. Estimate: 1–2 days plus a manual screen-reader pass on top. All open questions are resolved; ready to start.
+After Phase 4 lands, Phase 5 (screen-reader-friendly outline view) is the last major chunk before the index page and docs catch up.

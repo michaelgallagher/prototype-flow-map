@@ -550,6 +550,20 @@ body {
   outline-offset: 2px;
 }
 
+/* Keyboard focus on a node uses a thicker, theme-aware ring so it is
+ * distinguishable from :hover (which uses --accent at 2px). */
+.node-group:focus { outline: none; }
+.node-group:focus-visible .node-rect {
+  stroke: var(--focus-ring) !important;
+  stroke-width: 3 !important;
+}
+.node-rect--focused {
+  stroke: var(--focus-ring) !important;
+  stroke-width: 3 !important;
+}
+/* Strip the SVG's native focus halo on Safari/Chrome — we paint our own. */
+.node-group:focus-visible { outline: none; }
+
 #canvas-container {
   position: fixed;
   top: 50px;
@@ -1062,6 +1076,10 @@ body {
   }
   .node-rect--highlight { stroke: Highlight !important; }
   .node-rect--start-node { stroke: Highlight !important; filter: none; }
+  .node-group:focus-visible .node-rect,
+  .node-rect--focused {
+    stroke: Highlight !important; stroke-width: 3 !important;
+  }
 }
 `;
 }
@@ -1148,6 +1166,16 @@ function generateViewerJs() {
   let manualPositions = {};
   let isDragging = false;
   let dragTarget = null;
+
+  // Roving-tabindex focus state. focusedNodeId tracks which node
+  // currently holds tabindex="0" in the listbox; siblingCursor records
+  // the structural-traversal context so ] cycles through siblings of
+  // the same parent before descending to children. Both are reset on
+  // spatial navigation and on filter/render cycles that drop the node.
+  let focusedNodeId = null;
+  let siblingCursor = null;
+  const prefersReducedMotion = !!(window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const posStorageKey = 'flowmap-positions-' + storageSuffix;
   try {
     const savedPos = localStorage.getItem(posStorageKey);
@@ -1707,6 +1735,296 @@ function generateViewerJs() {
     return g;
   }
 
+  // Friendly type names for a screen reader. Falls back to the raw
+  // type if no friendly mapping exists, so unknown types still
+  // announce something meaningful.
+  function typeFriendly(type) {
+    const map = {
+      screen: 'Screen',
+      'web-view': 'Web view',
+      external: 'External link',
+      content: 'Content page',
+      question: 'Question page',
+      'check-answers': 'Check answers',
+      confirmation: 'Confirmation',
+      error: 'Error page',
+      splash: 'Splash',
+      index: 'Index',
+      'web-page': 'Web page',
+    };
+    return map[type] || type || 'Page';
+  }
+
+  // Compose the aria-label that screen readers announce on focus:
+  // label + type + outgoing-edge summary + file path + activation hint.
+  function composeNodeAriaLabel(node) {
+    const parts = [node.label || node.id];
+    parts.push(typeFriendly(node.type));
+    const outgoing = graph.edges.filter(e => e.source === node.id);
+    if (outgoing.length > 0) {
+      const counts = {};
+      outgoing.forEach(e => {
+        const t = e.type || 'link';
+        counts[t] = (counts[t] || 0) + 1;
+      });
+      const summary = Object.entries(counts)
+        .map(([t, n]) => n + ' ' + t + (n === 1 ? '' : 's'))
+        .join(', ');
+      parts.push(summary + ' outgoing');
+    }
+    if (node.filePath) parts.push(node.filePath);
+    parts.push('Press Enter to open details');
+    return parts.join('. ');
+  }
+
+  // Pick the listbox's initial focus target. Prefers a designated
+  // start node, falling back to the smallest layoutRank/visitOrder
+  // and finally the lexicographically-first id so ordering is stable
+  // across renders.
+  function pickInitialFocusNodeId() {
+    const nodes = Object.values(layoutNodes);
+    if (nodes.length === 0) return null;
+    const starts = nodes.filter(n => n.isStartNode);
+    if (starts.length > 0) {
+      starts.sort((a, b) =>
+        ((a.startOrder == null ? Infinity : a.startOrder)) -
+        ((b.startOrder == null ? Infinity : b.startOrder)));
+      return starts[0].id;
+    }
+    const sorted = [...nodes].sort((a, b) => {
+      const ra = a.layoutRank == null ? Infinity : a.layoutRank;
+      const rb = b.layoutRank == null ? Infinity : b.layoutRank;
+      if (ra !== rb) return ra - rb;
+      const va = a.visitOrder == null ? Infinity : a.visitOrder;
+      const vb = b.visitOrder == null ? Infinity : b.visitOrder;
+      if (va !== vb) return va - vb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    return sorted[0].id;
+  }
+
+  // Sort the visible nodes by traversal order — visitOrder if set,
+  // else layoutRank — and return the first/last id. Powers Home/End.
+  function nodeIdByOrder(reverse) {
+    const nodes = Object.values(layoutNodes);
+    if (nodes.length === 0) return null;
+    const sorted = [...nodes].sort((a, b) => {
+      const va = a.visitOrder == null ? Infinity : a.visitOrder;
+      const vb = b.visitOrder == null ? Infinity : b.visitOrder;
+      if (va !== vb) return va - vb;
+      const ra = a.layoutRank == null ? Infinity : a.layoutRank;
+      const rb = b.layoutRank == null ? Infinity : b.layoutRank;
+      if (ra !== rb) return ra - rb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    return reverse ? sorted[sorted.length - 1].id : sorted[0].id;
+  }
+
+  // Spatial neighbour finder: pick the closest visible node in the
+  // pressed direction (half-plane filter), weighting the off-axis
+  // distance more so the cursor follows the user's intended axis.
+  // Weight 4 chosen to match the plan's recipe; see Phase 3 step 5.
+  function findSpatialNeighbour(node, dir) {
+    const cx = node.x, cy = node.y;
+    let best = null, bestScore = Infinity;
+    Object.values(layoutNodes).forEach(n => {
+      if (n.id === node.id) return;
+      const dx = n.x - cx;
+      const dy = n.y - cy;
+      let inDir = false;
+      if (dir === 'up' && dy < -1) inDir = true;
+      else if (dir === 'down' && dy > 1) inDir = true;
+      else if (dir === 'left' && dx < -1) inDir = true;
+      else if (dir === 'right' && dx > 1) inDir = true;
+      if (!inDir) return;
+      const score = (dir === 'up' || dir === 'down')
+        ? (dx * dx + 4 * dy * dy)
+        : (dy * dy + 4 * dx * dx);
+      if (score < bestScore) { bestScore = score; best = n; }
+    });
+    return best;
+  }
+
+  // Filtered list of edges whose endpoints are both currently rendered
+  // (visible in layoutNodes). Used by structural traversal so users
+  // never get sent to a hidden or filtered-out node.
+  function visibleEdgesFrom(sourceId) {
+    return graph.edges.filter(e =>
+      e.source === sourceId &&
+      layoutNodes[e.target] != null &&
+      !hiddenNodes.has(e.target));
+  }
+  function visibleEdgesTo(targetId) {
+    return graph.edges.filter(e =>
+      e.target === targetId &&
+      layoutNodes[e.source] != null &&
+      !hiddenNodes.has(e.source));
+  }
+
+  // ] traversal: cycle through the previous parent's outgoing edges
+  // before descending into the current node's own outgoing edges.
+  function structuralNext(currentId) {
+    if (siblingCursor && layoutNodes[siblingCursor.parentId]) {
+      const sibs = visibleEdgesFrom(siblingCursor.parentId);
+      const nextIdx = siblingCursor.index + 1;
+      if (nextIdx < sibs.length) {
+        siblingCursor = { parentId: siblingCursor.parentId, index: nextIdx };
+        return sibs[nextIdx].target;
+      }
+    }
+    const out = visibleEdgesFrom(currentId);
+    if (out.length === 0) {
+      siblingCursor = null;
+      return null;
+    }
+    siblingCursor = { parentId: currentId, index: 0 };
+    return out[0].target;
+  }
+
+  // [ traversal: jump to the first incoming source of the current
+  // node. Resets the sibling cursor — climbing out of a branch is a
+  // new structural context.
+  function structuralPrev(currentId) {
+    const incoming = visibleEdgesTo(currentId);
+    if (incoming.length === 0) return null;
+    siblingCursor = null;
+    return incoming[0].source;
+  }
+
+  // Animate the SVG transform so a target translation is reached in
+  // ~200ms. Honours prefers-reduced-motion by jumping instantly.
+  let panAnimationId = null;
+  function panToTransform(tx, ty) {
+    if (panAnimationId) {
+      cancelAnimationFrame(panAnimationId);
+      panAnimationId = null;
+    }
+    if (prefersReducedMotion) {
+      transform.x = tx;
+      transform.y = ty;
+      applyTransform();
+      return;
+    }
+    const startX = transform.x, startY = transform.y;
+    const dur = 200;
+    const startTime = performance.now();
+    function step(now) {
+      const t = Math.min(1, (now - startTime) / dur);
+      const ease = 1 - Math.pow(1 - t, 2);
+      transform.x = startX + (tx - startX) * ease;
+      transform.y = startY + (ty - startY) * ease;
+      applyTransform();
+      if (t < 1) panAnimationId = requestAnimationFrame(step);
+      else panAnimationId = null;
+    }
+    panAnimationId = requestAnimationFrame(step);
+  }
+
+  // Pan the focused node into the visible area when it would otherwise
+  // be off-screen or clipped near the edge. Centres the node when a
+  // pan is needed; leaves the transform alone if it is already
+  // comfortably visible. WCAG 2.4.11.
+  function ensureNodeVisible(node) {
+    if (!node) return;
+    const rect = container.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const halfW = (node.width || 140) * transform.scale / 2;
+    const halfH = (node.height || 56) * transform.scale / 2;
+    const padding = 60;
+    const screenX = node.x * transform.scale + transform.x;
+    const screenY = node.y * transform.scale + transform.y;
+    const inX = (screenX - halfW) >= padding && (screenX + halfW) <= (rect.width - padding);
+    const inY = (screenY - halfH) >= padding && (screenY + halfH) <= (rect.height - padding);
+    if (inX && inY) return;
+    const targetX = rect.width / 2 - node.x * transform.scale;
+    const targetY = rect.height / 2 - node.y * transform.scale;
+    panToTransform(targetX, targetY);
+  }
+
+  // Move focus to the named node and update aria-selected/tabindex
+  // across the listbox so exactly one option is in the tab order.
+  // Pans the new focus into view when needed.
+  function focusNode(nodeId) {
+    if (!nodeId || !layoutNodes[nodeId]) return;
+    const targetGroup = document.querySelector(
+      '.node-group[data-node-id="' + CSS.escape(nodeId) + '"]');
+    if (!targetGroup) return;
+    document.querySelectorAll('.node-group').forEach(g => {
+      const isFocus = g === targetGroup;
+      g.setAttribute('tabindex', isFocus ? '0' : '-1');
+      g.setAttribute('aria-selected', isFocus ? 'true' : 'false');
+    });
+    focusedNodeId = nodeId;
+    targetGroup.focus({ preventScroll: true });
+    ensureNodeVisible(layoutNodes[nodeId]);
+  }
+
+  // Keyboard handler for the listbox. Spatial movement on the four
+  // arrow keys, structural movement on ]/[ (with Shift+]/[), Enter or
+  // Space to open the detail panel, Home/End to jump by visit order.
+  // Tab is left to the browser so users can leave the listbox.
+  function handleNodeKeydown(e) {
+    const targetGroup = e.target.closest('.node-group');
+    if (!targetGroup) return;
+    const nodeId = targetGroup.dataset.nodeId;
+    const node = layoutNodes[nodeId];
+    if (!node) return;
+
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      showDetail(node);
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+        e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const dir = e.key.replace('Arrow', '').toLowerCase();
+      const next = findSpatialNeighbour(node, dir);
+      if (next) {
+        e.preventDefault();
+        siblingCursor = null;
+        focusNode(next.id);
+      }
+      return;
+    }
+    if (e.key === ']' || e.key === '}') {
+      const nextId = structuralNext(nodeId);
+      if (nextId) { e.preventDefault(); focusNode(nextId); }
+      return;
+    }
+    if (e.key === '[' || e.key === '{') {
+      const prevId = structuralPrev(nodeId);
+      if (prevId) { e.preventDefault(); focusNode(prevId); }
+      return;
+    }
+    if (e.key === 'Home') {
+      const id = nodeIdByOrder(false);
+      if (id) { e.preventDefault(); siblingCursor = null; focusNode(id); }
+      return;
+    }
+    if (e.key === 'End') {
+      const id = nodeIdByOrder(true);
+      if (id) { e.preventDefault(); siblingCursor = null; focusNode(id); }
+      return;
+    }
+  }
+
+  // Apply the roving tabindex to the freshly-rendered listbox after
+  // each render. Picks an initial focus target if the previous one is
+  // gone (filtered out, hidden, or never set).
+  function applyRovingTabindex() {
+    const groups = document.querySelectorAll('.node-group');
+    if (groups.length === 0) return;
+    if (!focusedNodeId || !layoutNodes[focusedNodeId]) {
+      focusedNodeId = pickInitialFocusNodeId();
+      siblingCursor = null;
+    }
+    groups.forEach(g => {
+      const isFocus = g.dataset.nodeId === focusedNodeId;
+      g.setAttribute('tabindex', isFocus ? '0' : '-1');
+      g.setAttribute('aria-selected', isFocus ? 'true' : 'false');
+    });
+  }
+
   // Render the graph to SVG
   function render() {
     const g = layoutGraph();
@@ -1796,15 +2114,38 @@ function generateViewerJs() {
       mainGroup.appendChild(edgeGroup);
     });
 
+    // Container for nodes — separate <g> from edges so we can give it
+    // listbox semantics. Each node-group becomes a role="option" that
+    // participates in the roving-tabindex pattern (Phase 3).
+    const nodeContainer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    nodeContainer.setAttribute('id', 'node-container');
+    nodeContainer.setAttribute('role', 'listbox');
+    nodeContainer.setAttribute('aria-label',
+      'Screens (' + Object.keys(layoutNodes).length + ' total)');
+    nodeContainer.addEventListener('keydown', handleNodeKeydown);
+    mainGroup.appendChild(nodeContainer);
+
     // Render nodes
     Object.values(layoutNodes).forEach(node => {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.setAttribute('class', 'node-group');
+      group.setAttribute('role', 'option');
+      group.setAttribute('aria-selected', 'false');
+      group.setAttribute('tabindex', '-1');
+      group.setAttribute('aria-label', composeNodeAriaLabel(node));
+      group.dataset.nodeId = node.id;
       group.setAttribute('transform', 'translate(' + (node.x - node.width/2) + ',' + (node.y - node.height/2) + ')');
       group.addEventListener('click', (e) => { e.stopPropagation(); if (!isDragging) showDetail(node); });
       group.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); showNodeContextMenu(e.clientX, e.clientY, node); });
       group.addEventListener('mouseenter', () => { if (!dragTarget) highlightConnections(node.id); });
       group.addEventListener('mouseleave', () => { if (!dragTarget) clearHighlight(); });
+      group.addEventListener('focus', () => {
+        focusedNodeId = node.id;
+        highlightConnections(node.id);
+      });
+      group.addEventListener('blur', () => {
+        clearHighlight();
+      });
       group.addEventListener('mousedown', (e) => {
         if (e.button !== 0) return;
         e.stopPropagation();
@@ -1913,8 +2254,12 @@ function generateViewerJs() {
         group.appendChild(pathLabel);
       }
 
-      mainGroup.appendChild(group);
+      nodeContainer.appendChild(group);
     });
+
+    // Roving tabindex / aria-selected sync — exactly one option in
+    // the listbox carries tabindex="0" so Tab can land on the graph.
+    applyRovingTabindex();
 
     // Update node count
     document.getElementById('node-count').textContent =
