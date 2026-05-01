@@ -1,8 +1,8 @@
 # Accessibility improvements for the flow-map viewer
 
-Status: planning
+Status: Phase 1 shipped (2026-05-01); Phase 2 next
 Owner: tbd
-Last updated: 2026-04-30
+Last updated: 2026-05-01
 
 ## Goal
 
@@ -49,74 +49,64 @@ Plus: `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`, `for
 
 ## Current-state audit (one-line per gap)
 
-- Theme: dark-only, hex literals throughout — no CSS custom properties to swap
-- SVG: `<svg>` has no `role`, `aria-label`, or instructions
-- Nodes: `<g class="node-group">` is not focusable; click/hover/drag/contextmenu are mouse-only
-- Edges: no semantics; colour-only differentiation in some cases (most already use dash patterns)
-- Toolbar: container has no `role="toolbar"`, no group label; toggle checkboxes/buttons lack `aria-pressed` parity
-- Search: uses placeholder as label; no result-count live region
-- Detail panel: slides in via CSS transform, no focus management, no `aria-modal`, no `Escape` handling beyond context menu, no focus return
-- Context menu (right-click on node): div-based, no `role="menu"`, no arrow-key navigation, mouse-only invocation
-- Hidden-list popover: same — no focus trap, no list semantics
-- Legend: visual only; not announced
-- Status: `#node-count` updates silently
-- Reduced motion / forced colours / high-contrast: not honoured
-- Skip link: none
+Updated after Phase 1. ✅ = closed by Phase 1, ⬜ = still outstanding.
+
+- ✅ Theme: ~~dark-only, hex literals throughout~~ — tokenised; light theme available via `data-theme="light"`; reduced-motion and forced-colours queries in place
+- ⬜ SVG: `<svg>` has no `role`, `aria-label`, or instructions
+- ⬜ Nodes: `<g class="node-group">` is not focusable; click/hover/drag/contextmenu are mouse-only
+- ⬜ Edges: no semantics; colour-only differentiation in some cases (most already use dash patterns)
+- ⬜ Toolbar: container has no `role="toolbar"`, no group label; toggle checkboxes/buttons lack `aria-pressed` parity (Phase 1 added `aria-pressed` only on `#theme-toggle`)
+- ⬜ Search: uses placeholder as label; no result-count live region
+- ⬜ Detail panel: slides in via CSS transform, no focus management, no `aria-modal`, no `Escape` handling beyond context menu, no focus return
+- ⬜ Context menu (right-click on node): div-based, no `role="menu"`, no arrow-key navigation, mouse-only invocation
+- ⬜ Hidden-list popover: same — no focus trap, no list semantics
+- ⬜ Legend: visual only; not announced
+- ⬜ Status: `#node-count` updates silently
+- ✅ Reduced motion / forced colours / high-contrast: ~~not honoured~~ — both media queries shipped in Phase 1
+- ⬜ Skip link: none (CSS utility `.visually-hidden` is in place; markup not yet added)
 
 ## Phased plan
 
 Five phases. Phase 1 unlocks the rest, so don't reorder. Each phase ends with a manual a11y pass (axe DevTools + VoiceOver/NVDA spot-check) before merging.
 
-### Phase 1 — Theming foundation (light mode + tokens)
+### Phase 1 — Theming foundation (light mode + tokens) ✅ SHIPPED 2026-05-01
 
-Goal: introduce CSS custom properties and a theme switch without changing any behaviour.
+What landed in `src/build-viewer.js`:
 
-1. Replace every hex literal in `generateViewerCss()` with a `var(--token)` reference. Group tokens:
-   - Surface: `--bg`, `--surface-1` (toolbar, panel, legend), `--surface-2` (popovers), `--border`
-   - Text: `--text`, `--text-muted`, `--text-strong`
-   - Accent: `--accent` (the cyan `#53d8fb`), `--accent-hover`
-   - Node fills/strokes: one pair per node type (`--node-screen-fill`, `--node-screen-stroke`, …)
-   - Edge strokes: one per edge type
-   - Status: `--ok`, `--warn`, `--err`
-   - Focus: `--focus-ring`
-2. Default theme = current dark palette under `:root`.
-3. Add `:root[data-theme="light"]` block with a tuned light palette. Constraints:
-   - Body text ≥ 4.5:1 against `--bg`
-   - Node strokes ≥ 3:1 against canvas; node label text ≥ 4.5:1 against node fill
-   - Edge strokes ≥ 3:1 against canvas (light mode is the harder case — current pastel edges will need darker variants)
-   - Run all node/edge colours through a contrast checker; record results in `docs/plans/accessibility-improvements-contrast.md` if many adjustments are needed
-4. Theme selection:
-   - On load: read `localStorage['flowmap-theme']`. If unset, follow `window.matchMedia('(prefers-color-scheme: light)')` and listen for changes.
-   - Add a toolbar control: a single `<button id="theme-toggle" aria-pressed="false">Light mode</button>` that toggles `data-theme` on `<html>` and persists.
-5. Add `<meta name="color-scheme" content="dark light">` so form controls pick up the right native palette.
-6. Honour `@media (prefers-reduced-motion: reduce)` — disable the panel slide and any opacity transitions.
-7. Honour `@media (forced-colors: active)` — set strokes/fills to `CanvasText`, `Highlight`, `LinkText` so Windows High Contrast is usable.
+- Tokenised the entire CSS: ~80 design tokens defined under `:root` (dark default) and `:root[data-theme="light"]` (light overrides). Every former hex literal in the generated stylesheet now resolves through `var(--token)` (122 references).
+- Light palette: desaturated tints for the eleven node-type fills, darkened strokes and edge colours so they remain legible against the light canvas. First pass — see Cross-cutting "contrast verification" below.
+- No-flash bootstrap: inline `<script>` in `<head>` reads `localStorage['flowmap-theme']`, falls back to `prefers-color-scheme: light`, sets `data-theme` before stylesheets paint.
+- Theme toggle: `#theme-toggle` button in the toolbar with `aria-pressed` reflecting state and label that flips between "Light mode" / "Dark mode". Explicit choice persists; while no choice is saved we follow OS-level changes via `matchMedia`.
+- `<meta name="color-scheme" content="dark light">` plus `:root { color-scheme }` so native form widgets and scrollbars match.
+- `@media (prefers-reduced-motion: reduce)` — kills transitions and animations.
+- `@media (forced-colors: active)` — maps surfaces to `Canvas` / `CanvasText` / `Highlight` for Windows High Contrast.
+- `:focus-visible` outlines on toolbar buttons, selects, inputs, the back link, panel close button, and the hide-node button — keyboard users get a 2px ring in the accent colour, mouse users don't.
+- Inline-style cleanup: eight legend swatches, three `style="color:#666"` spans in the detail panel, the global-nav badge, and the "Hide this page" button moved to themed CSS classes (`.legend-swatch--*`, `.link-edge-type`, `.edge-provenance--nav`, `.hide-node-btn`).
+- `.visually-hidden` utility class shipped early so Phase 2's skip link and hidden labels don't need another CSS rebuild.
 
-Files: `src/build-viewer.js` (`generateViewerCss`, `generateViewerHtml`, `generateViewerJs` toolbar wiring).
+Smoke test: 18 acceptance checks pass against a generated `demonhsapp2` map. Manual browser verification of contrast in both themes is still pending — see Cross-cutting.
 
-Definition of done: snapshot the dark map, toggle to light, snapshot again. Both pass axe contrast checks. Reduced-motion media query verified by toggling OS setting.
+### Phase 2 — Toolbar, panel, and search semantics (NEXT)
 
-### Phase 2 — Toolbar, panel, and search semantics
+Goal: get all chrome (non-canvas) UI announced and operable correctly. Cheap wins phase. Phase 1 already shipped `.visually-hidden`, `:focus-visible` outlines, and `aria-pressed` on the theme toggle, so this phase can focus on the remaining semantic and label work.
 
-Goal: get all chrome (non-canvas) UI announced and operable correctly. This is the cheap wins phase.
-
-1. Add `<a class="skip-link" href="#flow-svg">Skip to flow map</a>` as the first focusable element; visually hide until focused.
+1. Add `<a class="skip-link" href="#flow-svg">Skip to flow map</a>` as the first focusable element; visually hide until focused (use the existing `.visually-hidden` plus `:focus { position: static; ... }` pattern).
 2. Toolbar:
    - `<div id="toolbar" role="toolbar" aria-label="Flow map controls">`
    - Group related controls visually and with `<div role="group" aria-label="…">` (zoom, view, filters)
-   - Convert toggle controls (`#toggle-labels`, `#toggle-screenshots`, `#toggle-thumbnail`, `#toggle-global-nav`) to `<button aria-pressed>` form for consistency, OR keep checkboxes but ensure each has a real `<label for>`. Pick one and apply uniformly.
+   - Convert remaining toggle controls (`#toggle-labels`, `#toggle-screenshots`, `#toggle-thumbnail`, `#toggle-global-nav`) to `<button aria-pressed>` form for consistency with `#theme-toggle`, OR keep checkboxes but ensure each has a real `<label for>`. Pick one and apply uniformly.
    - Icon-only buttons (`Zoom +`, `Zoom −`, `✕`) get `aria-label`.
    - Ensure every button is at least 24×24 (target size). Most already are; verify.
 3. Search input: replace `placeholder="Search pages..."` with a real `<label class="visually-hidden" for="search">Search pages</label>` plus a placeholder for sighted users.
 4. `#node-count` becomes `aria-live="polite" aria-atomic="true"` so filter/search results announce.
 5. `<select id="hub-filter">` and `<select id="provenance-filter">` get associated `<label>`s (visually hidden if needed for layout).
-6. Detail panel:
-   - Treat as a non-modal `complementary` region by default (does not trap focus): `<aside id="detail-panel" role="complementary" aria-labelledby="panel-title" tabindex="-1">`. Each opened panel updates `<h2 id="panel-title">`.
+6. Detail panel — non-modal pattern (decided; see Open questions):
+   - `<aside id="detail-panel" role="complementary" aria-labelledby="panel-title" tabindex="-1">`. Each opened panel updates `<h2 id="panel-title">`.
    - On open: move focus into the panel heading. Set `aria-expanded="true"` on the trigger node.
    - On close (`Escape`, click `✕`, click another node): return focus to the previous trigger.
    - Mark `aria-hidden="true"` while the panel is in `.hidden` state, otherwise screen readers still see stale content.
    - Close button: `aria-label="Close details"`.
-7. Legend: wrap items in a `<ul>` with `role="list"`; the colour swatches are decorative — already accompanied by text, so add `aria-hidden="true"` on the swatches themselves so SR doesn't read empty spans.
+7. Legend: wrap items in a `<ul>` with `role="list"`; colour swatches are decorative and already accompanied by text — add `aria-hidden="true"` on the swatches themselves so SR doesn't read empty spans.
 
 Files: `src/build-viewer.js` (mostly `generateViewerHtml` and `generateViewerCss`; small JS additions for focus return).
 
@@ -201,16 +191,17 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 
 ## Cross-cutting items
 
-- **Documentation**: a short "Accessibility" section in `docs/README.md` describing the keyboard shortcuts, screen reader recommendations, and known limitations
-- **Index page** (`src/build-index.js`): apply the same theme tokens and skip link
-- **Per-map ID stability**: roving tabindex assumes node IDs are stable across renders — they are, per the regenerate-merge logic in `buildViewer`
+- **Contrast verification** (carried over from Phase 1): the Phase 1 light palette is a first cut. Manually open a generated map in both themes, run axe / Stark / Polypane contrast checks across the eleven node types and eleven edge types, and adjust any token that fails 4.5:1 (text) or 3:1 (UI/non-text). If many adjustments are needed, capture the measured values in `docs/plans/accessibility-improvements-contrast.md`. Outstanding.
+- **Index page** (`src/build-index.js`): apply the same theme tokens and skip link. Outstanding — Phase 1 only touched `build-viewer.js`, so the maps-index page is still dark-only.
+- **Documentation**: a short "Accessibility" section in `docs/README.md` describing keyboard shortcuts, screen reader recommendations, and known limitations. Add at the end of Phase 5.
+- **Per-map ID stability**: roving tabindex (Phase 3) assumes node IDs are stable across renders — they are, per the regenerate-merge logic in `buildViewer`. No action; just a note.
 
 ## Open questions
 
 1. Should arrow-key neighbour traversal be **spatial** (nearest by coordinates) or **graph-structural** (next by edge)? Spatial is more intuitive when zoomed out; structural is more useful when exploring a flow. Proposal: spatial by default, with `Tab`/`Shift+Tab` (or `]`/`[`) for "next outgoing target / previous source" once a node is focused. Decide before Phase 3 starts.
-2. Detail panel as `<dialog>` (modal) or non-modal `<aside>`? Today it coexists with the canvas, which suggests non-modal. We'll keep non-modal but ensure focus management — this is the assumption above.
+2. ~~Detail panel as `<dialog>` (modal) or non-modal `<aside>`?~~ **Decided: non-modal `<aside role="complementary">`**, since the panel coexists with the canvas. Phase 2 implements this.
 3. Do we add an end-to-end a11y test (axe-core via Playwright over a generated map) or rely on manual passes? Cheap to add later; defer for now unless the user wants it bundled.
 
-## Suggested first PR
+## Next PR
 
-Phase 1 + the skip link + toolbar role + search label from Phase 2. This delivers light mode and the first axe-passing pass without touching the SVG interaction model. Ships in a day; everything else builds on the tokens.
+Phase 2: skip link, `role="toolbar"`, search label, `aria-live` on `#node-count`, and the detail-panel focus management (open → move focus to heading; close → return to trigger; `aria-hidden` while collapsed). No SVG interaction changes yet — those are Phase 3. Self-contained PR; ships in a day.
