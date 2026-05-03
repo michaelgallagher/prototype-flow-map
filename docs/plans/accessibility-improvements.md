@@ -1,8 +1,8 @@
 # Accessibility improvements for the flow-map viewer
 
-Status: Phases 1, 2 & 3 shipped (2026-05-01); Phase 4 next
+Status: Phases 1–4 shipped (Phase 4 on 2026-05-03); Phase 5 next
 Owner: tbd
-Last updated: 2026-05-01
+Last updated: 2026-05-03
 
 ## Goal
 
@@ -53,13 +53,14 @@ Updated after Phase 1. ✅ = closed by Phase 1, ⬜ = still outstanding.
 
 - ✅ Theme: ~~dark-only, hex literals throughout~~ — tokenised; light theme via `data-theme="light"`; reduced-motion and forced-colours queries in place (Phase 1)
 - ⬜ SVG: `<svg>` has no `role`, `aria-label`, or instructions (the *outer* `<svg>` element; the inner node-container now carries `role="listbox"` from Phase 3)
+- ✅ Status messages: ~~no live region for save/reset/move outcomes~~ — dedicated `#a11y-status` polite region added (Phase 4)
 - ✅ Nodes: ~~`<g class="node-group">` is not focusable; click/hover/drag/contextmenu are mouse-only~~ — each node is now `role="option"` with composed `aria-label`, roving tabindex, spatial arrow-key navigation, structural `]`/`[` traversal, Home/End/Enter/Space, focus-driven `highlightConnections`, and auto-pan into view (Phase 3)
 - ⬜ Edges: no semantics; colour-only differentiation in some cases (most already use dash patterns)
 - ✅ Toolbar: ~~container has no `role="toolbar"`~~ — `role="toolbar" aria-label="Flow map controls"` added; `aria-pressed` on theme/thumbnail/screenshot toggles; `aria-label` on icon-only zoom buttons (Phase 2)
 - ✅ Search: ~~uses placeholder as label~~ — `<label class="visually-hidden" for="search">` added; same for hub-filter and provenance-filter selects (Phase 2)
 - ✅ Detail panel: ~~slides in with no focus management~~ — now `<aside role="complementary" aria-labelledby="panel-title" aria-hidden="…" tabindex="-1">`; opens with focus moved to heading; closes on Esc with focus returned to last trigger (Phase 2)
-- ⬜ Context menu (right-click on node): div-based, no `role="menu"`, no arrow-key navigation, mouse-only invocation
-- ⬜ Hidden-list popover: same — no focus trap, no list semantics
+- ✅ Context menu (right-click on node): ~~div-based, no `role="menu"`, no arrow-key navigation, mouse-only invocation~~ — now `role="menu"` with `role="menuitem"` buttons; opens via right-click, Shift+F10, the ContextMenu key, or the new `#node-actions-btn` toolbar button; arrow keys move focus, Enter/Space activate, Esc/Tab close and return focus to the originating node (Phase 4)
+- ✅ Hidden-list popover: ~~no focus trap, no list semantics~~ — now `role="dialog" aria-modal="true" aria-labelledby="hlp-title"`; first focus lands on the first restorable item / Restore-all; Tab cycles inside; Esc closes and restores focus to the "Show hidden" button (Phase 4)
 - ✅ Legend: ~~visual only~~ — `<aside aria-labelledby>` with `<ul role="list">`; swatches `aria-hidden` since the text already names the type (Phase 2)
 - ✅ Status: ~~`#node-count` updates silently~~ — now `aria-live="polite" aria-atomic="true"` (Phase 2)
 - ✅ Reduced motion / forced colours / high-contrast: ~~not honoured~~ — both media queries shipped in Phase 1
@@ -164,28 +165,33 @@ Files: `src/build-viewer.js` (`generateViewerJs` — node rendering, key handler
 
 Definition of done: a sighted keyboard user can reach every visible node, open its details, traverse to any neighbour, and the focused node is always visible. NVDA / VoiceOver announce label + role + selected state on each move.
 
-### Phase 4 — Pointer-free equivalents for power features
+### Phase 4 — Pointer-free equivalents for power features ✅ SHIPPED 2026-05-03
 
-Cover the features that are currently mouse-only.
+What landed in `src/build-viewer.js`:
 
-1. **Zoom & pan keyboard shortcuts** (when focus is on the canvas / a node):
-   - `+` / `=` → zoom in; `-` / `_` → zoom out; `0` → fit to screen
-   - When nothing is selected, arrow keys pan; when a node is selected they navigate (above)
-   - Document the bindings in a help dialog opened via `?` or a `Keyboard shortcuts` toolbar button
-2. **Drag-to-reposition alternative** (WCAG 2.5.7):
-   - Per focused node: pressing `M` enters "move mode" — visual indicator on the node, status announcement "Move mode for X. Use arrow keys to nudge, Enter to commit, Escape to cancel."
-   - Arrow keys nudge by 8px (Shift+Arrow by 32px). Enter commits → calls existing position save. Escape reverts.
-   - Persist via the existing `manualPositions` machinery.
-3. **Context menu**:
-   - Trigger via `Shift+F10`, `ContextMenu` key, or the existing right-click. Also reachable via a "More actions" button that appears on focus, for users without those keys.
-   - Convert the menu to `role="menu"` with `<button role="menuitem">` items; arrow keys to move; Enter/Space to activate; Esc to close; focus returns to the originating node.
-   - Trap focus inside the menu while open.
-4. **Hidden-list popover**:
-   - Same conversion: `role="dialog" aria-modal="true" aria-labelledby"…"` with focus trap; or non-modal `role="region"` with focus management. Modal is simpler given its small surface.
-   - First focus → first restorable item; Esc → close and return focus to "Show hidden" button.
-5. **Layout-save / reset** announcements: route messages through the live region added in Phase 2.
+- **Keyboard shortcuts toolbar button** (`#keyboard-help-btn`, `aria-haspopup="dialog"`) and a `?` global shortcut both open the modal `#keyboard-help-dialog` (`role="dialog" aria-modal="true" aria-labelledby="kb-help-title"`). The dialog overlays a dimmer that closes on click; Esc closes; Tab is trapped between the close button and the dialog. Initial focus moves to `#kb-help-close`. Reopening returns focus to the toolbar trigger. Reduced-motion is inherited from the global rule.
+- **Zoom shortcuts**: `+`/`=` zoom in, `-`/`_` zoom out, `0` fits to screen — wired in the document-level keydown handler. Skipped when the target is an `<input>` / `<select>` / `<textarea>` / `[contenteditable]`, or when the help dialog is open, or when focus is inside the menu / hidden-list popover. Fit announces "Fit to screen." via the live region.
+- **Arrow-key pan when no node is focused**: same handler. 30px step, 80px with Shift. When focus is on a `.node-group`, the listbox handler runs first and consumes the arrow keys for spatial navigation (Phase 3 behaviour preserved).
+- **Move mode (WCAG 2.5.7)**: pressing `M` on a focused node calls `enterMoveMode(node)`, which records `{ originalX, originalY }`, applies `.node-rect--move-mode` (a dashed warn-coloured pulsing stroke) and `aria-grabbed="true"`, then announces "Move mode for X. Use arrow keys to nudge, Enter to commit, Escape to cancel." `handleMoveModeKeydown` then intercepts arrows (8px nudge, 32px with Shift), Enter (commits via the existing `manualPositions` + `savePositions()` and dirty-state on `#save-layout-btn` in serve mode), and Esc (reverts to `originalX/Y` and `updateConnectedEdges`). Move mode swallows other keys to prevent accidental selection moves or shortcut activation.
+- **Accessible context menu**: `showNodeContextMenu` now sets `role="menu"`, `aria-label="Actions for <label>"`, and gives each `.ncm-item` `role="menuitem"` with roving `tabindex`. New keyboard triggers — `Shift+F10`, the `ContextMenu` key, and a toolbar `#node-actions-btn` (`aria-haspopup="menu"`, disabled when no node is focused) — call `openNodeMenuForFocused()` which positions the menu under the node and focuses the first item. `handleNodeMenuKeydown` handles Up/Down/Home/End to move focus, Enter/Space to activate, and Esc/Tab to close. The originating element (node group or toolbar button) is recorded as `_nodeMenuTrigger` and re-focused on close.
+- **Accessible hidden-list popover**: now mounted as `role="dialog" aria-modal="true" aria-labelledby="hlp-title"` with a labelled title (`"<N> hidden"`). `handleHiddenPopoverKeydown` provides a Tab focus-trap and Esc close that returns focus to `#show-all-btn`. Each Restore button has an explicit `aria-label="Restore <label>"` so the AT context isn't lost when the popover updates in place.
+- **Live-region announcements**: a dedicated `#a11y-status` (`role="status" aria-live="polite" aria-atomic="true"`, visually-hidden) carries transient feedback. `announceStatus(msg)` is wired into Save layout success/failure, Reset positions, Fit to screen, and the move-mode lifecycle. The `#node-count` region kept its own live behaviour for filter / search summaries (Phase 2).
 
-Definition of done: every action available from the right-click menu and drag interaction can be performed with the keyboard alone; documented in the help dialog.
+Smoke tests (both new):
+
+- `scripts/smoke-test-phase4.js` — 66 static asserts over the emitted `index.html`, `styles.css`, and `viewer.js`.
+- `scripts/smoke-test-phase4-runtime.js` — 16 Playwright/Chromium asserts: page loads with no JS errors, `?` opens / Esc closes the dialog with focus management, `+`/`-`/`0` mutate the SVG transform, `M` enters move mode (with class + `aria-grabbed`), arrows nudge, Esc reverts, Enter commits, `Shift+F10` opens `role="menu"` and Esc closes. Verified against `demonhsapp2` and `breast-screening` fixtures.
+
+Decisions worth recording:
+
+- The plan called for a "More actions" button that appears on focus. Implemented as a persistent `#node-actions-btn` in the toolbar — disabled until a node has focus, so its enabled state is the on-focus signal. Simpler than injecting an SVG-anchored chip per render and doesn't bloat the per-node DOM.
+- Help dialog initial focus lands on the close button (the only meaningful interactive element inside) rather than the dialog itself. Tab cycles between the close button and the dialog body; the dialog's `tabindex="-1"` is only used as a fallback if the close button is unreachable.
+- The popover's "modal" framing is a small abuse — visually it's a popover, not an overlay — but `aria-modal="true"` lines up with the focus-trap behaviour and announces correctly in NVDA/VoiceOver. Acceptable trade-off given the small surface area.
+
+Out of scope (deferred to Phase 5 or later):
+
+- Manual NVDA / VoiceOver pass — still pending. Move-mode and the Phase 3 listbox semantics are the highest-value targets for a real-screen-reader pass before Phase 5.
+- Outline view (Phase 5).
 
 ### Phase 5 — Screen reader-friendly outline view
 
@@ -208,7 +214,11 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 ## Cross-cutting items
 
 - **Contrast verification** (carried over from Phase 1): the Phase 1 light palette is a first cut. A scheduled remote agent (`trig_01CsHP1K7Jk8QTzY7zvZziWm`, fires 2026-05-06T09:00 UTC) will run axe + a per-token contrast measurement across both themes against the smallest fixture under `flow-map-output/maps/` and post the results to `docs/plans/accessibility-improvements-contrast.md` via PR. Token adjustments will be a separate PR after that report lands.
-- **Manual screen-reader pass** (new, after Phase 2): tab through a generated map with NVDA on Windows or VoiceOver on macOS, verify every chrome control and panel announces correctly, capture any rough edges before Phase 3 introduces SVG keyboard navigation.
+- **Manual screen-reader pass** — TODO, still outstanding. Originally scoped after Phase 2; deferred again through Phases 3 and 4. Tab through a generated map with NVDA on Windows and VoiceOver on macOS and verify:
+  - Toolbar controls, search, hub/provenance filters, theme toggle, panel open/close, and skip link (Phase 2)
+  - Listbox semantics: roving tabindex, composed `aria-label`, spatial arrows, `]`/`[` structural traversal, Home/End, focus-driven highlight (Phase 3)
+  - Move mode start/commit/cancel announcements, accessible context menu (Shift+F10 / ContextMenu / `#node-actions-btn`), hidden-list popover focus trap, help dialog, and the `#a11y-status` live region (Phase 4)
+  Capture rough edges into a follow-up section before Phase 5 ships, since the outline view in Phase 5 changes the AT story significantly. **Do not schedule a remote agent for this — it is a hands-on task.**
 - **Index page** (`src/build-index.js`): apply the same theme tokens and skip link. Outstanding — Phase 1 only touched `build-viewer.js`, so the maps-index page is still dark-only.
 - **Documentation**: a short "Accessibility" section in `docs/README.md` describing keyboard shortcuts, screen reader recommendations, and known limitations. Add at the end of Phase 5.
 - **Per-map ID stability**: roving tabindex (Phase 3) assumes node IDs are stable across renders — they are, per the regenerate-merge logic in `buildViewer`. No action; just a note.
@@ -221,6 +231,8 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 
 ## Next PR
 
-Phase 4: pointer-free equivalents for power features. Wire keyboard shortcuts for zoom/pan/fit, give the drag-to-reposition feature a "move mode" alternative (M to enter, arrows to nudge, Enter to commit, Escape to cancel), convert the right-click context menu and hidden-list popover into proper `role="menu"` / `role="dialog"` widgets with focus traps, and add a `?`-triggered keyboard-shortcuts help dialog. Also do the manual NVDA / VoiceOver pass that was deferred from Phase 2 to validate Phase 3's listbox semantics in real screen readers.
+Phase 5: screen-reader-friendly outline view. Add a "View as outline" toolbar toggle that hides the SVG and reveals a `<nav>`-based heading + `<ul>` representation grouped by `layoutRank` (or hub), with each item linking to the existing detail panel so the data view is shared. Render the outline (visually hidden) alongside the SVG so AT and search engines always see a navigable text representation.
 
-After Phase 4 lands, Phase 5 (screen-reader-friendly outline view) is the last major chunk before the index page and docs catch up.
+The manual NVDA / VoiceOver pass remains outstanding (see Cross-cutting items). Treat it as a separate task — it does not block Phase 5, but Phase 5 should not ship without it being scheduled. No remote agent for this: it requires a real screen reader on real hardware.
+
+After Phase 5, the only remaining cross-cutting work is the contrast-token tightening (audit report due 2026-05-06), the maps-index page (`build-index.js`), and the Accessibility section of `docs/README.md`.

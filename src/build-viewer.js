@@ -173,13 +173,49 @@ function generateViewerHtml(
       </select>
       <label class="visually-hidden" for="search">Search pages</label>
       <input type="text" id="search" placeholder="Search pages..." />
-      <button id="show-all-btn" type="button" onclick="showHiddenListPopover()" style="display:none">Show hidden (0)</button>
+      <button id="show-all-btn" type="button" onclick="showHiddenListPopover()" aria-haspopup="dialog" aria-expanded="false" style="display:none">Show hidden (0)</button>
+      <button id="node-actions-btn" type="button" onclick="openFocusedNodeMenu()" aria-haspopup="menu" aria-expanded="false" disabled title="Open actions for the focused node (Shift+F10)">Node actions</button>
       <button id="reset-positions-btn" type="button" onclick="resetPositions()">Reset positions</button>
       <button id="save-layout-btn" type="button" onclick="saveLayout()" style="display:none">Save layout</button>
+      <button id="keyboard-help-btn" type="button" onclick="openKeyboardHelp()" aria-haspopup="dialog" aria-expanded="false" title="Keyboard shortcuts (press ?)">Keyboard shortcuts</button>
     </div>
   </div>
+  <div id="a11y-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="canvas-container" tabindex="-1">
     <svg id="flow-svg"></svg>
+  </div>
+  <div id="keyboard-help-overlay" class="kb-help-overlay" hidden></div>
+  <div id="keyboard-help-dialog" class="kb-help-dialog" role="dialog" aria-modal="true" aria-labelledby="kb-help-title" hidden tabindex="-1">
+    <div class="kb-help-header">
+      <h2 id="kb-help-title">Keyboard shortcuts</h2>
+      <button id="kb-help-close" type="button" aria-label="Close keyboard shortcuts">✕</button>
+    </div>
+    <div class="kb-help-body">
+      <h3>Navigation</h3>
+      <dl class="kb-help-list">
+        <dt><kbd>Tab</kbd></dt><dd>Move between toolbar, graph, and panels</dd>
+        <dt><kbd>Arrow</kbd> keys</dt><dd>On a node: move to spatial neighbour; otherwise: pan the canvas</dd>
+        <dt><kbd>]</kbd> / <kbd>[</kbd></dt><dd>Follow outgoing / incoming connection</dd>
+        <dt><kbd>Home</kbd> / <kbd>End</kbd></dt><dd>First / last node by visit order</dd>
+        <dt><kbd>Enter</kbd> or <kbd>Space</kbd></dt><dd>Open the focused node's details</dd>
+      </dl>
+      <h3>Zoom &amp; view</h3>
+      <dl class="kb-help-list">
+        <dt><kbd>+</kbd> or <kbd>=</kbd></dt><dd>Zoom in</dd>
+        <dt><kbd>−</kbd> or <kbd>_</kbd></dt><dd>Zoom out</dd>
+        <dt><kbd>0</kbd></dt><dd>Fit to screen</dd>
+      </dl>
+      <h3>Editing</h3>
+      <dl class="kb-help-list">
+        <dt><kbd>M</kbd></dt><dd>Enter move mode for the focused node (arrows nudge, <kbd>Shift</kbd>+arrows step further, <kbd>Enter</kbd> commits, <kbd>Esc</kbd> cancels)</dd>
+        <dt><kbd>Shift</kbd>+<kbd>F10</kbd> or <kbd>ContextMenu</kbd></dt><dd>Open node actions menu (also: Node actions toolbar button)</dd>
+      </dl>
+      <h3>Dialogs &amp; menus</h3>
+      <dl class="kb-help-list">
+        <dt><kbd>Esc</kbd></dt><dd>Close the open menu, popover, or panel; cancel move mode</dd>
+        <dt><kbd>?</kbd></dt><dd>Open this help dialog</dd>
+      </dl>
+    </div>
   </div>
   <aside id="legend" aria-labelledby="legend-title">
     <h3 id="legend-title">Edge types</h3>
@@ -1041,6 +1077,152 @@ body {
   color: var(--accent-soft);
 }
 
+/* Move-mode indicator on the focused node (Phase 4). Distinct stroke
+ * + dashed outline so a sighted keyboard user can tell move mode from
+ * the regular focus state. The pattern is reset by reduced-motion via
+ * the global rule below. */
+.node-rect--move-mode {
+  stroke: var(--warn) !important;
+  stroke-width: 3 !important;
+  stroke-dasharray: 6 4 !important;
+  animation: flowmap-move-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes flowmap-move-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.45; }
+}
+
+/* role="menuitem" / role="menu" — keep the existing visual style but
+ * add a focus ring so keyboard users see the active item. */
+.node-context-menu[role="menu"] { outline: none; }
+.node-context-menu .ncm-item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+  background: var(--border-popover-2);
+}
+
+/* Hidden-list popover dialog header */
+.hidden-list-popover .hlp-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.hidden-list-popover .hlp-restore-all:focus-visible,
+.hidden-list-popover .hlp-restore:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Keyboard-shortcuts help dialog (Phase 4). Modal — paints an overlay
+ * that dims the canvas and a centred card with the shortcut tables. */
+.kb-help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1100;
+}
+
+.kb-help-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1101;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+}
+
+.kb-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-help-header h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+#kb-help-close {
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+#kb-help-close:hover { color: var(--text); }
+#kb-help-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.kb-help-body {
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.kb-help-body h3 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: var(--text-meta-key);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.kb-help-body h3:first-child { margin-top: 0; }
+
+.kb-help-list {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  column-gap: 16px;
+  row-gap: 6px;
+  margin: 0;
+}
+
+.kb-help-list dt {
+  font-weight: 500;
+  color: var(--text-meta-key);
+}
+
+.kb-help-list dd {
+  margin: 0;
+  color: var(--text-meta-value);
+}
+
+.kb-help-list kbd {
+  display: inline-block;
+  background: var(--surface-3);
+  border: 1px solid var(--border-popover-2);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-strong);
+  line-height: 1.4;
+}
+
+#node-actions-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Reduced motion: kill the panel slide and edge/node opacity transitions
  * for users with vestibular sensitivity. WCAG 2.3.3 (AAA) but harmless. */
 @media (prefers-reduced-motion: reduce) {
@@ -1079,6 +1261,18 @@ body {
   .node-group:focus-visible .node-rect,
   .node-rect--focused {
     stroke: Highlight !important; stroke-width: 3 !important;
+  }
+  .node-rect--move-mode {
+    stroke: Mark !important; stroke-width: 3 !important;
+  }
+  .kb-help-dialog,
+  .node-context-menu,
+  .hidden-list-popover {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
+  }
+  .kb-help-overlay { background: rgba(0, 0, 0, 0.5); }
+  .kb-help-list kbd {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
   }
 }
 `;
@@ -1174,6 +1368,14 @@ function generateViewerJs() {
   // spatial navigation and on filter/render cycles that drop the node.
   let focusedNodeId = null;
   let siblingCursor = null;
+
+  // Move mode (Phase 4 — keyboard alternative to drag-to-reposition).
+  // When active, arrow keys nudge the focused node instead of moving
+  // selection. Enter commits, Escape reverts to original{X,Y}.
+  let moveMode = null;
+  // Help-dialog open flag — when true, document-level shortcuts are
+  // suppressed so keys land in the dialog's focus trap.
+  let helpDialogOpen = false;
   const prefersReducedMotion = !!(window.matchMedia &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const posStorageKey = 'flowmap-positions-' + storageSuffix;
@@ -1957,18 +2159,36 @@ function generateViewerJs() {
     focusedNodeId = nodeId;
     targetGroup.focus({ preventScroll: true });
     ensureNodeVisible(layoutNodes[nodeId]);
+    updateNodeActionsButton();
+  }
+
+  // Reflect "is a node currently focused?" on the toolbar button so
+  // keyboards without Shift+F10 / ContextMenu can still open the menu.
+  function updateNodeActionsButton() {
+    const btn = document.getElementById('node-actions-btn');
+    if (!btn) return;
+    const hasFocus = !!(focusedNodeId && layoutNodes[focusedNodeId]);
+    btn.disabled = !hasFocus;
+    btn.setAttribute('aria-expanded', _nodeMenuEl ? 'true' : 'false');
   }
 
   // Keyboard handler for the listbox. Spatial movement on the four
   // arrow keys, structural movement on ]/[ (with Shift+]/[), Enter or
   // Space to open the detail panel, Home/End to jump by visit order.
   // Tab is left to the browser so users can leave the listbox.
+  // M enters move mode; Shift+F10 / ContextMenu open the actions menu.
   function handleNodeKeydown(e) {
     const targetGroup = e.target.closest('.node-group');
     if (!targetGroup) return;
     const nodeId = targetGroup.dataset.nodeId;
     const node = layoutNodes[nodeId];
     if (!node) return;
+
+    // Move mode hijacks the listbox keys for the duration.
+    if (moveMode && moveMode.nodeId === nodeId) {
+      handleMoveModeKeydown(e);
+      return;
+    }
 
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
       e.preventDefault();
@@ -2006,6 +2226,16 @@ function generateViewerJs() {
       if (id) { e.preventDefault(); siblingCursor = null; focusNode(id); }
       return;
     }
+    if (e.key === 'm' || e.key === 'M') {
+      e.preventDefault();
+      enterMoveMode(node);
+      return;
+    }
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      e.preventDefault();
+      openNodeMenuForFocused();
+      return;
+    }
   }
 
   // Apply the roving tabindex to the freshly-rendered listbox after
@@ -2013,7 +2243,10 @@ function generateViewerJs() {
   // gone (filtered out, hidden, or never set).
   function applyRovingTabindex() {
     const groups = document.querySelectorAll('.node-group');
-    if (groups.length === 0) return;
+    if (groups.length === 0) {
+      updateNodeActionsButton();
+      return;
+    }
     if (!focusedNodeId || !layoutNodes[focusedNodeId]) {
       focusedNodeId = pickInitialFocusNodeId();
       siblingCursor = null;
@@ -2023,6 +2256,7 @@ function generateViewerJs() {
       g.setAttribute('tabindex', isFocus ? '0' : '-1');
       g.setAttribute('aria-selected', isFocus ? 'true' : 'false');
     });
+    updateNodeActionsButton();
   }
 
   // Render the graph to SVG
@@ -2616,51 +2850,183 @@ function generateViewerJs() {
     render();
   };
 
-  // Context menu (right-click on node)
+  // ===== Status announcements =====
+  // Single live region for transient messages (save success, move-mode
+  // start/commit/cancel, etc). Distinct from #node-count, which is
+  // overwritten on every render. Resets after a beat so the same
+  // message can be announced twice in a row.
+  let _statusClearTimer = null;
+  function announceStatus(msg) {
+    const region = document.getElementById('a11y-status');
+    if (!region) return;
+    clearTimeout(_statusClearTimer);
+    region.textContent = '';
+    // Schedule the write a tick later so AT pick up the change.
+    requestAnimationFrame(() => { region.textContent = msg; });
+    _statusClearTimer = setTimeout(() => { region.textContent = ''; }, 4000);
+  }
+
+  // ===== Context menu (Phase 4 — accessible) =====
+  // role="menu" with role="menuitem" buttons; arrow keys move focus,
+  // Enter/Space activate, Esc and Tab close. Focus is returned to the
+  // element that triggered the menu.
   let _nodeMenuEl = null;
-  function showNodeContextMenu(clientX, clientY, node) {
+  let _nodeMenuTrigger = null;
+  let _nodeMenuNodeId = null;
+
+  function showNodeContextMenu(clientX, clientY, node, opts) {
     hideNodeContextMenu();
     hideHiddenListPopover();
+    const fromKeyboard = !!(opts && opts.fromKeyboard);
+    const trigger = (opts && opts.trigger) || document.activeElement;
     const descendantCount = collectDescendants(node.id).size;
     const menu = document.createElement('div');
     menu.className = 'node-context-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Actions for ' + (node.label || node.id));
     menu.style.left = clientX + 'px';
     menu.style.top = clientY + 'px';
-    let html = '<button class="ncm-item" data-action="hide" data-node-id="' + escapeHtml(node.id) + '">Hide node</button>';
+    let html = '<button type="button" class="ncm-item" role="menuitem" tabindex="-1" data-action="hide" data-node-id="' + escapeHtml(node.id) + '">Hide node</button>';
     if (descendantCount > 0) {
-      html += '<button class="ncm-item" data-action="hide-subgraph" data-node-id="' + escapeHtml(node.id) + '">Hide subgraph (' + descendantCount + ' descendant' + (descendantCount === 1 ? '' : 's') + ')</button>';
+      html += '<button type="button" class="ncm-item" role="menuitem" tabindex="-1" data-action="hide-subgraph" data-node-id="' + escapeHtml(node.id) + '">Hide subgraph (' + descendantCount + ' descendant' + (descendantCount === 1 ? '' : 's') + ')</button>';
     }
     menu.innerHTML = html;
     document.body.appendChild(menu);
     _nodeMenuEl = menu;
+    _nodeMenuTrigger = trigger;
+    _nodeMenuNodeId = node.id;
     // Position adjustment if menu would overflow viewport
     const rect = menu.getBoundingClientRect();
     if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
     if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
-    // Click handlers
+    // Click handlers — activate item then close.
     menu.addEventListener('click', (e) => {
       const btn = e.target.closest('.ncm-item');
       if (!btn) return;
-      const action = btn.dataset.action;
-      const nodeId = btn.dataset.nodeId;
-      if (action === 'hide') hideNode(nodeId);
-      else if (action === 'hide-subgraph') hideSubgraph(nodeId);
+      activateMenuItem(btn);
+    });
+    // Keyboard handler — arrow movement, Enter/Space activate, Esc close.
+    menu.addEventListener('keydown', handleNodeMenuKeydown);
+    // Reflect open state on toolbar button.
+    const btn = document.getElementById('node-actions-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'true');
+    // Move focus to the first item when opened from the keyboard. For
+    // mouse-opened menus we leave focus alone but still expose tabindex
+    // so AT can reach the items.
+    const items = menu.querySelectorAll('.ncm-item');
+    if (items.length > 0) {
+      items[0].setAttribute('tabindex', '0');
+      if (fromKeyboard) items[0].focus({ preventScroll: true });
+    }
+  }
+
+  function activateMenuItem(btn) {
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const nodeId = btn.dataset.nodeId;
+    if (action === 'hide') hideNode(nodeId);
+    else if (action === 'hide-subgraph') hideSubgraph(nodeId);
+  }
+
+  function handleNodeMenuKeydown(e) {
+    if (!_nodeMenuEl) return;
+    const items = [..._nodeMenuEl.querySelectorAll('.ncm-item')];
+    if (items.length === 0) return;
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = items[(idx + 1 + items.length) % items.length];
+      items.forEach(b => b.setAttribute('tabindex', '-1'));
+      next.setAttribute('tabindex', '0');
+      next.focus();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prev = items[(idx - 1 + items.length) % items.length];
+      items.forEach(b => b.setAttribute('tabindex', '-1'));
+      prev.setAttribute('tabindex', '0');
+      prev.focus();
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      items.forEach(b => b.setAttribute('tabindex', '-1'));
+      items[0].setAttribute('tabindex', '0');
+      items[0].focus();
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      items.forEach(b => b.setAttribute('tabindex', '-1'));
+      items[items.length - 1].setAttribute('tabindex', '0');
+      items[items.length - 1].focus();
+      return;
+    }
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      activateMenuItem(document.activeElement);
+      return;
+    }
+    if (e.key === 'Escape' || e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      hideNodeContextMenu({ returnFocus: true });
+      return;
+    }
+  }
+
+  function hideNodeContextMenu(opts) {
+    if (!_nodeMenuEl) return;
+    _nodeMenuEl.remove();
+    _nodeMenuEl = null;
+    const trigger = _nodeMenuTrigger;
+    _nodeMenuTrigger = null;
+    const btn = document.getElementById('node-actions-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (opts && opts.returnFocus && trigger && document.body.contains(trigger)
+        && typeof trigger.focus === 'function') {
+      try { trigger.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    }
+    _nodeMenuNodeId = null;
+  }
+
+  // Open the actions menu for the currently-focused node, positioned
+  // near the node so sighted keyboard users see it next to its target.
+  function openNodeMenuForFocused() {
+    if (!focusedNodeId || !layoutNodes[focusedNodeId]) return;
+    const node = layoutNodes[focusedNodeId];
+    const group = document.querySelector(
+      '.node-group[data-node-id="' + CSS.escape(node.id) + '"]');
+    if (!group) return;
+    const r = group.getBoundingClientRect();
+    showNodeContextMenu(r.left + r.width / 2, r.bottom, node, {
+      fromKeyboard: true,
+      trigger: group,
     });
   }
+  window.openFocusedNodeMenu = openNodeMenuForFocused;
 
-  function hideNodeContextMenu() {
-    if (_nodeMenuEl) { _nodeMenuEl.remove(); _nodeMenuEl = null; }
-  }
-
-  // Hidden-list popover (toolbar button)
+  // ===== Hidden-list popover (Phase 4 — accessible dialog) =====
+  // role="dialog" aria-modal="true". Focus is moved into the dialog on
+  // open, trapped while it remains, and returned to the toolbar trigger
+  // on close. The popover is small enough that "modal" semantics work
+  // even though the canvas stays visually behind it.
   let _hiddenPopoverEl = null;
+  let _hiddenPopoverTrigger = null;
+
   window.showHiddenListPopover = function() {
     hideNodeContextMenu();
-    if (_hiddenPopoverEl) { hideHiddenListPopover(); return; }
+    if (_hiddenPopoverEl) { hideHiddenListPopover({ returnFocus: true }); return; }
     const btn = document.getElementById('show-all-btn');
     if (!btn) return;
+    _hiddenPopoverTrigger = btn;
     const pop = document.createElement('div');
     pop.className = 'hidden-list-popover';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-modal', 'true');
+    pop.setAttribute('aria-labelledby', 'hlp-title');
+    pop.setAttribute('tabindex', '-1');
     document.body.appendChild(pop);
     _hiddenPopoverEl = pop;
     updateHiddenListPopover();
@@ -2668,6 +3034,12 @@ function generateViewerJs() {
     const r = btn.getBoundingClientRect();
     pop.style.left = Math.max(8, r.right - pop.offsetWidth) + 'px';
     pop.style.top = (r.bottom + 4) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    pop.addEventListener('keydown', handleHiddenPopoverKeydown);
+    // Move focus to the first interactive element (Restore all when
+    // hidden nodes exist; otherwise the dialog itself).
+    const firstFocus = pop.querySelector('.hlp-restore-all, .hlp-restore') || pop;
+    try { firstFocus.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
   };
 
   function updateHiddenListPopover() {
@@ -2676,8 +3048,8 @@ function generateViewerJs() {
     const labelById = {};
     graph.nodes.forEach(n => { labelById[n.id] = n.label; });
     let html = '<div class="hlp-header">';
-    html += '<span>' + ids.length + ' hidden</span>';
-    html += '<button class="hlp-restore-all" onclick="showAllNodes()">Restore all</button>';
+    html += '<span id="hlp-title" class="hlp-title">' + ids.length + ' hidden</span>';
+    html += '<button type="button" class="hlp-restore-all" onclick="showAllNodes()">Restore all</button>';
     html += '</div>';
     if (ids.length === 0) {
       html += '<div class="hlp-empty">Nothing hidden.</div>';
@@ -2686,7 +3058,7 @@ function generateViewerJs() {
       ids.forEach(id => {
         const label = labelById[id] || id;
         html += '<li><span class="hlp-label" title="' + escapeHtml(id) + '">' + escapeHtml(label) + '</span>';
-        html += '<button class="hlp-restore" data-node-id="' + escapeHtml(id) + '">Restore</button></li>';
+        html += '<button type="button" class="hlp-restore" data-node-id="' + escapeHtml(id) + '" aria-label="Restore ' + escapeHtml(label) + '">Restore</button></li>';
       });
       html += '</ul>';
     }
@@ -2697,22 +3069,303 @@ function generateViewerJs() {
     });
   }
 
-  function hideHiddenListPopover() {
-    if (_hiddenPopoverEl) { _hiddenPopoverEl.remove(); _hiddenPopoverEl = null; }
+  function handleHiddenPopoverKeydown(e) {
+    if (!_hiddenPopoverEl) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      hideHiddenListPopover({ returnFocus: true });
+      return;
+    }
+    if (e.key === 'Tab') {
+      // Focus trap: cycle through focusable items inside the dialog.
+      const focusables = _hiddenPopoverEl.querySelectorAll(
+        'button, [href], input, [tabindex]:not([tabindex="-1"])');
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   }
 
-  // Dismiss menus on outside click / Escape
+  function hideHiddenListPopover(opts) {
+    if (!_hiddenPopoverEl) return;
+    _hiddenPopoverEl.remove();
+    _hiddenPopoverEl = null;
+    const trigger = _hiddenPopoverTrigger;
+    _hiddenPopoverTrigger = null;
+    const btn = document.getElementById('show-all-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+    if (opts && opts.returnFocus && trigger && document.body.contains(trigger)
+        && typeof trigger.focus === 'function') {
+      try { trigger.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    }
+  }
+
+  // ===== Move mode (Phase 4) =====
+  // Keyboard alternative to drag-to-reposition. WCAG 2.5.7. Arrow nudges
+  // the focused node by 8px (Shift+Arrow by 32px); Enter commits the new
+  // position via the existing manualPositions machinery; Escape reverts
+  // to the recorded original{X,Y}.
+  function enterMoveMode(node) {
+    if (!node) return;
+    if (moveMode) cancelMoveMode();
+    moveMode = {
+      nodeId: node.id,
+      originalX: node.x,
+      originalY: node.y,
+    };
+    const group = document.querySelector(
+      '.node-group[data-node-id="' + CSS.escape(node.id) + '"]');
+    if (group) {
+      const rect = group.querySelector('.node-rect');
+      if (rect) rect.classList.add('node-rect--move-mode');
+      group.setAttribute('aria-grabbed', 'true');
+    }
+    announceStatus('Move mode for ' + (node.label || node.id) +
+      '. Use arrow keys to nudge, Enter to commit, Escape to cancel.');
+  }
+
+  function exitMoveModeUi() {
+    if (!moveMode) return;
+    const group = document.querySelector(
+      '.node-group[data-node-id="' + CSS.escape(moveMode.nodeId) + '"]');
+    if (group) {
+      const rect = group.querySelector('.node-rect');
+      if (rect) rect.classList.remove('node-rect--move-mode');
+      group.removeAttribute('aria-grabbed');
+    }
+  }
+
+  function commitMoveMode() {
+    if (!moveMode) return;
+    const node = layoutNodes[moveMode.nodeId];
+    if (!node) { moveMode = null; return; }
+    manualPositions[moveMode.nodeId] = { x: node.x, y: node.y };
+    savePositions();
+    if (isServeMode) {
+      hasUnsavedChanges = true;
+      const saveBtn = document.getElementById('save-layout-btn');
+      if (saveBtn) {
+        saveBtn.classList.add('save-btn--dirty');
+        saveBtn.textContent = 'Save layout *';
+      }
+    }
+    announceStatus((node.label || node.id) + ' moved.' +
+      (isServeMode ? ' Press Save layout to persist.' : ''));
+    exitMoveModeUi();
+    moveMode = null;
+  }
+
+  function cancelMoveMode() {
+    if (!moveMode) return;
+    const node = layoutNodes[moveMode.nodeId];
+    if (node) {
+      node.x = moveMode.originalX;
+      node.y = moveMode.originalY;
+      const group = document.querySelector(
+        '.node-group[data-node-id="' + CSS.escape(moveMode.nodeId) + '"]');
+      if (group) {
+        group.setAttribute('transform',
+          'translate(' + (node.x - node.width / 2) + ',' + (node.y - node.height / 2) + ')');
+      }
+      updateConnectedEdges(moveMode.nodeId);
+    }
+    announceStatus('Move cancelled.');
+    exitMoveModeUi();
+    moveMode = null;
+  }
+
+  function nudgeMoveMode(dx, dy) {
+    if (!moveMode) return;
+    const node = layoutNodes[moveMode.nodeId];
+    if (!node) return;
+    node.x += dx;
+    node.y += dy;
+    const group = document.querySelector(
+      '.node-group[data-node-id="' + CSS.escape(moveMode.nodeId) + '"]');
+    if (group) {
+      group.setAttribute('transform',
+        'translate(' + (node.x - node.width / 2) + ',' + (node.y - node.height / 2) + ')');
+    }
+    updateConnectedEdges(moveMode.nodeId);
+    ensureNodeVisible(node);
+  }
+
+  function handleMoveModeKeydown(e) {
+    const step = e.shiftKey ? 32 : 8;
+    if (e.key === 'ArrowUp')    { e.preventDefault(); nudgeMoveMode(0, -step); return; }
+    if (e.key === 'ArrowDown')  { e.preventDefault(); nudgeMoveMode(0,  step); return; }
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); nudgeMoveMode(-step, 0); return; }
+    if (e.key === 'ArrowRight') { e.preventDefault(); nudgeMoveMode( step, 0); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      commitMoveMode();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelMoveMode();
+      return;
+    }
+    // Any other key in move mode: swallow so it can't accidentally
+    // navigate selection or activate other shortcuts.
+    if (e.key !== 'Tab' && e.key !== 'Shift' && e.key !== 'Control' &&
+        e.key !== 'Alt' && e.key !== 'Meta') {
+      e.preventDefault();
+    }
+  }
+
+  // ===== Help dialog (Phase 4) =====
+  let _helpReturnFocus = null;
+  window.openKeyboardHelp = function() {
+    const dialog = document.getElementById('keyboard-help-dialog');
+    const overlay = document.getElementById('keyboard-help-overlay');
+    if (!dialog || !overlay || helpDialogOpen) return;
+    _helpReturnFocus = document.activeElement;
+    helpDialogOpen = true;
+    overlay.hidden = false;
+    dialog.hidden = false;
+    const helpBtn = document.getElementById('keyboard-help-btn');
+    if (helpBtn) helpBtn.setAttribute('aria-expanded', 'true');
+    const closeBtn = document.getElementById('kb-help-close');
+    try { (closeBtn || dialog).focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    overlay.addEventListener('click', closeKeyboardHelp, { once: true });
+    dialog.addEventListener('keydown', handleHelpDialogKeydown);
+  };
+
+  function closeKeyboardHelp() {
+    const dialog = document.getElementById('keyboard-help-dialog');
+    const overlay = document.getElementById('keyboard-help-overlay');
+    if (!dialog || !overlay || !helpDialogOpen) return;
+    overlay.hidden = true;
+    dialog.hidden = true;
+    helpDialogOpen = false;
+    dialog.removeEventListener('keydown', handleHelpDialogKeydown);
+    const helpBtn = document.getElementById('keyboard-help-btn');
+    if (helpBtn) helpBtn.setAttribute('aria-expanded', 'false');
+    if (_helpReturnFocus && document.body.contains(_helpReturnFocus) &&
+        typeof _helpReturnFocus.focus === 'function') {
+      try { _helpReturnFocus.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    }
+    _helpReturnFocus = null;
+  }
+  window.closeKeyboardHelp = closeKeyboardHelp;
+
+  function handleHelpDialogKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeKeyboardHelp();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const dialog = document.getElementById('keyboard-help-dialog');
+      if (!dialog) return;
+      const focusables = [...dialog.querySelectorAll(
+        'button, [href], input, [tabindex]:not([tabindex="-1"])')];
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === dialog)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
+
+  // ===== Global keyboard shortcuts =====
+  // Pan when nothing is focused; +/-/0 zoom; ? opens help; Esc closes
+  // open menus / panel / cancels move mode.
+  function isTypingTarget(t) {
+    return !!(t && t.matches && t.matches(
+      'input, select, textarea, [contenteditable], [contenteditable="true"]'));
+  }
+
   document.addEventListener('mousedown', (e) => {
     if (_nodeMenuEl && !_nodeMenuEl.contains(e.target)) hideNodeContextMenu();
     if (_hiddenPopoverEl && !_hiddenPopoverEl.contains(e.target)
         && !e.target.closest('#show-all-btn')) hideHiddenListPopover();
   });
+
   document.addEventListener('keydown', (e) => {
+    // Esc cascade — first whatever can be most-recently dismissed.
     if (e.key === 'Escape') {
-      hideNodeContextMenu();
-      hideHiddenListPopover();
+      if (helpDialogOpen) { closeKeyboardHelp(); return; }
+      if (moveMode) { cancelMoveMode(); return; }
+      if (_nodeMenuEl) { hideNodeContextMenu({ returnFocus: true }); return; }
+      if (_hiddenPopoverEl) { hideHiddenListPopover({ returnFocus: true }); return; }
       const panel = document.getElementById('detail-panel');
       if (panel && !panel.classList.contains('hidden')) closePanel();
+      return;
+    }
+
+    // Help dialog swallows other keys via its own focus-trap handler.
+    if (helpDialogOpen) return;
+    // While move mode is active, the listbox handler handles arrows etc.
+    if (moveMode) return;
+    // Don't intercept while the user is typing in a control.
+    if (isTypingTarget(e.target)) return;
+    // Don't fight focus traps inside the menu / popover.
+    if (_nodeMenuEl && _nodeMenuEl.contains(e.target)) return;
+    if (_hiddenPopoverEl && _hiddenPopoverEl.contains(e.target)) return;
+
+    // ? opens the help dialog (Shift+/, but accept the literal '?' too).
+    if (e.key === '?') {
+      e.preventDefault();
+      window.openKeyboardHelp();
+      return;
+    }
+
+    // Zoom shortcuts.
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      window.zoomIn();
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      window.zoomOut();
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      window.fitToScreen();
+      announceStatus('Fit to screen.');
+      return;
+    }
+
+    // Pan when no node has focus. (When a node has focus, the listbox
+    // keydown handler runs first and consumes arrow keys.)
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+        e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const onNode = e.target && e.target.closest && e.target.closest('.node-group');
+      if (onNode) return; // listbox handler will manage it
+      e.preventDefault();
+      const step = e.shiftKey ? 80 : 30;
+      if (e.key === 'ArrowUp')    transform.y += step;
+      if (e.key === 'ArrowDown')  transform.y -= step;
+      if (e.key === 'ArrowLeft')  transform.x += step;
+      if (e.key === 'ArrowRight') transform.x -= step;
+      applyTransform();
     }
   });
 
@@ -2737,8 +3390,16 @@ function generateViewerJs() {
         saveBtn.textContent = 'Save layout *';
       }
     }
+    announceStatus('Positions reset.');
     render();
   };
+
+  // Wire the keyboard-help dialog close button (no inline onclick so we
+  // don't have to thread it through escapeHtml in the markup).
+  (function wireHelpDialog() {
+    const closeBtn = document.getElementById('kb-help-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeKeyboardHelp);
+  })();
 
   // Save layout to server (serve mode only)
   window.saveLayout = async function() {
@@ -2758,6 +3419,7 @@ function generateViewerJs() {
         saveBtn.textContent = 'Layout saved \\u2713';
         saveBtn.classList.remove('save-btn--dirty');
         saveBtn.classList.add('save-btn--saved');
+        announceStatus('Layout saved.');
         setTimeout(() => {
           saveBtn.textContent = 'Save layout';
           saveBtn.classList.remove('save-btn--saved');
@@ -2769,6 +3431,7 @@ function generateViewerJs() {
     } catch(e) {
       saveBtn.textContent = 'Save failed';
       saveBtn.disabled = false;
+      announceStatus('Save failed.');
       setTimeout(() => { saveBtn.textContent = 'Save layout'; }, 2000);
     }
   };
