@@ -177,6 +177,7 @@ function generateViewerHtml(
       <button id="node-actions-btn" type="button" onclick="openFocusedNodeMenu()" aria-haspopup="menu" aria-expanded="false" disabled title="Open actions for the focused node (Shift+F10)">Node actions</button>
       <button id="reset-positions-btn" type="button" onclick="resetPositions()">Reset positions</button>
       <button id="save-layout-btn" type="button" onclick="saveLayout()" style="display:none">Save layout</button>
+      <button id="outline-toggle" type="button" onclick="toggleOutlineView()" aria-pressed="false">View as outline</button>
       <button id="keyboard-help-btn" type="button" onclick="openKeyboardHelp()" aria-haspopup="dialog" aria-expanded="false" title="Keyboard shortcuts (press ?)">Keyboard shortcuts</button>
     </div>
   </div>
@@ -184,6 +185,7 @@ function generateViewerHtml(
   <div id="canvas-container" tabindex="-1">
     <svg id="flow-svg"></svg>
   </div>
+  <nav id="flow-outline" aria-labelledby="outline-heading"></nav>
   <div id="keyboard-help-overlay" class="kb-help-overlay" hidden></div>
   <div id="keyboard-help-dialog" class="kb-help-dialog" role="dialog" aria-modal="true" aria-labelledby="kb-help-title" hidden tabindex="-1">
     <div class="kb-help-header">
@@ -615,6 +617,111 @@ body {
 }
 
 #flow-svg:active { cursor: grabbing; }
+
+/* Outline view — Phase 5.
+ * Visually hidden (but in the AT tree) when SVG view is active so screen
+ * readers and search engines always have a navigable text representation.
+ * Becomes a full scrollable panel when .outline-active is set. */
+#flow-outline:not(.outline-active) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+#flow-outline.outline-active {
+  position: fixed;
+  top: 50px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: 24px 32px;
+  z-index: 10;
+}
+
+#flow-outline h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin: 0 0 16px;
+}
+
+.outline-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 800px;
+}
+
+.outline-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--surface-1);
+}
+
+.outline-node-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+  text-align: left;
+}
+
+.outline-node-btn:hover { text-decoration: underline; }
+
+.outline-node-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.outline-type-badge {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.outline-edges-list {
+  list-style: none;
+  padding: 4px 0 0 12px;
+  margin: 4px 0 0;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.outline-edge-item {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.outline-edge-type {
+  font-weight: 500;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.outline-edge-target { font-size: 12px; font-weight: 400; }
+
+@media (forced-colors: active) {
+  .outline-item { border: 1px solid ButtonText; }
+  .outline-node-btn { forced-color-adjust: auto; }
+}
 
 /* Node styles */
 .node-group { cursor: grab; transition: opacity 0.15s; }
@@ -1123,6 +1230,9 @@ body {
   z-index: 1100;
 }
 
+.kb-help-overlay[hidden],
+.kb-help-dialog[hidden] { display: none; }
+
 .kb-help-dialog {
   position: fixed;
   top: 50%;
@@ -1299,6 +1409,7 @@ function generateViewerJs() {
   let searchTerm = '';
   let showGlobalNav = false;
   let provenanceFilter = '';
+  let outlineMode = false;
 
   // Generation ID — changes each time the map is rebuilt, so stale
   // localStorage data (positions) is automatically ignored. Hidden nodes
@@ -2528,6 +2639,9 @@ function generateViewerJs() {
     if (transform.x === 0 && transform.y === 0 && transform.scale === 1) {
       fitToScreen();
     }
+
+    // Rebuild outline (always kept in DOM — visually hidden when SVG is active).
+    buildOutline();
   }
 
   // Element that had focus before the panel opened, so closePanel can
@@ -2865,6 +2979,117 @@ function generateViewerJs() {
     requestAnimationFrame(() => { region.textContent = msg; });
     _statusClearTimer = setTimeout(() => { region.textContent = ''; }, 4000);
   }
+
+  // ===== Outline view (Phase 5) =====
+  // Builds (or rebuilds) the accessible outline list from the currently
+  // visible layoutNodes. Called at the end of every render() so the outline
+  // always reflects the current filter state, even when the SVG view is
+  // active and the outline is only visually hidden.
+  function buildOutline() {
+    const outline = document.getElementById('flow-outline');
+    if (!outline) return;
+
+    const nodeById = {};
+    graph.nodes.forEach(n => { nodeById[n.id] = n; });
+
+    // Use layoutNodes — populated by the most recent layoutGraph() run.
+    const visible = Object.values(layoutNodes);
+
+    if (!visible.length) {
+      outline.innerHTML = '<p id="outline-heading" tabindex="-1" style="color:var(--text-muted);font-size:13px">No screens match the current filters.</p>';
+      return;
+    }
+
+    // Sort by layoutRank → visitOrder → label
+    visible.sort((a, b) => {
+      const ra = a.layoutRank == null ? Infinity : a.layoutRank;
+      const rb = b.layoutRank == null ? Infinity : b.layoutRank;
+      if (ra !== rb) return ra - rb;
+      const va = a.visitOrder == null ? Infinity : a.visitOrder;
+      const vb = b.visitOrder == null ? Infinity : b.visitOrder;
+      if (va !== vb) return va - vb;
+      return (a.label || '').localeCompare(b.label || '');
+    });
+
+    const visibleIds = new Set(visible.map(n => n.id));
+
+    let html = '<h2 id="outline-heading" tabindex="-1">Screens (' + visible.length + ')</h2>';
+    html += '<ul class="outline-list">';
+
+    visible.forEach(node => {
+      const outEdges = graph.edges.filter(e =>
+        e.source === node.id &&
+        visibleIds.has(e.target) &&
+        (!e.isGlobalNav || showGlobalNav) &&
+        (!provenanceFilter || !e.provenance || e.provenance === provenanceFilter)
+      );
+
+      html += '<li class="outline-item">';
+      html += '<button class="outline-node-btn" data-node-id="' + escapeHtml(node.id) + '" type="button">';
+      html += escapeHtml(node.label || node.id);
+      if (node.type) html += ' <span class="outline-type-badge">(' + escapeHtml(node.type) + ')</span>';
+      html += '</button>';
+
+      if (outEdges.length > 0) {
+        html += '<ul class="outline-edges-list" aria-label="Navigates to">';
+        outEdges.forEach(e => {
+          const target = nodeById[e.target];
+          const targetLabel = target ? (target.label || target.id) : e.target;
+          const edgeDesc = e.label ? e.label : '';
+          html += '<li class="outline-edge-item">';
+          html += '<span class="outline-edge-type">' + escapeHtml(e.type) + '</span> to ';
+          html += '<button class="outline-node-btn outline-edge-target" data-node-id="' + escapeHtml(e.target) + '" type="button">';
+          html += escapeHtml(targetLabel);
+          if (edgeDesc) html += ' — ' + escapeHtml(edgeDesc);
+          html += '</button>';
+          html += '</li>';
+        });
+        html += '</ul>';
+      }
+
+      html += '</li>';
+    });
+
+    html += '</ul>';
+    outline.innerHTML = html;
+
+    outline.querySelectorAll('.outline-node-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const node = nodeById[btn.dataset.nodeId];
+        if (node) showDetail(node);
+      });
+    });
+  }
+
+  window.toggleOutlineView = function() {
+    outlineMode = !outlineMode;
+    const btn = document.getElementById('outline-toggle');
+    const outline = document.getElementById('flow-outline');
+    const canvas = document.getElementById('canvas-container');
+    const skipLink = document.querySelector('.skip-link');
+
+    btn.setAttribute('aria-pressed', String(outlineMode));
+
+    if (outlineMode) {
+      outline.classList.add('outline-active');
+      canvas.setAttribute('aria-hidden', 'true');
+      canvas.style.display = 'none';
+      btn.textContent = 'View as map';
+      buildOutline();
+      const heading = document.getElementById('outline-heading');
+      if (heading) heading.focus({ preventScroll: true });
+      if (skipLink) skipLink.setAttribute('href', '#flow-outline');
+      announceStatus('Outline view. ' + Object.keys(layoutNodes).length + ' screens listed.');
+    } else {
+      outline.classList.remove('outline-active');
+      canvas.removeAttribute('aria-hidden');
+      canvas.style.display = '';
+      btn.textContent = 'View as outline';
+      btn.focus();
+      if (skipLink) skipLink.setAttribute('href', '#canvas-container');
+      announceStatus('Map view.');
+    }
+  };
 
   // ===== Context menu (Phase 4 — accessible) =====
   // role="menu" with role="menuitem" buttons; arrow keys move focus,

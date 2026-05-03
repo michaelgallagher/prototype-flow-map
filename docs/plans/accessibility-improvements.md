@@ -1,6 +1,6 @@
 # Accessibility improvements for the flow-map viewer
 
-Status: Phases 1–4 shipped (Phase 4 on 2026-05-03); Phase 5 next
+Status: Phases 1–5 shipped (Phase 5 on 2026-05-03)
 Owner: tbd
 Last updated: 2026-05-03
 
@@ -193,21 +193,16 @@ Out of scope (deferred to Phase 5 or later):
 - Manual NVDA / VoiceOver pass — still pending. Move-mode and the Phase 3 listbox semantics are the highest-value targets for a real-screen-reader pass before Phase 5.
 - Outline view (Phase 5).
 
-### Phase 5 — Screen reader-friendly outline view
+### Phase 5 — Screen reader-friendly outline view ✅ SHIPPED 2026-05-03
 
-Goal: even with all the SVG ARIA, complex diagrams remain hard for screen-reader users to mentally model. Provide an alternative.
+What landed in `src/build-viewer.js`:
 
-1. Toolbar toggle: `View as outline` (button, `aria-pressed`).
-2. When enabled, hide the SVG (`aria-hidden="true"`, `display:none`) and reveal `<nav id="flow-outline">` containing:
-   - A heading `<h2>Screens (NN)</h2>`
-   - A `<ul>` of nodes grouped by `layoutRank` (or hub)
-   - Each item: link/button with the node label + type; nested `<ul>` of outgoing edges (target + edge type, e.g. "Sheet to AppointmentDetail")
-   - Activating an item opens the existing detail panel (so the same data view is shared)
-3. The outline is also rendered (visually hidden, still in the DOM) when the SVG view is active, so search engines and screen readers always have a navigable text representation. Use a `.visually-hidden` pattern (clip + 1px), not `display:none`, so it is reachable.
-
-This is the highest-leverage screen-reader improvement and should not be skipped even if Phases 3–4 land.
-
-Files: `src/build-viewer.js` (new outline render function reusing graph data).
+- **Toolbar button** `#outline-toggle` (`aria-pressed`, `onclick="toggleOutlineView()"`) toggles between "View as outline" and "View as map" labels.
+- **`<nav id="flow-outline" aria-labelledby="outline-heading">`** added immediately after `#canvas-container`. Uses CSS `clip: rect(0,0,0,0)` (not `display:none`) when inactive so the landmark is always reachable by AT and search engines.
+- **Active state** (`#flow-outline.outline-active`): full-viewport scrollable panel (`position:fixed`, `overflow-y:auto`, `z-index:10`). Canvas gets `aria-hidden="true"` + `display:none` to remove it from both the visual and AT trees.
+- **`buildOutline()`**: called at the end of every `render()`. Reads `layoutNodes` (already computed), sorts by `layoutRank` → `visitOrder` → label, emits `<h2 id="outline-heading">Screens (NN)</h2>` + `<ul class="outline-list">`. Each `<li class="outline-item">` contains an `<button class="outline-node-btn">` that calls `showDetail(node)` and a nested `<ul class="outline-edges-list">` of outgoing edges (edge type + target button), respecting the current `showGlobalNav` and `provenanceFilter` state.
+- **`toggleOutlineView()`** (exposed on `window`): flips `outlineMode`, syncs `aria-pressed`, toggles CSS classes and `display`, moves focus to `#outline-heading` on enable / back to the toggle button on disable, updates the skip link `href` between `#flow-outline` and `#canvas-container`, and announces status via `#a11y-status`.
+- Smoke test: `scripts/smoke-test-phase5.js` — 43 static asserts over emitted HTML, CSS, and JS.
 
 Definition of done: with the SVG hidden, a screen-reader user can still find any screen, see what it links to, and open its details.
 
@@ -229,10 +224,11 @@ Definition of done: with the SVG hidden, a screen-reader user can still find any
 2. ~~Detail panel as `<dialog>` (modal) or non-modal `<aside>`?~~ **Decided: non-modal `<aside role="complementary">`**, since the panel coexists with the canvas. Phase 2 implemented this.
 3. Do we add an end-to-end a11y test (axe-core via Playwright over a generated map) or rely on manual passes? Cheap to add later; the scheduled contrast-audit routine fires axe once on 2026-05-06 — if its run goes smoothly, we can recycle that scaffolding into a permanent test. Defer the decision until that report lands.
 
-## Next PR
+## Next steps
 
-Phase 5: screen-reader-friendly outline view. Add a "View as outline" toolbar toggle that hides the SVG and reveals a `<nav>`-based heading + `<ul>` representation grouped by `layoutRank` (or hub), with each item linking to the existing detail panel so the data view is shared. Render the outline (visually hidden) alongside the SVG so AT and search engines always see a navigable text representation.
+All five phases are now shipped. Remaining cross-cutting work:
 
-The manual NVDA / VoiceOver pass remains outstanding (see Cross-cutting items). Treat it as a separate task — it does not block Phase 5, but Phase 5 should not ship without it being scheduled. No remote agent for this: it requires a real screen reader on real hardware.
-
-After Phase 5, the only remaining cross-cutting work is the contrast-token tightening (audit report due 2026-05-06), the maps-index page (`build-index.js`), and the Accessibility section of `docs/README.md`.
+- **Contrast-token tightening**: scheduled audit (remote agent `trig_01CsHP1K7Jk8QTzY7zvZziWm`, fires 2026-05-06T09:00 UTC) will post results to `docs/plans/accessibility-improvements-contrast.md` via PR.
+- **Manual NVDA / VoiceOver pass**: hands-on task, do not delegate to a remote agent. Tab through a generated map and verify Phases 2–5 semantics (toolbar, graph listbox, context menu, outline view).
+- **Maps-index page** (`src/build-index.js`): apply theme tokens and skip link — still dark-only.
+- **Documentation**: add an "Accessibility" section to `docs/README.md` covering keyboard shortcuts, screen reader recommendations, and known limitations.
