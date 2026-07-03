@@ -43,6 +43,19 @@ Both fixes specced after the first runs are now closed:
 
 **Active next:** verify the iOS recorder on-Simulator, then Step 3 (no-injection fallback). Open iOS follow-ups: in-app `WKWebView` page capture (no `WebViewClient` analogue yet — Space-only for now), screenshot cropping, optional `.quiverScreen("Name")` modifier for clean labels.
 
+#### On-Simulator verification session (2026-06-22 — in progress, uncommitted changes in `src/ios-recorder.js`)
+
+First real on-Simulator runs against `~/repos/nhsapp-ios-demo-v2`. The build/install/launch/swizzle/log-stream/screenshot pipeline **works end-to-end**; the open problem is **screen identity**. Findings, in the order they surfaced:
+
+1. **`simctl` boots headless.** The device boots without a visible window — run `open -a Simulator` to attach the GUI to the already-booted device (doesn't disturb the recording).
+2. **Build must target the right Xcode project.** The prototype dir has two `.xcodeproj` over the same sources; only `nhsapp-ios-demo-v2.xcodeproj` declares the `nhsapp-design-system-ios` SPM package. Building `native-nhsapp-ios-prototype.xcodeproj` (what `--module native-nhsapp-ios-prototype` selects) fails cold ("symbol not found" → "imported twice") because `import NHSDesignSystem` only resolves from warm caches. **Use `--module demo-v2`.** See [[ios-recorder-test-prototype-module]].
+3. **Build self-heal added.** On an `xcodebuild` failure the recorder now wipes its derived data and retries a clean build once (incremental relinks after the injected source changes were skewing the design-system module). `src/ios-recorder.js`, around the build step.
+4. **iOS 26 type-erases destinations to `AnyView`.** Debug showed every screen as `NavigationStackHostingController<AnyView>` / `PresentationHostingController<AnyView>`, so the SwiftUI **view type is gone** from the hosting controller — the original "read the hosting `rootView` type" identity collapses every screen onto one node. (An earlier `vc.view`-type probe also hit the IUO-in-generic trap, yielding the literal `UIView` for everything → 1 node, 0 edges.)
+5. **New identity = title-first.** Reworked `screenName`: skip containers/non-`HostingController`s, then use `navigationItem.title` (the human screen name), then a `concreteViewName` deep-reflection that peels `AnyView → storage → view` / `ModifiedContent → content` to recover the leaf view, then skip. Removed the `vc.view` probe. **Unverified** — needs a re-run.
+6. **Rich diagnostics for the next run.** Every appearance logs `QUIVER_NAV|<label>|cls=…|title=…|concrete=…`; **skipped** controllers log `QUIVER_DBG|skip|cls=…|title=…|concrete=…` (host prints both under `DEBUG`, captures only `QUIVER_NAV`). The next run's debug output will show, per screen, whether `title`/`concrete` is available — enough to finalise identity without further guessing.
+
+**Resume here:** re-run `DEBUG=1 node bin/cli.js --record --platform ios --module demo-v2 --name nhsapp-ios-nav ~/repos/nhsapp-ios-demo-v2`, drive the journey, and read the `[debug]` lines. Decide whether title + deep-reflection covers the untitled screens (home/splash/sheets) or whether the opt-in `.quiverScreen("Name")` modifier is needed for those. Still open after identity: the **blank-webview** bug (screenshot grabbed before the remote page loads — proper fix is a `WKWebView.didFinish` hook, the iOS analogue of Android's `onPageFinished`) and the **vertical-line layout** (expected to resolve once identity yields distinct nodes + back-nav re-appearances branch the graph — re-check after).
+
 ## Why
 
 Quiver has two ways to build a map today, and the native path only has the harder one:

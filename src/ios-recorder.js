@@ -11,6 +11,7 @@ const {
   findBuiltApp,
   extractBundleId,
   findDeveloperDir,
+  formatBuildError,
 } = require("./swift-spike-runner");
 const { sanitizeFilename } = require("./android-test-generator");
 const { assignSubgraphLayout } = require("./layout-ranks");
@@ -92,33 +93,49 @@ async function startIosRecording({
 
   try {
     // 1. Build the app (no test target — it runs for real).
+    //
+    // We reuse the recorder's own derived data across runs to stay fast, but an
+    // incremental relink after the injected source changes can leave the app
+    // objects and a cached dependency module (e.g. a shared design system) out
+    // of sync — "symbol(s) not found"/addressor link errors that a clean build
+    // doesn't hit. So on failure we wipe the derived data and retry clean once.
+    const runXcodebuild = () =>
+      spawnSync(
+        "xcodebuild",
+        [
+          "build",
+          projectFlag,
+          xcodeProject,
+          "-scheme",
+          scheme,
+          "-destination",
+          `platform=iOS Simulator,id=${simulator.udid}`,
+          "-derivedDataPath",
+          derivedDataPath,
+          "-quiet",
+        ],
+        {
+          cwd: prototypePath,
+          timeout: 600_000,
+          encoding: "utf-8",
+          env: { ...process.env, DEVELOPER_DIR: findDeveloperDir() },
+        },
+      );
+
     console.log("   Building app (this may take a few minutes)...");
-    const buildResult = spawnSync(
-      "xcodebuild",
-      [
-        "build",
-        projectFlag,
-        xcodeProject,
-        "-scheme",
-        scheme,
-        "-destination",
-        `platform=iOS Simulator,id=${simulator.udid}`,
-        "-derivedDataPath",
-        derivedDataPath,
-        "-quiet",
-      ],
-      {
-        cwd: prototypePath,
-        timeout: 600_000,
-        encoding: "utf-8",
-        env: { ...process.env, DEVELOPER_DIR: findDeveloperDir() },
-      },
-    );
+    let buildResult = runXcodebuild();
+    if (buildResult.status !== 0) {
+      console.log(
+        "   ⚠️  Build failed — clearing the recorder's derived data and retrying clean...",
+      );
+      fs.rmSync(derivedDataPath, { recursive: true, force: true });
+      buildResult = runXcodebuild();
+    }
     if (buildResult.status !== 0) {
       const out = [buildResult.stdout, buildResult.stderr]
         .filter(Boolean)
         .join("\n");
-      throw new Error(`xcodebuild build failed:\n${out.slice(-3000)}`);
+      throw new Error(`xcodebuild build failed:\n${formatBuildError(out)}`);
     }
 
     // 2. Install.
@@ -255,6 +272,12 @@ async function startIosRecording({
       while ((idx = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
+        if (
+          process.env.DEBUG &&
+          (line.includes(NAV_MARKER) || line.includes("QUIVER_DBG"))
+        ) {
+          console.log(`   [debug] ${line.trim()}`);
+        }
         const parsed = parseNavLine(line);
         if (parsed) queueAppear(parsed.name);
       }
@@ -453,30 +476,84 @@ enum QuiverRecorder {
     }
 
     static func emit(for vc: UIViewController) {
-        guard let label = screenName(for: vc), !label.isEmpty else { return }
-        os_log("${NAV_MARKER}|%{public}@|", log: log, type: .info, label)
+        let cls = String(describing: type(of: vc))
+        let title = vc.navigationItem.title ?? ""
+        let concrete = concreteViewName(for: vc) ?? ""
+        if let label = screenName(for: vc, title: title, concrete: concrete), !label.isEmpty {
+            os_log("${NAV_MARKER}|%{public}@|cls=%{public}@|title=%{public}@|concrete=%{public}@",
+                   log: log, type: .info, label, cls, title, concrete)
+        } else {
+            // Skipped (container / app-shell / no identity). Logged for DEBUG
+            // only — the host ignores QUIVER_DBG lines for capture — so we can
+            // see what got dropped and why.
+            os_log("QUIVER_DBG|skip|cls=%{public}@|title=%{public}@|concrete=%{public}@",
+                   log: log, type: .info, cls, title, concrete)
+        }
     }
 
-    private static func screenName(for vc: UIViewController) -> String? {
-        let typeName = String(describing: type(of: vc))
-        if typeName.contains("UIHostingController") {
-            if let root = Mirror(reflecting: vc).children.first(where: { $0.label == "rootView" })?.value {
-                return cleanTypeName(String(reflecting: type(of: root)))
-            }
-        }
+    private static func screenName(for vc: UIViewController, title: String, concrete: String) -> String? {
+        // Pure container controllers aren't screens — their children are.
         if vc is UINavigationController || vc is UITabBarController
             || vc is UISplitViewController || vc is UIPageViewController {
             return nil
         }
-        return cleanTypeName(typeName)
+        // Only SwiftUI-hosted screens are interesting. SwiftUI hosts each screen
+        // in a UIHostingController *subclass* (all contain "HostingController");
+        // everything else — keyboard/tracking windows, system UI — is skipped.
+        let className = String(describing: type(of: vc))
+        guard className.contains("HostingController") else { return nil }
+
+        // Recent SwiftUI type-erases NavigationStack/sheet destinations to
+        // AnyView, so the hosting type no longer names the screen. Prefer the
+        // human-meaningful navigation title; then a concrete view recovered by
+        // reflecting through AnyView's storage; else skip (app shell / untitled).
+        if !title.isEmpty { return title }
+        if !concrete.isEmpty { return concrete }
+        return nil
     }
 
-    private static func cleanTypeName(_ raw: String) -> String {
+    // Recover the concrete SwiftUI view name by reflecting the hosting
+    // controller's rootView and peeling AnyView / AnyViewStorage / ModifiedContent
+    // wrappers to reach the leaf view. Returns nil when only wrappers/internals
+    // are found (e.g. the app shell, whose content is all SwiftUI internals).
+    private static func concreteViewName(for vc: UIViewController) -> String? {
+        guard var current: Any = Mirror(reflecting: vc).children.first(where: { $0.label == "rootView" })?.value else {
+            return nil
+        }
+        for _ in 0..<8 {
+            let typeName = String(reflecting: type(of: current))
+            let mirror = Mirror(reflecting: current)
+            if typeName.contains("AnyViewStorage"),
+               let v = mirror.children.first(where: { $0.label == "view" })?.value {
+                current = v; continue
+            }
+            if typeName.contains("AnyView"),
+               let v = mirror.children.first(where: { $0.label == "storage" })?.value {
+                current = v; continue
+            }
+            if typeName.contains("ModifiedContent"),
+               let v = mirror.children.first(where: { $0.label == "content" })?.value {
+                current = v; continue
+            }
+            return leafName(typeName)
+        }
+        return nil
+    }
+
+    // Reduce a (possibly deeply generic) SwiftUI type string to its leaf screen
+    // name: the first capitalised token that isn't a known wrapper/internal.
+    // Returns nil when nothing real is found (e.g. the window-root container,
+    // whose content is all SwiftUI internals) so the caller skips it.
+    private static func leafName(_ raw: String) -> String? {
         let wrappers: Set<String> = [
             "ModifiedContent", "AnyView", "TupleView", "Optional", "Group",
-            "EnvironmentReaderView", "ConditionalContent", "LazyView", "EquatableView",
-            "UIHostingController", "NavigationStack", "NavigationView", "ZStack",
-            "VStack", "HStack", "List", "ScrollView",
+            "EnvironmentReaderView", "EnvironmentKeyWritingModifier",
+            "ConditionalContent", "LazyView", "EquatableView", "EmptyView",
+            "UIHostingController", "NavigationStack", "NavigationView",
+            "ZStack", "VStack", "HStack", "List", "ScrollView", "Form",
+            // SwiftUI hosting/root internals that wrap the window-root content:
+            "UIHostingView", "RootView", "RootModifier", "StyleContextWriter",
+            "VariadicView", "ViewModifier", "AnyViewStorage",
         ]
         let tokens = raw.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "_" || $0 == ".") })
         for token in tokens {
@@ -484,7 +561,7 @@ enum QuiverRecorder {
             if leaf.isEmpty || leaf.hasPrefix("_") || wrappers.contains(leaf) { continue }
             if let first = leaf.first, first.isUppercase { return leaf }
         }
-        return raw
+        return nil
     }
 }
 

@@ -45,7 +45,7 @@ How it works:
 - **Reflection dependency.** Reading a `UIHostingController`'s `rootView` via `Mirror` is best-effort and can change across iOS versions; it falls back to the controller class name.
 - **Full-screen screenshots** include the status bar (no cropping yet), like the Android recorder.
 - **In-app web views** aren't auto-captured yet (the Android `WebViewClient` hook has no direct UIKit/`WKWebView` analogue here) — use **Space**. External handoffs are still handled by [`--web-jumpoffs`](#web-jump-offs).
-- **Verification status.** Static checks pass (injection against real prototype source, host parse/graph logic), but the on-Simulator runtime path (swizzle, log streaming) has not been re-run yet — you run the recorder.
+- **Verification status (in progress, 2026-06-22).** The on-Simulator pipeline (build → inject → install → launch → swizzle → log-stream → screenshot) is confirmed working. The open problem is **screen identity**: iOS 26 type-erases NavigationStack/sheet destinations to `AnyView`, so the SwiftUI view type can't name the screen. Identity was reworked to **navigation-title-first** (then a deep-reflection fallback that peels `AnyView` storage) — unverified, needs a re-run. Build the package-bearing project with **`--module demo-v2`** for this prototype. Full session log and resume steps: [`plans/native-recorder.md`](plans/native-recorder.md#on-simulator-verification-session-2026-06-22--in-progress-uncommitted-changes-in-srcios-recorderjs).
 
 ## Navigation patterns detected
 
